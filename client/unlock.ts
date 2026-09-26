@@ -4,6 +4,7 @@ import {
   forgetRememberedPassphrase,
   recoverRememberedPassphrase,
   rememberPassphrase,
+  rememberedUnlockSupported,
   setSessionPassphrase,
 } from "./unlock-vault";
 
@@ -16,9 +17,25 @@ const status = document.getElementById("unlock-status") as HTMLElement;
 const logout = document.getElementById("unlock-logout") as HTMLButtonElement;
 let currentUserId: string | undefined;
 
+if (!rememberedUnlockSupported()) {
+  remember.disabled = true;
+  remember.title = "Remembered unlock requires HTTPS or localhost.";
+  const hint = document.createElement("p");
+  hint.className = "muted small";
+  hint.textContent = "Remembered unlock is unavailable here; use HTTPS or localhost to enable it.";
+  remember.closest("label")?.after(hint);
+}
+
 function destination() {
   const requested = new URLSearchParams(window.location.search).get("return");
   return requested && requested.startsWith("/") && !requested.startsWith("//") ? requested : "/app";
+}
+
+function readableError(error: unknown) {
+  if (error instanceof Error && error.message === "remembered_unlock_requires_secure_context") {
+    return "Remembered unlock requires HTTPS or localhost.";
+  }
+  return error instanceof Error ? error.message : "Unable to unlock this browser.";
 }
 
 function setStatus(message: string, error = false) {
@@ -34,7 +51,7 @@ form.addEventListener("submit", async (event) => {
     setSessionPassphrase(passphrase.value);
     window.location.assign(destination());
   } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Unable to unlock this browser.", true);
+    setStatus(readableError(error), true);
     submit.disabled = false;
   }
 });

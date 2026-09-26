@@ -9,6 +9,16 @@ type VaultRecord = {
   ciphertext: ArrayBuffer;
 };
 
+function subtleCrypto() {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error("remembered_unlock_requires_secure_context");
+  return subtle;
+}
+
+export function rememberedUnlockSupported() {
+  return Boolean(globalThis.crypto?.subtle && globalThis.indexedDB);
+}
+
 function openVault() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(vaultDatabaseName, 1);
@@ -42,9 +52,11 @@ export function clearSessionPassphrase() {
 }
 
 export async function rememberPassphrase(userId: string, passphrase: string) {
-  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  if (!rememberedUnlockSupported()) throw new Error("remembered_unlock_requires_secure_context");
+  const subtle = subtleCrypto();
+  const key = await subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt(
+  const ciphertext = await subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
     new TextEncoder().encode(passphrase),
@@ -69,13 +81,14 @@ export async function rememberPassphrase(userId: string, passphrase: string) {
 }
 
 export async function recoverRememberedPassphrase(userId: string) {
+  if (!rememberedUnlockSupported()) return null;
   const database = await openVault();
   try {
     const transaction = database.transaction(vaultStoreName, "readonly");
     const record = await transactionResult(transaction.objectStore(vaultStoreName).get(userId)) as VaultRecord | undefined;
     if (!record) return null;
     try {
-      const cleartext = await crypto.subtle.decrypt(
+      const cleartext = await subtleCrypto().decrypt(
         { name: "AES-GCM", iv: record.iv },
         record.key,
         record.ciphertext,
@@ -91,6 +104,7 @@ export async function recoverRememberedPassphrase(userId: string) {
 }
 
 export async function forgetRememberedPassphrase(userId: string) {
+  if (!globalThis.indexedDB) return;
   const database = await openVault();
   try {
     const transaction = database.transaction(vaultStoreName, "readwrite");
