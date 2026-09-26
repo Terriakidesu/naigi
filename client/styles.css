@@ -143,7 +143,7 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .chat-content { position: relative; display: flex; flex: 1 1 auto; min-height: 0; }
 .mobile-sidebar-backdrop { display: none; }
 .messages { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 1.2rem 1.2rem 1.5rem; scrollbar-color: #1e1f22 transparent; overflow-anchor: auto; }
-.message { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 0.75rem; max-width: 900px; margin: 0; padding: 0.6rem 0.5rem; border-radius: 4px; }
+.message { position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 0.75rem; max-width: 900px; margin: 0; padding: 0.6rem 0.5rem; border-radius: 4px; }
 .message:hover { background: rgba(35, 36, 40, 0.42); }
 .message-compact { padding-top: 0.12rem; padding-bottom: 0.12rem; }
 .message-avatar { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; color: #fff; background: var(--avatar-color, #5865f2); font-size: 0.9rem; font-weight: 700; }
@@ -176,8 +176,8 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .message > .message-content > button { margin-top: 0.55rem; }
 .reply-context { display: block; width: min(100%, 620px); max-width: 100%; overflow: hidden; padding: 0.38rem 0.55rem; border-left: 3px solid var(--accent); border-radius: 3px; color: var(--text-muted); background: rgba(88, 101, 242, 0.1); font-size: 0.72rem; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .reply-context:hover { color: var(--text); background: rgba(88, 101, 242, 0.18); }
-.message-actions { display: flex; gap: 0.2rem; margin-top: 0.25rem; opacity: 0; transition: opacity 120ms ease; }
-.message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; }
+.message-actions { position: absolute; z-index: 2; top: 0.25rem; right: 0.5rem; display: flex; gap: 0.2rem; margin: 0; padding: 0.15rem; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--bg-elevated); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22); opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; pointer-events: auto; }
 .message-action { padding: 0.2rem 0.35rem; border-radius: 3px; color: var(--text-faint); background: transparent; font-size: 0.65rem; }
 .message-action:hover { color: var(--text); background: var(--bg-active); }
 .message-highlight { background: rgba(88, 101, 242, 0.2) !important; box-shadow: inset 3px 0 0 var(--accent); }
