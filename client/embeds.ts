@@ -1,9 +1,16 @@
 export type SafeEmbed =
   | { kind: "youtube"; id: string; url: string; embedUrl: string }
+  | { kind: "image"; url: string }
   | { kind: "social"; network: "x"; url: string };
 
 const youtubeId = /^[A-Za-z0-9_-]{11}$/;
 const statusPath = /^\/(?:[^/]+\/)?status\/([0-9]+)(?:\/|$)/i;
+const imagePath = /\.(?:avif|gif|jpe?g|png|webp)$/i;
+const imageHosts = new Set([
+  "cdn.discordapp.com",
+  "media.discordapp.net",
+  "pbs.twimg.com",
+]);
 
 function cleanUrl(value: string) {
   return value.replace(/[),.!?:;]+$/g, "");
@@ -45,6 +52,10 @@ export function parseSafeEmbed(value: string): SafeEmbed | null {
     if (statusPath.test(url.pathname)) return { kind: "social", network: "x", url: url.toString() };
   }
 
+  if (url.protocol === "https:" && (imagePath.test(url.pathname) || imageHosts.has(host))) {
+    return { kind: "image", url: url.toString() };
+  }
+
   return null;
 }
 
@@ -75,6 +86,16 @@ export function appendSafeEmbed(parent: HTMLElement, embed: SafeEmbed) {
     frame.setAttribute("sandbox", "allow-scripts allow-presentation");
     frame.setAttribute("allow", "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture");
     card.append(frame);
+  } else if (embed.kind === "image") {
+    const image = document.createElement("img");
+    image.className = "embed-image";
+    image.src = embed.url;
+    image.alt = "Linked image";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.referrerPolicy = "no-referrer";
+    image.addEventListener("error", () => card.remove(), { once: true });
+    card.append(image);
   } else {
     const link = document.createElement("a");
     link.href = embed.url;
