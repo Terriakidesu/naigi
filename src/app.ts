@@ -93,7 +93,7 @@ export function createApp() {
       console.error("Unhandled request error");
       return respondError(set, 500, "internal_error");
     })
-    .get("/", () => ({ name: "priv-chat", version: "1.2.0" }))
+    .get("/", () => ({ name: "priv-chat", version: "1.3.0" }))
     .get("/health/live", () => ({ status: "ok" }))
     .get("/health/ready", async ({ set }) => {
       const [database, redis] = await Promise.allSettled([pingDatabase(), pingRedis()]);
@@ -244,6 +244,106 @@ export function createApp() {
       return { revoked: true };
     }, {
       params: t.Object({ deviceId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/devices/:deviceId/prekeys", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const [device] = await db<{ id: string }[]>`
+        select id from devices
+        where id = ${params.deviceId} and user_id = ${user.id} and revoked_at is null
+      `;
+      if (!device) return respondError(set, 404, "device_not_found");
+
+      const prekeys: Array<{ keyId: number; publicKey: Buffer }> = [];
+      try {
+        for (const prekey of body.prekeys) {
+          prekeys.push({
+            keyId: prekey.keyId,
+            publicKey: decodeBase64(prekey.publicKey, "prekeys.publicKey", 4096),
+          });
+        }
+      } catch (error) {
+        if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_key_encoding");
+        throw error;
+      }
+
+      await db.begin(async (transaction) => {
+        for (const prekey of prekeys) {
+          await transaction`
+            insert into one_time_prekeys (device_id, key_id, public_key)
+            values (${params.deviceId}, ${prekey.keyId}, ${prekey.publicKey})
+            on conflict (device_id, key_id) do nothing
+          `;
+        }
+      });
+
+      return { accepted: prekeys.length };
+    }, {
+      params: t.Object({ deviceId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        prekeys: t.Array(t.Object({
+          keyId: t.Integer({ minimum: 0, maximum: 2_147_483_647 }),
+          publicKey: encryptedBytes(6_000),
+        }), { minItems: 1, maxItems: 100 }),
+      }),
+    })
+    .get("/v1/users/:userId/devices/keys", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const bundles = await db.begin(async (transaction) => {
+        const devices = await transaction<{
+          id: string;
+          identity_key: Buffer;
+          signed_prekey: Buffer;
+        }[]>`
+          select id, identity_key, signed_prekey
+          from devices
+          where user_id = ${params.userId} and revoked_at is null
+          order by created_at asc
+        `;
+
+        const result = [];
+        for (const device of devices) {
+          const [prekey] = await transaction<{
+            key_id: number;
+            public_key: Buffer;
+          }[]>`
+            select key_id, public_key
+            from one_time_prekeys
+            where device_id = ${device.id} and consumed_at is null
+            order by key_id asc
+            limit 1
+            for update skip locked
+          `;
+
+          if (prekey) {
+            await transaction`
+              update one_time_prekeys
+              set consumed_at = now()
+              where device_id = ${device.id} and key_id = ${prekey.key_id}
+            `;
+          }
+
+          result.push({ device, prekey });
+        }
+
+        return result;
+      });
+
+      return {
+        devices: bundles.map(({ device, prekey }) => ({
+          deviceId: device.id,
+          identityKey: encodeBase64(device.identity_key),
+          signedPrekey: encodeBase64(device.signed_prekey),
+          oneTimePrekey: prekey
+            ? { keyId: prekey.key_id, publicKey: encodeBase64(prekey.public_key) }
+            : null,
+        })),
+      };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
     })
     .post("/v1/conversations", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);

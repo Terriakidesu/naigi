@@ -36,6 +36,14 @@ Realtime events contain only message IDs and ordering metadata. A client must fe
 encrypted envelope from PostgreSQL using the message history endpoint. Redis is not the
 source of truth; reconnecting clients must always synchronize using a cursor.
 
+## Device key directory
+
+After authenticating, a client registers its public identity key, signed prekey, and a
+batch of one-time prekeys with `POST /v1/devices`. A sender fetches active device bundles
+from `GET /v1/users/:userId/devices/keys`; one unused prekey is atomically consumed for
+each device. Private keys never reach this API. The client protocol is intentionally not
+implemented by the backend and must use a reviewed E2EE library.
+
 ## Encryption boundary
 
 The message endpoint accepts only base64url-encoded ciphertext, protocol identifiers, and
