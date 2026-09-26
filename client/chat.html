@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Chat · priv-chat</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">✦</span>
+          <div><strong>priv-chat</strong><span class="tag">private workspace</span></div>
+        </div>
+        <div class="connection-status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <p id="status-line" class="status" role="status">Encrypted by your browser</p>
+        </div>
+      </header>
+
+      <section id="chat-panel" class="chat-layout">
+        <aside class="workspace-rail" aria-label="Workspace navigation">
+          <a class="rail-button rail-active" href="/app" title="priv-chat home" aria-label="priv-chat home">✦</a>
+          <span class="rail-divider" aria-hidden="true"></span>
+          <a class="rail-button" href="/new" title="New conversation" aria-label="New conversation">＋</a>
+          <a class="rail-button" href="/settings" title="Settings" aria-label="Settings">⚙</a>
+        </aside>
+
+        <aside class="sidebar">
+          <div class="sidebar-heading">
+            <div><strong class="workspace-name">priv-chat</strong><span class="workspace-subtitle">Encrypted workspace</span></div>
+            <a class="icon-button" href="/settings" title="Settings" aria-label="Settings">⚙</a>
+          </div>
+          <div class="sidebar-search" aria-hidden="true"><span>⌕</span><span>Find a conversation</span><kbd>⌘ K</kbd></div>
+          <div class="section-heading"><span>CONVERSATIONS</span><span class="section-count">private</span></div>
+          <div id="conversation-list" class="conversation-list"></div>
+          <a class="create-button secondary" href="/new"><span aria-hidden="true">＋</span> Create conversation</a>
+          <div class="sidebar-user">
+            <div class="user-avatar" aria-hidden="true">✦</div>
+            <div class="user-copy"><strong id="user-label">Loading…</strong><span>online · keys protected</span></div>
+            <span class="user-status-dot" aria-hidden="true"></span>
+          </div>
+        </aside>
+
+        <main class="panel chat-main">
+          <header class="chat-header">
+            <div class="channel-heading">
+              <span class="channel-icon" aria-hidden="true">#</span>
+              <div><h2 id="conversation-title">Choose a conversation</h2><span class="channel-subtitle">Messages are end-to-end encrypted</span></div>
+            </div>
+            <div class="chat-actions">
+              <button class="icon-button" type="button" title="Search messages" aria-label="Search messages">⌕</button>
+              <button class="icon-button" type="button" title="Pinned messages" aria-label="Pinned messages">⌑</button>
+              <button class="icon-button" type="button" title="Conversation options" aria-label="Conversation options">⋯</button>
+            </div>
+          </header>
+          <div class="chat-content">
+            <div id="messages" class="messages" aria-live="polite"></div>
+            <aside class="details-panel">
+              <div class="details-heading"><strong>Conversation details</strong><span aria-hidden="true">⋯</span></div>
+              <div class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>End-to-end encrypted</strong><span>Only members can read messages.</span></div></div>
+              <div class="details-section-title">MEMBERS</div>
+              <div id="member-list" class="member-list"><span class="muted">Choose a conversation</span></div>
+            </aside>
+          </div>
+          <form id="composer" class="composer">
+            <div class="composer-box">
+              <label class="file-button" title="Attach encrypted photo" aria-label="Attach encrypted photo">＋<input id="photo-input" type="file" accept="image/avif,image/gif,image/heic,image/jpeg,image/png,image/webp"></label>
+              <textarea id="message-input" rows="1" maxlength="200000" placeholder="Message this conversation"></textarea>
+              <button class="send-button" type="submit" title="Send encrypted message" aria-label="Send encrypted message">➤</button>
+            </div>
+            <div class="composer-actions"><span><kbd>Enter</kbd> to send · <kbd>Shift + Enter</kbd> for a new line</span><span class="composer-security"><span class="status-dot"></span>Encrypted</span></div>
+          </form>
+        </main>
+      </section>
+    </div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

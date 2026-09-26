@@ -170,10 +170,60 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-        ?? { name: "priv-chat", version: "1.6.0" };
+        ?? { name: "priv-chat", version: "1.7.0" };
     })
-    .get("/app.js", async ({ set }) => {
-      const file = await publicFile("app.js", "text/javascript; charset=utf-8");
+    .get("/register", async ({ set }) => {
+      const file = await publicFile("register.html", "text/html; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/app", async ({ set }) => {
+      const file = await publicFile("chat.html", "text/html; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/unlock", async ({ set }) => {
+      const file = await publicFile("unlock.html", "text/html; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/new", async ({ set }) => {
+      const file = await publicFile("new.html", "text/html; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/settings", async ({ set }) => {
+      const file = await publicFile("settings.html", "text/html; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/auth.js", async ({ set }) => {
+      const file = await publicFile("auth.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/register.js", async ({ set }) => {
+      const file = await publicFile("register.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/unlock.js", async ({ set }) => {
+      const file = await publicFile("unlock.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/main.js", async ({ set }) => {
+      const file = await publicFile("main.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/new.js", async ({ set }) => {
+      const file = await publicFile("new.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/settings.js", async ({ set }) => {
+      const file = await publicFile("settings.js", "text/javascript; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })

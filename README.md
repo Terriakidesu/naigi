@@ -94,7 +94,17 @@ Then open `http://localhost:3000/`. The browser client uses Matrix Olm/Megolm th
 `@matrix-org/matrix-sdk-crypto-wasm`, keeps private state in an encrypted IndexedDB store,
 compresses supported photos before encrypting them, and only renders allowlisted YouTube
 and X previews. The local encryption passphrase is separate from the server password and
-is never sent to the backend. The generated `public/` bundle is intentionally not tracked.
+is never sent to the backend. The client is split into separate views instead of loading
+every workflow into one page:
+
+- `/` — sign in
+- `/register` — create an account
+- `/unlock` — unlock the local browser key store
+- `/app` — active encrypted conversations
+- `/new` — create a conversation
+- `/settings` — profile and device management
+
+The generated `public/` bundle is intentionally not tracked.
 
 ## Getting Started
 To get started with this template, simply paste this command into your terminal:

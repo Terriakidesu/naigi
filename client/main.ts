@@ -16,46 +16,19 @@ function byId<T extends HTMLElement>(id: string) {
   return element as T;
 }
 
-const authPanel = byId<HTMLElement>("auth-panel");
-const chatPanel = byId<HTMLElement>("chat-panel");
-const authForm = byId<HTMLFormElement>("auth-form");
-const authMode = byId<HTMLSelectElement>("auth-mode");
-const authUsername = byId<HTMLInputElement>("auth-username");
-const authPassword = byId<HTMLInputElement>("auth-password");
-const authDisplayName = byId<HTMLInputElement>("auth-display-name");
-const localPassphrase = byId<HTMLInputElement>("local-passphrase");
-const authSubmit = byId<HTMLButtonElement>("auth-submit");
 const statusLine = byId<HTMLElement>("status-line");
 const userLabel = byId<HTMLElement>("user-label");
 const conversationList = byId<HTMLElement>("conversation-list");
 const conversationTitle = byId<HTMLElement>("conversation-title");
 const messagesPanel = byId<HTMLElement>("messages");
+const memberList = byId<HTMLElement>("member-list");
 const composer = byId<HTMLFormElement>("composer");
 const messageInput = byId<HTMLTextAreaElement>("message-input");
 const photoInput = byId<HTMLInputElement>("photo-input");
-const newConversationForm = byId<HTMLFormElement>("new-conversation-form");
-const newMemberInput = byId<HTMLInputElement>("new-member-id");
-const logoutButton = byId<HTMLButtonElement>("logout-button");
 
 function setStatus(message: string, error = false) {
   statusLine.textContent = message;
   statusLine.classList.toggle("error", error);
-}
-
-function showAuth(unlock = false) {
-  authPanel.hidden = false;
-  chatPanel.hidden = true;
-  authUsername.closest("label")?.toggleAttribute("hidden", unlock);
-  authPassword.closest("label")?.toggleAttribute("hidden", unlock);
-  authDisplayName.closest("label")?.toggleAttribute("hidden", unlock || authMode.value !== "register");
-  authMode.closest("label")?.toggleAttribute("hidden", unlock);
-  authSubmit.textContent = unlock ? "Unlock encrypted chat" : authMode.value === "register" ? "Create account" : "Sign in";
-}
-
-function showChat() {
-  authPanel.hidden = true;
-  chatPanel.hidden = false;
-  userLabel.textContent = currentUser ? `${currentUser.displayName} (@${currentUser.username})` : "";
 }
 
 function readableError(error: unknown) {
@@ -69,10 +42,16 @@ function readableError(error: unknown) {
 
 async function startCrypto() {
   if (!currentUser) throw new Error("not_authenticated");
+  const localPassphrase = sessionStorage.getItem("priv-chat.local-passphrase");
+  if (!localPassphrase) {
+    window.location.assign("/unlock");
+    return;
+  }
+  sessionStorage.removeItem("priv-chat.local-passphrase");
   cryptoClient?.close();
-  cryptoClient = new CryptoClient(api, currentUser.id, localPassphrase.value);
+  cryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
   await cryptoClient.initialize();
-  showChat();
+  userLabel.textContent = `${currentUser.displayName} (@${currentUser.username})`;
   await refreshConversations();
   connectRealtime();
   setStatus("Encrypted chat is ready.");
@@ -122,7 +101,19 @@ function renderConversations(conversations: Conversation[]) {
     button.className = "conversation-item";
     button.classList.toggle("selected", conversation.id === selectedConversationId);
     button.type = "button";
-    button.textContent = `${conversation.kind === "dm" ? "Direct message" : "Group"} · ${conversation.id.slice(0, 8)}`;
+    const icon = document.createElement("span");
+    icon.className = "conversation-icon";
+    icon.textContent = conversation.kind === "dm" ? "#" : "⋯";
+    const copy = document.createElement("span");
+    copy.className = "conversation-copy";
+    const title = document.createElement("span");
+    title.className = "conversation-title";
+    title.textContent = conversation.kind === "dm" ? "Direct message" : "Group conversation";
+    const conversationStatus = document.createElement("span");
+    conversationStatus.className = "conversation-status";
+    conversationStatus.textContent = `encrypted · ${conversation.id.slice(0, 8)}`;
+    copy.append(title, conversationStatus);
+    button.append(icon, copy);
     button.addEventListener("click", () => void selectConversation(conversation.id));
     conversationList.append(button);
   }
@@ -131,7 +122,30 @@ function renderConversations(conversations: Conversation[]) {
 async function refreshConversations() {
   const result = await api.conversations();
   renderConversations(result.conversations);
-  if (!selectedConversationId && result.conversations[0]) await selectConversation(result.conversations[0].id);
+  const requested = new URLSearchParams(window.location.search).get("conversation");
+  const requestedConversation = requested && result.conversations.find((conversation) => conversation.id === requested);
+  if (!selectedConversationId && requestedConversation) await selectConversation(requestedConversation.id);
+  else if (!selectedConversationId && result.conversations[0]) await selectConversation(result.conversations[0].id);
+}
+
+function renderMembers(members: ConversationMember[]) {
+  memberList.replaceChildren();
+  for (const member of members) {
+    const row = document.createElement("div");
+    row.className = "member-row";
+    const avatar = document.createElement("span");
+    avatar.className = "member-avatar";
+    avatar.textContent = member.userId.slice(0, 1).toUpperCase();
+    const copy = document.createElement("div");
+    copy.className = "member-copy";
+    const name = document.createElement("strong");
+    name.textContent = member.userId === currentUser?.id ? "You" : `Member ${member.userId.slice(0, 8)}`;
+    const identity = document.createElement("span");
+    identity.textContent = "E2EE device keys active";
+    copy.append(name, identity);
+    row.append(avatar, copy);
+    memberList.append(row);
+  }
 }
 
 async function selectConversation(conversationId: string) {
@@ -141,6 +155,7 @@ async function selectConversation(conversationId: string) {
   subscribeRealtime(conversationId);
   const members = await api.conversationMembers(conversationId);
   selectedMembers = members.members;
+  renderMembers(selectedMembers);
   await cryptoClient.prepareConversation(conversationId, selectedMembers);
   renderConversations((await api.conversations()).conversations);
   await refreshMessages();
@@ -149,15 +164,22 @@ async function selectConversation(conversationId: string) {
 function renderMessage(message: MessageEnvelope, decrypted: { sender: string; content: Record<string, unknown> } | null, error?: string) {
   const article = document.createElement("article");
   article.className = "message";
+  const senderIdentity = decrypted?.sender ?? message.senderUserId ?? "unknown device";
+  const avatar = document.createElement("div");
+  avatar.className = "message-avatar";
+  avatar.textContent = senderIdentity.replace(/^@/, "").slice(0, 1).toUpperCase();
+  const messageContent = document.createElement("div");
+  messageContent.className = "message-content";
   const header = document.createElement("header");
-  header.textContent = `${decrypted?.sender ?? message.senderUserId ?? "unknown device"} · ${new Date(message.createdAt).toLocaleString()}`;
-  article.append(header);
+  header.textContent = `${senderIdentity} · ${new Date(message.createdAt).toLocaleString()}`;
+  messageContent.append(header);
+  article.append(avatar, messageContent);
 
   if (!decrypted) {
     const failed = document.createElement("p");
     failed.className = "muted";
     failed.textContent = error ? `Unable to decrypt (${error}).` : "Unable to decrypt this message.";
-    article.append(failed);
+    messageContent.append(failed);
     messagesPanel.append(article);
     return;
   }
@@ -168,8 +190,8 @@ function renderMessage(message: MessageEnvelope, decrypted: { sender: string; co
     const text = document.createElement("p");
     text.className = "message-body";
     text.textContent = body;
-    article.append(text);
-    for (const embed of extractEmbeds(body)) appendSafeEmbed(article, embed);
+    messageContent.append(text);
+    for (const embed of extractEmbeds(body)) appendSafeEmbed(messageContent, embed);
   }
 
   if (content.msgtype === "m.image") {
@@ -191,7 +213,7 @@ function renderMessage(message: MessageEnvelope, decrypted: { sender: string; co
         photoButton.textContent = `Photo unavailable: ${readableError(loadError)}`;
       }
     });
-    article.append(photoButton);
+    messageContent.append(photoButton);
   }
 
   messagesPanel.append(article);
@@ -218,43 +240,6 @@ async function refreshMessages() {
   }
 }
 
-authMode.addEventListener("change", () => showAuth(false));
-authForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  authSubmit.disabled = true;
-  setStatus("Working…");
-  try {
-    if (currentUser) {
-      await startCrypto();
-    } else {
-      const result = authMode.value === "register"
-        ? await api.register(authUsername.value.trim(), authPassword.value, authDisplayName.value.trim())
-        : await api.login(authUsername.value.trim(), authPassword.value);
-      currentUser = result.user;
-      await startCrypto();
-    }
-  } catch (error) {
-    setStatus(readableError(error), true);
-  } finally {
-    authSubmit.disabled = false;
-  }
-});
-
-newConversationForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!currentUser) return;
-  try {
-    const memberIds = newMemberInput.value.split(",").map((id) => id.trim()).filter(Boolean);
-    if (memberIds.length === 0) throw new Error("enter at least one member UUID");
-    await api.createConversation(memberIds.length === 1 ? "dm" : "group", memberIds);
-    newMemberInput.value = "";
-    await refreshConversations();
-    setStatus("Conversation created.");
-  } catch (error) {
-    setStatus(readableError(error), true);
-  }
-});
-
 composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!selectedConversationId || !cryptoClient) return;
@@ -276,31 +261,16 @@ composer.addEventListener("submit", async (event) => {
   }
 });
 
-logoutButton.addEventListener("click", async () => {
-  realtime?.close();
-  realtime = undefined;
-  cryptoClient?.close();
-  cryptoClient = undefined;
-  currentUser = undefined;
-  selectedConversationId = undefined;
-  selectedMembers = [];
-  try {
-    await api.logout();
-  } catch {
-    // The local client is reset even if the session was already gone.
-  }
-  showAuth(false);
-  setStatus("Signed out.");
-});
-
 async function boot() {
   try {
     currentUser = (await api.me()).user;
-    showAuth(true);
-    setStatus("Enter your local encryption passphrase to unlock this browser.");
+    await startCrypto();
   } catch (error) {
-    if (!(error instanceof ApiError) || error.status !== 401) setStatus(readableError(error), true);
-    showAuth(false);
+    if (error instanceof ApiError && error.status === 401) {
+      window.location.assign("/");
+      return;
+    }
+    window.location.assign(`/unlock?error=${encodeURIComponent(readableError(error))}`);
   }
 
   window.setInterval(() => {

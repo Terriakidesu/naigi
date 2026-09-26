@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Unlock · priv-chat</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body class="auth-page">
+    <div class="auth-background" aria-hidden="true"><span></span><span></span></div>
+    <header class="topbar auth-topbar">
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true">✦</span>
+        <div><strong>priv-chat</strong><span class="tag">private workspace</span></div>
+      </div>
+      <button id="unlock-logout" class="text-link-button" type="button">Sign out</button>
+    </header>
+    <main class="auth-panel panel compact-auth-panel">
+      <div class="auth-mark" aria-hidden="true">⌁</div>
+      <p class="eyebrow">LOCAL DEVICE</p>
+      <h1>Unlock this browser.</h1>
+      <p class="muted">Your local passphrase unlocks the encrypted key store. It is never sent to the server.</p>
+      <form id="unlock-form" class="stack">
+        <label>Local encryption passphrase
+          <input id="local-passphrase" type="password" autocomplete="off" required minlength="12" autofocus>
+        </label>
+        <button id="unlock-submit" type="submit">Open encrypted chat</button>
+      </form>
+      <p id="unlock-status" class="form-status" role="status"></p>
+    </main>
+    <script type="module" src="/unlock.js"></script>
+  </body>
+</html>

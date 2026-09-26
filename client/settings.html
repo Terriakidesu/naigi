@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Settings · priv-chat</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body class="settings-page">
+    <header class="topbar">
+      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">✦</span><div><strong>priv-chat</strong><span class="tag">settings</span></div></div>
+      <div class="topbar-links"><a class="text-link" href="/app">Back to chat</a><button id="logout-button" class="text-link-button" type="button">Sign out</button></div>
+    </header>
+    <main class="settings-layout">
+      <nav class="settings-nav panel" aria-label="Settings navigation">
+        <p class="eyebrow">ACCOUNT</p>
+        <a class="settings-nav-item active" href="#profile">Profile</a>
+        <a class="settings-nav-item" href="#devices">Devices</a>
+        <a class="settings-nav-item" href="#privacy">Privacy</a>
+      </nav>
+      <section class="settings-content">
+        <section id="profile" class="settings-section panel">
+          <p class="eyebrow">PROFILE</p>
+          <h1>Your account</h1>
+          <div class="profile-card"><div class="large-avatar">✦</div><div><strong id="settings-name">Loading…</strong><span id="settings-username" class="muted"></span></div></div>
+        </section>
+        <section id="devices" class="settings-section panel">
+          <p class="eyebrow">SECURITY</p>
+          <h2>Trusted devices</h2>
+          <p class="muted">Each browser has its own encrypted key store. Revoke a device if you no longer trust it.</p>
+          <div id="device-list" class="device-list"></div>
+        </section>
+        <section id="privacy" class="settings-section panel">
+          <p class="eyebrow">PRIVACY</p>
+          <h2>Your keys stay local</h2>
+          <p class="muted">Your local encryption passphrase is used only to unlock this browser’s IndexedDB key store. It is never transmitted to priv-chat.</p>
+        </section>
+        <p id="settings-status" class="form-status" role="status"></p>
+      </section>
+    </main>
+    <script type="module" src="/settings.js"></script>
+  </body>
+</html>

@@ -39,6 +39,15 @@ export type AttachmentInfo = {
   createdAt: string;
 };
 
+export type Device = {
+  id: string;
+  name: string;
+  identityKey: string;
+  signedPrekey: string;
+  createdAt: string;
+  revokedAt: string | null;
+};
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -145,6 +154,14 @@ export class ApiClient {
 
   me() {
     return this.get<{ user: User }>("/v1/me");
+  }
+
+  devices() {
+    return this.get<{ devices: Device[] }>("/v1/devices");
+  }
+
+  revokeDevice(deviceId: string) {
+    return this.post<{ revoked: boolean }>(`/v1/devices/${deviceId}/revoke`, {});
   }
 
   logout() {
