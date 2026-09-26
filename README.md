@@ -12,6 +12,7 @@ running on your machine. PostgreSQL and Redis are used as follows:
 
 - PostgreSQL stores accounts, devices, memberships, and encrypted messages.
 - Redis is used for readiness checks, cross-instance pub/sub, and best-effort realtime notifications.
+- Local development stores encrypted attachments under `ATTACHMENTS_DIR`; production should replace this with object storage.
 
 Run the initial schema migration before starting the server:
 
@@ -50,6 +51,18 @@ The message endpoint accepts only base64url-encoded ciphertext, protocol identif
 opaque protocol metadata. Text, URLs, embed previews, photo keys, and other user content
 must be encrypted by a client before they reach this server. No cryptographic protocol is
 implemented in the backend.
+
+## Photos and attachments
+
+The client must compress and optionally resize a photo before encryption. A recommended
+photo path is a maximum dimension of 2048 pixels and JPEG/WebP quality around 0.8; the
+client may create an encrypted thumbnail at the same time. The backend receives and stores
+only the resulting encrypted bytes, so it never performs image compression, decoding, OCR,
+or content inspection. Users who need the original file can send it as a separate attachment.
+
+Create an attachment with `POST /v1/conversations/:conversationId/attachments`, upload the
+encrypted bytes with `PUT /v1/attachments/:attachmentId`, and download them with `GET
+/v1/attachments/:attachmentId`.
 
 ## Getting Started
 To get started with this template, simply paste this command into your terminal:

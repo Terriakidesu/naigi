@@ -22,6 +22,7 @@ export const config = {
   port: integerEnvironment("PORT", 3000, 1, 65_535),
   databaseUrl: Bun.env.DATABASE_URL ?? "postgres://localhost:5432/priv_chat",
   redisUrl: Bun.env.REDIS_URL ?? "redis://localhost:6379",
+  attachmentsDirectory: Bun.env.ATTACHMENTS_DIR ?? "./data/attachments",
   sessionTtlSeconds: integerEnvironment("SESSION_TTL_SECONDS", 60 * 60 * 24 * 30, 300, 60 * 60 * 24 * 365),
   maxEncryptedMessageBytes: integerEnvironment(
     "MAX_ENCRYPTED_MESSAGE_BYTES",
@@ -34,5 +35,11 @@ export const config = {
     32 * 1024,
     0,
     256 * 1024,
+  ),
+  maxAttachmentBytes: integerEnvironment(
+    "MAX_ATTACHMENT_BYTES",
+    25 * 1024 * 1024,
+    1,
+    100 * 1024 * 1024,
   ),
 };
