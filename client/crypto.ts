@@ -295,7 +295,6 @@ export class CryptoClient {
       encryptionSettings,
     );
     encryptionSettings.free();
-    strategy.free();
     await this.sendToDeviceRequests(roomKeyRequests as unknown as OutgoingRequest[]);
     await this.processOutgoingRequests();
     roomId.free();
