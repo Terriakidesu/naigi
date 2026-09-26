@@ -83,6 +83,12 @@ export async function authenticate(
   return { id: user.id, username: user.username, displayName: user.display_name };
 }
 
+export async function deleteSession(token: string | undefined) {
+  if (!token) return;
+  const tokenHash = await hashSessionToken(token);
+  await db`delete from sessions where token_hash = ${tokenHash}`;
+}
+
 export async function verifyPassword(user: UserRow | undefined, candidate: string) {
   if (!user) {
     await password.hash(candidate);

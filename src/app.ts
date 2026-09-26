@@ -8,7 +8,15 @@ import {
   removeEncryptedAttachment,
   storeEncryptedAttachment,
 } from "./attachments/storage";
-import { authenticate, createSession, normalizeUsername, verifyPassword } from "./auth/session";
+import {
+  authenticate,
+  createSession,
+  deleteSession,
+  extractBearerToken,
+  extractCookieToken,
+  normalizeUsername,
+  verifyPassword,
+} from "./auth/session";
 import { config } from "./config";
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "./encoding";
 import { db, pingDatabase } from "./db/client";
@@ -33,6 +41,7 @@ type MessageRow = {
   ciphertext: Buffer;
   protocol_metadata: Buffer;
   created_at: Date;
+  sender_user_id?: string;
 };
 
 function respondError(set: { status?: number | string }, status: number, error: string) {
@@ -44,6 +53,18 @@ function setSessionCookie(set: { headers: Record<string, string | number | undef
   const secure = config.environment === "production" ? "; Secure" : "";
   set.headers["set-cookie"] =
     `priv_chat_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionTtlSeconds}${secure}`;
+}
+
+function clearSessionCookie(set: { headers: Record<string, string | number | undefined> }) {
+  const secure = config.environment === "production" ? "; Secure" : "";
+  set.headers["set-cookie"] = `priv_chat_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+}
+
+async function publicFile(name: string, contentType: string) {
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) return null;
+  const file = Bun.file(`${import.meta.dir}/../public/${name}`);
+  if (!(await file.exists())) return null;
+  return new Response(file, { headers: { "cache-control": "no-cache", "content-type": contentType } });
 }
 
 function isUniqueViolation(error: unknown) {
@@ -67,6 +88,7 @@ function toMessage(message: MessageRow) {
     clientMessageId: message.client_message_id,
     serverSequence: String(message.server_sequence),
     protocol: message.protocol,
+    senderUserId: message.sender_user_id ?? null,
     ciphertext: encodeBase64(message.ciphertext),
     protocolMetadata: encodeBase64(message.protocol_metadata),
     createdAt: message.created_at,
@@ -113,6 +135,8 @@ function parseCryptoUpload(value: unknown) {
   if (!deviceKeys || !keys || typeof deviceKeys.user_id !== "string" || !isUuid(deviceKeys.device_id)) return null;
   if (Object.keys(oneTimeKeys).length > 100 || Object.keys(fallbackKeys).length > 10) return null;
   if (!Object.values(keys).every((key) => typeof key === "string")) return null;
+  if (!Object.values(oneTimeKeys).every((key) => typeof key === "string")) return null;
+  if (!Object.values(fallbackKeys).every((key) => typeof key === "string")) return null;
   return { deviceKeys, oneTimeKeys, fallbackKeys };
 }
 
@@ -144,7 +168,29 @@ export function createApp() {
       console.error("Unhandled request error");
       return respondError(set, 500, "internal_error");
     })
-    .get("/", () => ({ name: "priv-chat", version: "1.5.0" }))
+    .get("/", async () => {
+      return await publicFile("index.html", "text/html; charset=utf-8")
+        ?? { name: "priv-chat", version: "1.6.0" };
+    })
+    .get("/app.js", async ({ set }) => {
+      const file = await publicFile("app.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/app.css", async ({ set }) => {
+      const file = await publicFile("app.css", "text/css; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/assets/:asset", async ({ params, set }) => {
+      if (params.asset === "." || params.asset === ".." || !/^[A-Za-z0-9_.-]+$/.test(params.asset)) {
+        return respondError(set, 404, "asset_not_found");
+      }
+      const file = Bun.file(`${import.meta.dir}/../public/assets/${params.asset}`);
+      if (!(await file.exists())) return respondError(set, 404, "asset_not_found");
+      const contentType = params.asset.endsWith(".wasm") ? "application/wasm" : "application/octet-stream";
+      return new Response(file, { headers: { "cache-control": "public, max-age=31536000, immutable", "content-type": contentType } });
+    })
     .get("/health/live", () => ({ status: "ok" }))
     .get("/health/ready", async ({ set }) => {
       const [database, redis] = await Promise.allSettled([pingDatabase(), pingRedis()]);
@@ -193,6 +239,12 @@ export function createApp() {
       setSessionCookie(set, session.token);
       return { user: toPublicUser(user), ...session };
     }, { body: userBody })
+    .post("/v1/auth/logout", async ({ headers, set }) => {
+      const token = extractBearerToken(headers.authorization) ?? extractCookieToken(headers.cookie);
+      await deleteSession(token);
+      clearSessionCookie(set);
+      return { loggedOut: true };
+    })
     .get("/v1/me", async ({ headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
@@ -292,6 +344,11 @@ export function createApp() {
         returning id
       `;
       if (!revokedDevice) return respondError(set, 404, "device_not_found");
+      await db`
+        update crypto_devices
+        set revoked_at = coalesce(revoked_at, now()), updated_at = now()
+        where device_id = ${params.deviceId}
+      `;
       return { revoked: true };
     }, {
       params: t.Object({ deviceId: t.String({ format: "uuid" }) }),
@@ -408,11 +465,14 @@ export function createApp() {
       const deviceId = upload.deviceKeys.device_id as string;
       const publicKeyBytes = Buffer.from(JSON.stringify(upload.deviceKeys));
       await db.begin(async (transaction) => {
-        const [existingDevice] = await transaction<{ user_id: string }[]>`
-          select user_id from devices where id = ${deviceId}
+        const [existingDevice] = await transaction<{ user_id: string; revoked_at: Date | null }[]>`
+          select user_id, revoked_at from devices where id = ${deviceId}
         `;
         if (existingDevice && existingDevice.user_id !== user.id) {
           throw new Error("crypto device belongs to another user");
+        }
+        if (existingDevice?.revoked_at) {
+          throw new Error("crypto device has been revoked");
         }
 
         if (!existingDevice) {
@@ -442,8 +502,18 @@ export function createApp() {
             insert into crypto_one_time_keys (device_id, key_id, key_json)
             values (${deviceId}, ${keyId}, ${JSON.stringify(key)}::jsonb)
             on conflict (device_id, key_id) do update set
-              key_json = excluded.key_json,
-              claimed_at = null
+              key_json = excluded.key_json
+            where crypto_one_time_keys.claimed_at is null
+          `;
+        }
+
+        for (const [keyId, key] of Object.entries(upload.fallbackKeys)) {
+          await transaction`
+            insert into crypto_fallback_keys (device_id, key_id, key_json)
+            values (${deviceId}, ${keyId}, ${JSON.stringify(key)}::jsonb)
+            on conflict (device_id, key_id) do update set
+              key_json = excluded.key_json
+            where crypto_fallback_keys.used_at is null
           `;
         }
       });
@@ -452,9 +522,13 @@ export function createApp() {
         select count(*)::text as count from crypto_one_time_keys
         where device_id = ${deviceId} and claimed_at is null
       `;
+      const availableFallbackKeys = await db<{ key_id: string }[]>`
+        select key_id from crypto_fallback_keys
+        where device_id = ${deviceId} and used_at is null
+      `;
       return {
         one_time_key_counts: { signed_curve25519: Number(count.count) },
-        unused_fallback_key_types: Object.keys(upload.fallbackKeys).map((key) => key.split(":", 1)[0]),
+        unused_fallback_key_types: [...new Set(availableFallbackKeys.map((key) => key.key_id.split(":", 1)[0]))],
       };
     }, { body: t.Any() })
     .post("/v1/crypto/keys/query", async ({ body, headers, set }) => {
@@ -503,7 +577,7 @@ export function createApp() {
 
           for (const [deviceId, algorithmValue] of Object.entries(requestedDevices)) {
             if (typeof algorithmValue !== "string") continue;
-            const [key] = await transaction<{
+            let [key] = await transaction<{
               key_id: string;
               key_json: unknown;
             }[]>`
@@ -519,13 +593,38 @@ export function createApp() {
               limit 1
               for update skip locked
             `;
+            let fallback = false;
+            if (!key) {
+              [key] = await transaction<{
+                key_id: string;
+                key_json: unknown;
+              }[]>`
+                select key_id, key_json
+                from crypto_fallback_keys
+                where device_id = ${deviceId}
+                  and used_at is null
+                  and key_id like ${`${algorithmValue}:%`}
+                order by created_at asc
+                limit 1
+                for update skip locked
+              `;
+              fallback = Boolean(key);
+            }
             if (!key) continue;
 
-            await transaction`
-              update crypto_one_time_keys
-              set claimed_at = now()
-              where device_id = ${deviceId} and key_id = ${key.key_id}
-            `;
+            if (fallback) {
+              await transaction`
+                update crypto_fallback_keys
+                set used_at = now()
+                where device_id = ${deviceId} and key_id = ${key.key_id}
+              `;
+            } else {
+              await transaction`
+                update crypto_one_time_keys
+                set claimed_at = now()
+                where device_id = ${deviceId} and key_id = ${key.key_id}
+              `;
+            }
             result[requestedUserId] ??= {};
             result[requestedUserId][deviceId] = { [key.key_id]: key.key_json };
           }
@@ -589,40 +688,69 @@ export function createApp() {
       `;
       if (!device) return respondError(set, 404, "crypto_device_not_found");
 
-      const events = await db.begin(async (transaction) => {
-        const pending = await transaction<{
-          id: bigint | number | string;
-          event_type: string;
-          sender_user_id: string;
-          content: unknown;
-        }[]>`
-          select id, event_type, sender_user_id, content
-          from crypto_to_device_events
-          where recipient_device_id = ${query.deviceId} and delivered_at is null
-          order by id asc
-          limit 500
-          for update skip locked
-        `;
+      const [keyCount] = await db<{ count: string }[]>`
+        select count(*)::text as count
+        from crypto_one_time_keys
+        where device_id = ${query.deviceId} and claimed_at is null
+      `;
+      const availableFallbackKeys = await db<{ key_id: string }[]>`
+        select key_id from crypto_fallback_keys
+        where device_id = ${query.deviceId} and used_at is null
+      `;
 
-        for (const event of pending) {
-          await transaction`
-            update crypto_to_device_events set delivered_at = now() where id = ${event.id}
-          `;
-        }
-        return pending;
-      });
+      const events = await db<{
+        id: bigint | number | string;
+        event_type: string;
+        sender_user_id: string;
+        content: unknown;
+      }[]>`
+        select id, event_type, sender_user_id, content
+        from crypto_to_device_events
+        where recipient_device_id = ${query.deviceId} and delivered_at is null
+        order by id asc
+        limit 500
+      `;
 
       return {
         events: events.map((event) => ({
+          eventId: String(event.id),
           type: event.event_type,
           sender: event.sender_user_id,
           content: event.content,
         })),
         device_lists: { changed: [], left: [] },
-        one_time_keys_count: {},
+        one_time_keys_count: { signed_curve25519: Number(keyCount.count) },
+        unused_fallback_key_types: [...new Set(availableFallbackKeys.map((key) => key.key_id.split(":", 1)[0]))],
       };
     }, {
       query: t.Object({ deviceId: t.String({ minLength: 1, maxLength: 255 }) }),
+    })
+    .post("/v1/crypto/to-device/ack", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const [device] = await db<{ device_id: string }[]>`
+        select device_id from crypto_devices
+        where device_id = ${body.deviceId} and user_id = ${user.id} and revoked_at is null
+      `;
+      if (!device) return respondError(set, 404, "crypto_device_not_found");
+      if (body.eventIds.length === 0) return { acknowledged: 0 };
+
+      const eventIds = body.eventIds.map((eventId) => BigInt(eventId));
+      const updated = await db<{ id: bigint | number | string }[]>`
+        update crypto_to_device_events
+        set delivered_at = now()
+        where recipient_device_id = ${body.deviceId}
+          and id in ${db(eventIds)}
+          and delivered_at is null
+        returning id
+      `;
+      return { acknowledged: updated.length };
+    }, {
+      body: t.Object({
+        deviceId: t.String({ minLength: 1, maxLength: 255 }),
+        eventIds: t.Array(t.String({ pattern: "^[0-9]+$" }), { maxItems: 500 }),
+      }),
     })
     .post("/v1/conversations", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -705,6 +833,30 @@ export function createApp() {
           createdAt: conversation.created_at,
         })),
       };
+    })
+    .get("/v1/conversations/:conversationId/members", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const [membership] = await db<{ user_id: string }[]>`
+        select user_id from conversation_members
+        where conversation_id = ${params.conversationId} and user_id = ${user.id} and left_at is null
+      `;
+      if (!membership) return respondError(set, 403, "not_a_conversation_member");
+
+      const members = await db<{ id: string }[]>`
+        select user_id as id from conversation_members
+        where conversation_id = ${params.conversationId} and left_at is null
+        order by joined_at asc
+      `;
+      return {
+        members: members.map((member) => ({
+          userId: member.id,
+          matrixUserId: matrixUserId(member.id),
+        })),
+      };
+    }, {
+      params: t.Object({ conversationId: t.String({ format: "uuid" }) }),
     })
     .post("/v1/conversations/:conversationId/attachments", async ({ body, headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -910,10 +1062,13 @@ export function createApp() {
       let storedMessage = message;
       if (!storedMessage) {
         const [existing] = await db<MessageRow[]>`
-          select id, conversation_id, sender_device_id, client_message_id,
-            server_sequence, protocol, ciphertext, protocol_metadata, created_at
-          from messages
-          where sender_device_id = ${body.senderDeviceId} and client_message_id = ${body.clientMessageId}
+          select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
+            m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
+            u.id as sender_user_id
+          from messages m
+          join devices d on d.id = m.sender_device_id
+          join users u on u.id = d.user_id
+          where m.sender_device_id = ${body.senderDeviceId} and m.client_message_id = ${body.clientMessageId}
         `;
         if (!existing) throw new Error("message insert did not return a row");
         if (
@@ -927,6 +1082,8 @@ export function createApp() {
         deduplicated = true;
         storedMessage = existing;
       }
+
+      if (!storedMessage.sender_user_id) storedMessage.sender_user_id = user.id;
 
       if (!deduplicated) {
         await publishMessageCreated(params.conversationId, {
@@ -963,19 +1120,25 @@ export function createApp() {
       const before = query.before ? BigInt(query.before) : undefined;
       const rows = before === undefined
         ? await db<MessageRow[]>`
-            select id, conversation_id, sender_device_id, client_message_id,
-              server_sequence, protocol, ciphertext, protocol_metadata, created_at
-            from messages
-            where conversation_id = ${params.conversationId}
-            order by server_sequence desc
+            select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
+              m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
+              u.id as sender_user_id
+            from messages m
+            join devices d on d.id = m.sender_device_id
+            join users u on u.id = d.user_id
+            where m.conversation_id = ${params.conversationId}
+            order by m.server_sequence desc
             limit ${limit + 1}
           `
         : await db<MessageRow[]>`
-            select id, conversation_id, sender_device_id, client_message_id,
-              server_sequence, protocol, ciphertext, protocol_metadata, created_at
-            from messages
-            where conversation_id = ${params.conversationId} and server_sequence < ${before}
-            order by server_sequence desc
+            select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
+              m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
+              u.id as sender_user_id
+            from messages m
+            join devices d on d.id = m.sender_device_id
+            join users u on u.id = d.user_id
+            where m.conversation_id = ${params.conversationId} and m.server_sequence < ${before}
+            order by m.server_sequence desc
             limit ${limit + 1}
           `;
 

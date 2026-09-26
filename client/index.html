@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>priv-chat</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <strong>priv-chat</strong>
+          <span class="tag">encrypted by your browser</span>
+        </div>
+        <p id="status-line" class="status" role="status"></p>
+      </header>
+
+      <section id="auth-panel" class="panel auth-panel">
+        <h1>Private chat</h1>
+        <p class="muted">The server stores ciphertext only. Your local passphrase never leaves this browser.</p>
+        <form id="auth-form" class="stack">
+          <label>Action
+            <select id="auth-mode">
+              <option value="login">Sign in</option>
+              <option value="register">Create account</option>
+            </select>
+          </label>
+          <label>Username
+            <input id="auth-username" autocomplete="username" required minlength="3" maxlength="32">
+          </label>
+          <label>Password
+            <input id="auth-password" type="password" autocomplete="current-password" required minlength="12">
+          </label>
+          <label>Display name
+            <input id="auth-display-name" autocomplete="name" maxlength="80">
+          </label>
+          <label>Local encryption passphrase
+            <input id="local-passphrase" type="password" autocomplete="off" required minlength="12">
+          </label>
+          <button id="auth-submit" type="submit">Sign in</button>
+        </form>
+      </section>
+
+      <section id="chat-panel" class="chat-layout" hidden>
+        <aside class="sidebar panel">
+          <div class="sidebar-heading">
+            <div>
+              <strong>Conversations</strong>
+              <span id="user-label" class="muted small"></span>
+            </div>
+            <button id="logout-button" type="button" class="secondary">Sign out</button>
+          </div>
+          <div id="conversation-list" class="conversation-list"></div>
+          <form id="new-conversation-form" class="stack compact">
+            <label>New conversation
+              <input id="new-member-id" placeholder="member UUID(s), comma-separated" required>
+            </label>
+            <button type="submit" class="secondary">Create</button>
+          </form>
+        </aside>
+
+        <main class="panel chat-main">
+          <h2 id="conversation-title">Choose a conversation</h2>
+          <div id="messages" class="messages" aria-live="polite"></div>
+          <form id="composer" class="composer">
+            <textarea id="message-input" rows="3" maxlength="200000" placeholder="Write an encrypted message…"></textarea>
+            <div class="composer-actions">
+              <label class="file-button">Photo
+                <input id="photo-input" type="file" accept="image/avif,image/gif,image/heic,image/jpeg,image/png,image/webp">
+              </label>
+              <button type="submit">Send encrypted</button>
+            </div>
+          </form>
+        </main>
+      </section>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

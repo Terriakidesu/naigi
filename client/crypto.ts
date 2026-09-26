@@ -1,0 +1,407 @@
+import {
+  Attachment,
+  CollectStrategy,
+  DecryptionSettings,
+  DeviceId,
+  DeviceLists,
+  EncryptionAlgorithm,
+  EncryptionSettings,
+  EncryptedAttachment,
+  HistoryVisibility,
+  initAsync,
+  OlmMachine,
+  RequestType,
+  RoomId,
+  RoomSettings,
+  TrustRequirement,
+  UserId,
+} from "@matrix-org/matrix-sdk-crypto-wasm";
+import type { ApiClient, ConversationMember, MessageEnvelope } from "./api";
+import { compressPhoto } from "./media";
+
+type OutgoingRequest = {
+  type: RequestType;
+  id: string;
+  body: string;
+  event_type?: string;
+  txn_id?: string;
+};
+
+type MatrixEvent = {
+  type: string;
+  content: Record<string, unknown>;
+  sender: string;
+  event_id: string;
+  room_id: string;
+  origin_server_ts: number;
+};
+
+function encodeBase64Url(bytes: Uint8Array) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeBase64Url(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function matrixUserId(userId: string) {
+  return `@${userId}:priv-chat`;
+}
+
+export function matrixRoomId(conversationId: string) {
+  return `!${conversationId}:priv-chat`;
+}
+
+function cryptoStoreName(userId: string) {
+  return `priv-chat-crypto-${userId}`;
+}
+
+function localDeviceId(userId: string) {
+  const key = `priv-chat.device.${userId}`;
+  const stored = localStorage.getItem(key);
+  if (stored && uuidPattern.test(stored)) return stored;
+  const created = crypto.randomUUID();
+  localStorage.setItem(key, created);
+  return created;
+}
+
+function jsonObject(value: string) {
+  const parsed: unknown = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid_crypto_json");
+  return parsed as Record<string, unknown>;
+}
+
+function copyOutgoingRequest(request: OutgoingRequest & { free?: () => void }): OutgoingRequest {
+  const copy = {
+    type: request.type,
+    id: request.id,
+    body: request.body,
+    event_type: request.event_type,
+    txn_id: request.txn_id,
+  };
+  request.free?.();
+  return copy;
+}
+
+function eventForMessage(message: MessageEnvelope): MatrixEvent {
+  const event = jsonObject(new TextDecoder().decode(decodeBase64Url(message.ciphertext))) as Partial<MatrixEvent>;
+  if (event.type !== "m.room.encrypted" || !event.content || typeof event.content !== "object") {
+    throw new Error("invalid_encrypted_event");
+  }
+  return {
+    type: event.type,
+    content: event.content as Record<string, unknown>,
+    sender: typeof event.sender === "string" ? event.sender : matrixUserId(message.senderUserId ?? "unknown"),
+    event_id: typeof event.event_id === "string" ? event.event_id : `$${message.id}:priv-chat`,
+    room_id: typeof event.room_id === "string" ? event.room_id : matrixRoomId(message.conversationId),
+    origin_server_ts: typeof event.origin_server_ts === "number" ? event.origin_server_ts : Date.now(),
+  };
+}
+
+export type DecryptedMessage = {
+  sender: string;
+  content: Record<string, unknown>;
+};
+
+export class CryptoClient {
+  private readonly api: ApiClient;
+  private readonly accountUserId: string;
+  private readonly storePassphrase: string;
+  private readonly requestedDeviceId: string;
+  private machine?: OlmMachine;
+  private initialized = false;
+  private readonly preparedRooms = new Map<string, string>();
+  private syncPromise?: Promise<number>;
+
+  constructor(api: ApiClient, accountUserId: string, storePassphrase: string) {
+    this.api = api;
+    this.accountUserId = accountUserId;
+    this.storePassphrase = storePassphrase;
+    this.requestedDeviceId = localDeviceId(accountUserId);
+  }
+
+  get deviceId() {
+    return this.machine?.deviceId.toString() ?? this.requestedDeviceId;
+  }
+
+  async initialize() {
+    if (this.initialized) return;
+    if (!this.storePassphrase) throw new Error("local_crypto_passphrase_required");
+
+    await initAsync(`${window.location.origin}/assets/matrix_sdk_crypto_wasm_bg.wasm`);
+    this.machine = await OlmMachine.initialize(
+      new UserId(matrixUserId(this.accountUserId)),
+      new DeviceId(this.requestedDeviceId),
+      cryptoStoreName(this.accountUserId),
+      this.storePassphrase,
+    );
+    this.initialized = true;
+    await this.processOutgoingRequests();
+    await this.syncToDevice();
+  }
+
+  private get state() {
+    if (!this.machine || !this.initialized) throw new Error("crypto_not_initialized");
+    return this.machine;
+  }
+
+  private async sendOutgoingRequest(request: OutgoingRequest) {
+    let response: unknown;
+    switch (request.type) {
+      case RequestType.KeysUpload:
+        response = await this.api.cryptoRequest("/v1/crypto/keys/upload", jsonObject(request.body));
+        break;
+      case RequestType.KeysQuery:
+        response = await this.api.cryptoRequest("/v1/crypto/keys/query", jsonObject(request.body));
+        break;
+      case RequestType.KeysClaim:
+        response = await this.api.cryptoRequest("/v1/crypto/keys/claim", jsonObject(request.body));
+        break;
+      case RequestType.ToDevice:
+        if (!request.event_type || !request.txn_id) throw new Error("invalid_to_device_request");
+        response = await this.api.cryptoRequest(
+          `/v1/crypto/send-to-device/${encodeURIComponent(request.event_type)}/${encodeURIComponent(request.txn_id)}`,
+          jsonObject(request.body),
+        );
+        break;
+      default:
+        throw new Error(`unsupported_crypto_request_${request.type}`);
+    }
+
+    await this.state.markRequestAsSent(request.id, request.type, JSON.stringify(response));
+  }
+
+  private async processOutgoingRequests() {
+    for (let iteration = 0; iteration < 20; iteration += 1) {
+      const requests = await this.state.outgoingRequests() as unknown as OutgoingRequest[];
+      if (requests.length === 0) return;
+      // Marking a WASM request as sent can invalidate the other handles from
+      // the same returned vector. Copy and free only the request we process,
+      // then fetch the remaining queue again.
+      await this.sendOutgoingRequest(copyOutgoingRequest(requests[0]));
+    }
+    throw new Error("crypto_request_loop");
+  }
+
+  private async sendToDeviceRequests(requests: OutgoingRequest[]) {
+    const copied = requests.map((request) => copyOutgoingRequest(request));
+    for (const request of copied) {
+      if (request.type !== RequestType.ToDevice) throw new Error("unexpected_to_device_request");
+      await this.sendOutgoingRequest(request);
+    }
+  }
+
+  async prepareConversation(conversationId: string, members: ConversationMember[]) {
+    const memberIds = [...new Set(members.map((member) => member.matrixUserId).concat(matrixUserId(this.accountUserId)))].sort();
+    const roomKey = `${conversationId}:${memberIds.join(",")}`;
+    if (this.preparedRooms.get(conversationId) === roomKey) return;
+
+    const roomId = new RoomId(matrixRoomId(conversationId));
+    const roomSettings = new RoomSettings();
+    roomSettings.algorithm = EncryptionAlgorithm.MegolmV1AesSha2;
+    roomSettings.encryptStateEvents = true;
+    roomSettings.onlyAllowTrustedDevices = false;
+    roomSettings.sessionRotationPeriodMessages = 100;
+    roomSettings.sessionRotationPeriodMs = 7 * 24 * 60 * 60 * 1000;
+    await this.state.setRoomSettings(roomId, roomSettings);
+    roomSettings.free();
+
+    await this.state.updateTrackedUsers(memberIds.map((id) => new UserId(id)));
+    await this.processOutgoingRequests();
+
+    const missingSessions = await this.state.getMissingSessions(memberIds.map((id) => new UserId(id)));
+    if (missingSessions) {
+      await this.sendOutgoingRequest(copyOutgoingRequest(missingSessions as unknown as OutgoingRequest & { free: () => void }));
+    }
+
+    const encryptionSettings = new EncryptionSettings();
+    encryptionSettings.algorithm = EncryptionAlgorithm.MegolmV1AesSha2;
+    encryptionSettings.encryptStateEvents = true;
+    encryptionSettings.historyVisibility = HistoryVisibility.Shared;
+    encryptionSettings.rotationPeriodMessages = BigInt(100);
+    encryptionSettings.rotationPeriod = BigInt(7 * 24 * 60 * 60 * 1_000_000);
+    const strategy = CollectStrategy.allDevices();
+    encryptionSettings.sharingStrategy = strategy;
+    const roomKeyRequests = await this.state.shareRoomKey(
+      roomId,
+      memberIds.map((id) => new UserId(id)),
+      encryptionSettings,
+    );
+    encryptionSettings.free();
+    strategy.free();
+    await this.sendToDeviceRequests(roomKeyRequests as unknown as OutgoingRequest[]);
+    await this.processOutgoingRequests();
+    this.preparedRooms.set(conversationId, roomKey);
+    roomId.free();
+  }
+
+  async syncToDevice() {
+    if (this.syncPromise) return this.syncPromise;
+    this.syncPromise = this.syncToDeviceInternal().finally(() => {
+      this.syncPromise = undefined;
+    });
+    return this.syncPromise;
+  }
+
+  private async syncToDeviceInternal() {
+    const response = await this.api.toDevice(this.deviceId);
+    if (response.events.length === 0) {
+      await this.processOutgoingRequests();
+      return 0;
+    }
+
+    const events = response.events.map((event) => ({
+      type: event.type,
+      sender: event.sender,
+      content: event.content,
+      event_id: `$${event.eventId}:priv-chat`,
+      origin_server_ts: Date.now(),
+    }));
+    const changed = response.device_lists.changed.map((id) => new UserId(id));
+    const left = response.device_lists.left.map((id) => new UserId(id));
+    const deviceLists = new DeviceLists(changed, left);
+    const oneTimeKeyCounts = new Map(Object.entries(response.one_time_keys_count).map(([name, count]) => [name, Number(count)]));
+    const fallbackKeys = new Set(response.unused_fallback_key_types ?? []);
+    const settings = new DecryptionSettings(TrustRequirement.Untrusted);
+    try {
+      const processed = await this.state.receiveSyncChangesMsc4186(
+        JSON.stringify(events),
+        deviceLists,
+        oneTimeKeyCounts,
+        fallbackKeys,
+        settings,
+      );
+      await this.processOutgoingRequests();
+      await this.api.acknowledgeToDevice(this.deviceId, response.events.map((event) => event.eventId));
+      for (const event of processed) event.free?.();
+      return processed.length;
+    } finally {
+      settings.free();
+      deviceLists.free();
+    }
+  }
+
+  async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>) {
+    await this.prepareConversation(conversationId, members);
+    const roomId = new RoomId(matrixRoomId(conversationId));
+    const encryptedContent = await this.state.encryptRoomEvent(roomId, "m.room.message", JSON.stringify(content));
+    const event: MatrixEvent = {
+      type: "m.room.encrypted",
+      content: jsonObject(encryptedContent),
+      sender: matrixUserId(this.accountUserId),
+      event_id: `$${crypto.randomUUID()}:priv-chat`,
+      room_id: matrixRoomId(conversationId),
+      origin_server_ts: Date.now(),
+    };
+    roomId.free();
+
+    return await this.api.sendMessage(conversationId, {
+      senderDeviceId: this.deviceId,
+      clientMessageId: crypto.randomUUID(),
+      protocol: "matrix-v1",
+      ciphertext: encodeBase64Url(new TextEncoder().encode(JSON.stringify(event))),
+    });
+  }
+
+  async sendText(conversationId: string, members: ConversationMember[], body: string, embeds: unknown[]) {
+    return this.sendContent(conversationId, members, {
+      msgtype: "m.text",
+      body,
+      embeds,
+    });
+  }
+
+  async sendPhoto(conversationId: string, members: ConversationMember[], file: File) {
+    const compressed = await compressPhoto(file);
+    const encrypted = Attachment.encrypt(new Uint8Array(await compressed.blob.arrayBuffer()));
+    const encryptedBytes = encrypted.encryptedData;
+    const mediaEncryptionInfo = encrypted.mediaEncryptionInfo;
+    if (!mediaEncryptionInfo) {
+      encrypted.free();
+      throw new Error("missing_media_encryption_info");
+    }
+
+    const attachment = await this.api.createAttachment(
+      conversationId,
+      encryptedBytes.byteLength,
+      compressed.extension,
+      compressed.mimeType,
+    );
+    await this.api.putBytes(attachment.attachment.uploadPath, encryptedBytes);
+    encrypted.free();
+
+    const mediaFile = {
+      ...jsonObject(mediaEncryptionInfo),
+      url: attachment.attachment.uploadPath,
+    };
+    return this.sendContent(conversationId, members, {
+      msgtype: "m.image",
+      body: compressed.name,
+      info: {
+        mimetype: compressed.mimeType,
+        size: compressed.blob.size,
+        w: compressed.width || undefined,
+        h: compressed.height || undefined,
+      },
+      file: mediaFile,
+    });
+  }
+
+  async decryptMessage(conversationId: string, message: MessageEnvelope): Promise<DecryptedMessage> {
+    if (message.protocol !== "matrix-v1") throw new Error("unsupported_message_protocol");
+    const roomId = new RoomId(matrixRoomId(conversationId));
+    const settings = new DecryptionSettings(TrustRequirement.Untrusted);
+    try {
+      const decrypted = await this.state.decryptRoomEvent(JSON.stringify(eventForMessage(message)), roomId, settings);
+      const event = jsonObject(decrypted.event);
+      const sender = decrypted.sender.toString();
+      const content = jsonObject(JSON.stringify(event.content));
+      decrypted.free();
+      return { sender, content };
+    } finally {
+      settings.free();
+      roomId.free();
+    }
+  }
+
+  async decryptPhoto(content: Record<string, unknown>) {
+    const file = content.file;
+    if (!file || typeof file !== "object" || Array.isArray(file)) throw new Error("invalid_encrypted_photo");
+    const fileObject = file as Record<string, unknown>;
+    if (typeof fileObject.url !== "string") throw new Error("invalid_encrypted_photo_url");
+    const mediaInfo = { ...fileObject };
+    delete mediaInfo.url;
+    const encryptedBytes = new Uint8Array(await this.api.downloadAttachment(fileObject.url));
+    const encrypted = new EncryptedAttachment(encryptedBytes, JSON.stringify(mediaInfo));
+    try {
+      const clearBytes = Attachment.decrypt(encrypted);
+      const info = content.info;
+      const mimeType = info && typeof info === "object" && !Array.isArray(info) && typeof (info as Record<string, unknown>).mimetype === "string"
+        ? (info as Record<string, unknown>).mimetype as string
+        : "application/octet-stream";
+      const clearCopy = new Uint8Array(clearBytes.byteLength);
+      clearCopy.set(clearBytes);
+      return new Blob([clearCopy.buffer], { type: mimeType });
+    } finally {
+      encrypted.free();
+    }
+  }
+
+  close() {
+    this.machine?.close();
+    this.machine = undefined;
+    this.initialized = false;
+  }
+}

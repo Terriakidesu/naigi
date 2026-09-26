@@ -74,10 +74,27 @@ transport endpoints:
 - `POST /v1/crypto/keys/claim`
 - `POST /v1/crypto/send-to-device/:eventType/:transactionId`
 - `GET /v1/crypto/to-device?deviceId=...`
+- `POST /v1/crypto/to-device/ack`
+- `GET /v1/conversations/:conversationId/members`
 
 These endpoints store public device keys and encrypted to-device payloads. They do not
 decrypt, validate, or log message content. The WASM package is Apache-2.0 licensed and is
 initialized in the browser, with private state kept in its encrypted IndexedDB store.
+
+## Browser client
+
+Build the browser bundle and start the backend:
+
+```bash
+bun run build:client
+bun run dev
+```
+
+Then open `http://localhost:3000/`. The browser client uses Matrix Olm/Megolm through
+`@matrix-org/matrix-sdk-crypto-wasm`, keeps private state in an encrypted IndexedDB store,
+compresses supported photos before encrypting them, and only renders allowlisted YouTube
+and X previews. The local encryption passphrase is separate from the server password and
+is never sent to the backend. The generated `public/` bundle is intentionally not tracked.
 
 ## Getting Started
 To get started with this template, simply paste this command into your terminal:
