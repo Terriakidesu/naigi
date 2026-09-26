@@ -731,6 +731,8 @@ function renderMessage(
   const searchBody = decrypted && typeof decrypted.content.body === "string" ? decrypted.content.body : "";
   article.dataset.messageId = message.id;
   article.dataset.search = `${senderIdentity} ${searchBody} ${error ?? ""}`.toLowerCase();
+  article.dataset.senderKey = senderKey(message, decrypted);
+  article.dataset.createdAt = message.createdAt;
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
   avatar.textContent = senderIdentity.slice(0, 1).toUpperCase();
@@ -840,7 +842,39 @@ async function renderMessageHistory(options: { previousScrollTop?: number; prese
   }
 }
 
-async function refreshMessages() {
+async function appendNewMessages(messages: MessageEnvelope[], conversationId: string, activeCryptoClient: CryptoClient) {
+  const previousArticle = messagesPanel.querySelector<HTMLElement>(".message:last-of-type");
+  let previousDay = previousArticle?.dataset.createdAt ? dateKey(new Date(previousArticle.dataset.createdAt)) : "";
+  let previousSender = previousArticle?.dataset.senderKey ?? "";
+  let previousTimestamp = previousArticle?.dataset.createdAt ? Date.parse(previousArticle.dataset.createdAt) : 0;
+
+  for (const message of messages) {
+    if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    let decrypted: { sender: string; content: Record<string, unknown> } | null = null;
+    let error: string | undefined;
+    try {
+      decrypted = await activeCryptoClient.decryptMessage(conversationId, message);
+    } catch (caught) {
+      error = readableError(caught);
+    }
+    const created = new Date(message.createdAt);
+    const currentDay = dateKey(created);
+    const currentSender = senderKey(message, decrypted);
+    const currentTimestamp = created.getTime();
+    const sameDay = currentDay === previousDay;
+    if (!sameDay) {
+      appendDateDivider(created);
+      previousDay = currentDay;
+    }
+    const grouped = sameDay && currentSender === previousSender && currentTimestamp - previousTimestamp <= 5 * 60 * 1000;
+    renderMessage(message, decrypted, error, { grouped });
+    previousSender = currentSender;
+    previousTimestamp = currentTimestamp;
+  }
+  applyMessageSearch();
+}
+
+async function refreshMessages(options: { forceScrollToBottom?: boolean } = {}) {
   if (!selectedConversationId || !cryptoClient || messagesLoading) return;
   const conversationId = selectedConversationId;
   const activeCryptoClient = cryptoClient;
@@ -851,7 +885,12 @@ async function refreshMessages() {
     const result = await api.messages(conversationId);
     if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
     const previousMessages = loadedMessages;
+    const previousIds = new Set(previousMessages.map((message) => message.id));
+    const newMessages = result.messages.filter((message) => !previousIds.has(message.id));
+    const previousLastSequence = previousMessages[previousMessages.length - 1]?.serverSequence;
+    const appendOnly = Boolean(previousLastSequence && newMessages.length > 0 && newMessages.every((message) => BigInt(message.serverSequence) > BigInt(previousLastSequence)));
     const wasNearBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight < 100;
+    const followLatest = options.forceScrollToBottom || wasNearBottom;
     const previousScrollTop = messagesPanel.scrollTop;
     const byId = new Map(previousMessages.map((message) => [message.id, message]));
     for (const message of result.messages) byId.set(message.id, message);
@@ -861,15 +900,29 @@ async function refreshMessages() {
     const messageKey = loadedMessages.map((message) => `${message.id}:${message.createdAt}`).join("|");
     if (messageKey === lastMessagesKey) {
       applyMessageSearch();
-      if (wasNearBottom) jumpLatestButton.hidden = true;
+      loadOlderButton.hidden = !nextBefore;
+      if (followLatest) {
+        messagesPanel.scrollTop = messagesPanel.scrollHeight;
+        jumpLatestButton.hidden = true;
+      }
       return;
     }
     lastMessagesKey = messageKey;
-    await renderMessageHistory({
-      previousScrollTop,
-      preserveScroll: !wasNearBottom && previousMessages.length > 0,
-    });
-    jumpLatestButton.hidden = wasNearBottom || previousMessages.length === 0;
+    if (appendOnly) {
+      await appendNewMessages(newMessages, conversationId, activeCryptoClient);
+      if (followLatest) {
+        messagesPanel.scrollTop = messagesPanel.scrollHeight;
+        jumpLatestButton.hidden = true;
+      } else {
+        jumpLatestButton.hidden = false;
+      }
+    } else {
+      await renderMessageHistory({
+        previousScrollTop,
+        preserveScroll: !followLatest && previousMessages.length > 0,
+      });
+      jumpLatestButton.hidden = followLatest || previousMessages.length === 0;
+    }
   } finally {
     messagesLoading = false;
   }
@@ -1018,7 +1071,7 @@ composer.addEventListener("submit", async (event) => {
     photoInput.value = "";
     attachmentPreview.hidden = true;
     resizeMessageInput();
-    await refreshMessages();
+    await refreshMessages({ forceScrollToBottom: true });
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {

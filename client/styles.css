@@ -214,8 +214,8 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .embed-card { overflow: hidden; width: min(100%, 360px); margin-top: 0.55rem; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--bg-elevated); }
 .embed-card iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; }
 .embed-card a { display: block; padding: 0.65rem; color: #aab2ff; font-size: 0.74rem; }
-.embed-card .twitter-tweet { margin: 0; }
-.embed-card .twitter-tweet iframe { max-width: 100% !important; }
+.embed-card .twitter-tweet { min-width: 0 !important; margin: 0 !important; color-scheme: dark; background: transparent; }
+.embed-card .twitter-tweet iframe { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
 .photo-preview { display: block; max-width: min(100%, 360px); max-height: 360px; margin-top: 0.55rem; border-radius: 5px; }
 .load-older-button { display: block; width: min(100%, 900px); margin: 0 auto 0.7rem; padding: 0.45rem; border: 1px solid var(--line-soft); border-radius: 5px; color: var(--text-muted); background: var(--bg-elevated); font-size: 0.7rem; }
 .load-older-button:hover { color: var(--text); background: var(--bg-hover); }
