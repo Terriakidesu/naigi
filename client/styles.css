@@ -90,6 +90,7 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .workspace-subtitle { display: block; margin-top: 0.15rem; color: var(--text-faint); font-size: 0.68rem; }
 .icon-button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 4px; color: var(--text-muted); background: transparent; font-size: 1.15rem; text-decoration: none; }
 .icon-button:hover { color: var(--text); background: var(--bg-hover); }
+#notification-toggle[aria-pressed="true"] { color: #8ee6af; }
 .sidebar-search { gap: 0.5rem; min-height: 30px; margin: 0.75rem 0.65rem 0.3rem; padding: 0.3rem 0.55rem; border-radius: 4px; color: var(--text-faint); background: #202225; font-size: 0.7rem; }
 .mobile-server-switcher { display: none; }
 .mobile-workspace-actions { display: none; }
@@ -238,6 +239,10 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .message-context-shortcut { margin-left: auto; color: var(--text-faint); font-size: 0.55rem; }
 .message-context-divider { height: 1px; margin: 0.2rem 0; background: var(--line-soft); }
 .message-highlight { background: rgba(88, 101, 242, 0.2) !important; box-shadow: inset 3px 0 0 var(--accent); }
+.emoji-picker { position: absolute; z-index: 12; right: 1rem; bottom: 5.1rem; display: grid; grid-template-columns: repeat(8, 1fr); gap: 0.12rem; width: min(300px, calc(100% - 2rem)); padding: 0.45rem; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg-elevated); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42); }
+.emoji-picker button { display: grid; place-items: center; min-width: 30px; min-height: 30px; padding: 0.15rem; border-radius: 4px; color: var(--text); background: transparent; font-size: 1.2rem; line-height: 1; }
+.emoji-picker button:hover, .emoji-picker button:focus-visible { background: var(--bg-active); }
+.emoji-picker .twemoji { width: 1.2rem; height: 1.2rem; }
 .date-divider { display: flex; align-items: center; gap: 0.75rem; max-width: none; margin: 0.85rem 0 0.35rem; color: var(--text-faint); font-size: 0.62rem; font-weight: 700; }
 .date-divider::before, .date-divider::after { flex: 1; height: 1px; content: ""; background: var(--line-soft); }
 .date-divider span { white-space: nowrap; }
@@ -288,6 +293,8 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .composer textarea { min-height: 25px; max-height: 180px; resize: none; padding: 0.15rem 0; border: 0; background: transparent; line-height: 1.4; }
 .composer textarea:focus { border: 0; }
 .composer textarea:disabled { cursor: not-allowed; opacity: 0.6; }
+.composer-icon-button { display: grid; place-items: center; flex: 0 0 auto; width: 26px; height: 26px; padding: 0; border-radius: 50%; color: var(--text-muted); background: transparent; font-size: 1.1rem; }
+.composer-icon-button:hover, .composer-icon-button[aria-expanded="true"] { color: var(--text); background: var(--bg-active); }
 .file-button { display: grid; place-items: center; flex: 0 0 auto; width: 26px; height: 26px; padding: 0; border-radius: 50%; cursor: pointer; color: var(--bg-input); background: var(--text-muted); font-size: 1.1rem; font-weight: 700; }
 .file-button:hover { color: #fff; background: var(--accent); }
 .file-button:has(input:disabled) { cursor: not-allowed; opacity: 0.5; }
@@ -521,6 +528,7 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
   .composer-actions kbd { display: none; }
   .outbox-notice { margin: 0.45rem 0.55rem; }
   .chat-toast { right: 0.55rem; bottom: 6.2rem; max-width: calc(100% - 1.1rem); }
+  .emoji-picker { right: 0.55rem; bottom: 5.2rem; width: min(300px, calc(100% - 1.1rem)); }
   .media-zoom-control { gap: 0.1rem; }
   .media-zoom-control input { width: min(72px, 18vw); }
   .media-viewer-toolbar { padding: 0.5rem; }

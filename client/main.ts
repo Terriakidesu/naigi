@@ -64,6 +64,14 @@ const reactionOptions: ReactionOption[] = [
   { emoji: "👀", code: "1f440", label: "Watching" },
   { emoji: "✅", code: "2705", label: "Done" },
 ];
+const emojiOptions = [
+  "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣",
+  "🙂", "🙃", "😉", "😊", "😇", "🥰", "😍", "🤩",
+  "😘", "😎", "🤔", "🙄", "😴", "🤗", "🤭", "🤫",
+  "😐", "😶", "😮", "😱", "😭", "😡", "🤝", "👍",
+  "👎", "👏", "🙏", "💪", "❤️", "🔥", "✨", "🎉",
+  "🚀", "✅", "❌", "💯", "👀", "🍕", "☕", "🎂",
+];
 let editTarget: EditTarget | undefined;
 let contextMessage: ContextMessage | undefined;
 const messageContextTargets = new Map<string, ContextMessage>();
@@ -81,6 +89,7 @@ const typingTimers = new Map<string, number>();
 let localTypingConversationId: string | undefined;
 let localTypingStopTimer: number | undefined;
 let lastRoomKeyRefreshAt = 0;
+let notificationsEnabled = false;
 const redactedMessageIds = new Set<string>();
 const redactionAuthors = new Map<string, string | null>();
 const MESSAGE_PAGE_SIZE = 50;
@@ -146,11 +155,14 @@ const replyPreview = byId<HTMLElement>("reply-preview");
 const replyPreviewText = byId<HTMLElement>("reply-preview-text");
 const cancelReply = byId<HTMLButtonElement>("cancel-reply");
 const mentionSuggestions = byId<HTMLElement>("mention-suggestions");
+const emojiPicker = byId<HTMLElement>("emoji-picker");
+const emojiToggle = byId<HTMLButtonElement>("emoji-toggle");
 const lockButton = byId<HTMLButtonElement>("lock-button");
 const mobileSidebarToggle = byId<HTMLButtonElement>("mobile-sidebar-toggle");
 const mobileSidebarClose = byId<HTMLButtonElement>("mobile-sidebar-close");
 const mobileSidebarBackdrop = byId<HTMLButtonElement>("mobile-sidebar-backdrop");
 const messageSearchToggle = byId<HTMLButtonElement>("message-search-toggle");
+const notificationToggle = byId<HTMLButtonElement>("notification-toggle");
 const messageSearchContainer = byId<HTMLElement>("message-search-container");
 const messageSearch = byId<HTMLInputElement>("message-search");
 const messageSearchClose = byId<HTMLButtonElement>("message-search-close");
@@ -187,6 +199,102 @@ function setStatus(message: string, error = false) {
   chatToast.classList.toggle("error", error);
   chatToast.hidden = false;
   toastTimeout = window.setTimeout(() => { chatToast.hidden = true; }, error ? 8_000 : 4_000);
+}
+
+function notificationsSupported() {
+  return typeof Notification !== "undefined";
+}
+
+function notificationStorageKey() {
+  return currentUser ? `priv-chat.notifications.${currentUser.id}` : "priv-chat.notifications";
+}
+
+function saveNotificationPreference() {
+  try {
+    if (notificationsEnabled) localStorage.setItem(notificationStorageKey(), "enabled");
+    else localStorage.removeItem(notificationStorageKey());
+  } catch {
+    // Notification preference is optional and never blocks chat startup.
+  }
+}
+
+function updateNotificationToggle() {
+  const supported = notificationsSupported();
+  const active = supported && notificationsEnabled && Notification.permission === "granted";
+  notificationToggle.disabled = !supported;
+  notificationToggle.setAttribute("aria-pressed", String(active));
+  notificationToggle.textContent = "♢";
+  notificationToggle.title = !supported
+    ? "Desktop notifications are unavailable"
+    : active
+      ? "Disable desktop notifications"
+      : "Enable desktop notifications";
+  notificationToggle.setAttribute("aria-label", notificationToggle.title);
+}
+
+function loadNotificationPreference() {
+  let enabled = false;
+  try {
+    enabled = localStorage.getItem(notificationStorageKey()) === "enabled";
+  } catch {
+    // Continue with notifications disabled.
+  }
+  notificationsEnabled = enabled && notificationsSupported() && Notification.permission === "granted";
+  updateNotificationToggle();
+}
+
+async function toggleNotifications() {
+  if (!notificationsSupported()) {
+    setStatus("This browser does not support desktop notifications.", true);
+    return;
+  }
+  if (notificationsEnabled) {
+    notificationsEnabled = false;
+    saveNotificationPreference();
+    updateNotificationToggle();
+    setStatus("Desktop notifications disabled.");
+    return;
+  }
+  if (Notification.permission === "denied") {
+    setStatus("Notifications are blocked in this browser. Allow them in site settings first.", true);
+    return;
+  }
+  try {
+    const permission = await Notification.requestPermission();
+    notificationsEnabled = permission === "granted";
+    saveNotificationPreference();
+    updateNotificationToggle();
+    setStatus(notificationsEnabled ? "Desktop notifications enabled." : "Desktop notifications were not enabled.", !notificationsEnabled);
+  } catch {
+    notificationsEnabled = false;
+    updateNotificationToggle();
+    setStatus("Unable to request desktop notification permission.", true);
+  }
+}
+
+function notifyNewMessage(conversationId: string) {
+  if (!notificationsSupported() || !notificationsEnabled || Notification.permission !== "granted") return;
+  const awayFromConversation = conversationId !== selectedConversationId
+    || document.visibilityState === "hidden"
+    || messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight >= 100;
+  if (!awayFromConversation) return;
+  try {
+    const notification = new Notification("New encrypted message", {
+      body: "A new encrypted message is waiting in Naigi.",
+      tag: `priv-chat:${conversationId}`,
+      icon: "/favicon.svg",
+    });
+    notification.onclick = () => {
+      window.focus();
+      const channel = channels.find((candidate) => candidate.conversationId === conversationId);
+      if (channel) void selectChannel(channel.id);
+      else if (conversations.some((conversation) => conversation.id === conversationId)) void openDirectMessage(conversationId);
+      notification.close();
+    };
+    window.setTimeout(() => notification.close(), 8_000);
+  } catch {
+    // Browser notification failures must not affect encrypted message delivery.
+  }
 }
 
 function setConnectionStatus(message: string, state: "connected" | "connecting" | "offline") {
@@ -766,6 +874,48 @@ function hideMentionSuggestions() {
   mentionSuggestions.replaceChildren();
 }
 
+function closeEmojiPicker() {
+  emojiPicker.hidden = true;
+  emojiToggle.setAttribute("aria-expanded", "false");
+}
+
+function insertEmoji(emoji: string) {
+  const start = messageInput.selectionStart ?? messageInput.value.length;
+  const end = messageInput.selectionEnd ?? start;
+  messageInput.value = `${messageInput.value.slice(0, start)}${emoji}${messageInput.value.slice(end)}`;
+  const cursor = start + emoji.length;
+  messageInput.setSelectionRange(cursor, cursor);
+  rememberDraft();
+  resizeMessageInput();
+  updateLocalTyping();
+  renderMentionSuggestions();
+  messageInput.focus();
+}
+
+function renderEmojiPicker() {
+  emojiPicker.replaceChildren();
+  for (const emoji of emojiOptions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = emoji;
+    button.title = `Insert ${emoji}`;
+    button.setAttribute("aria-label", `Insert ${emoji}`);
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => insertEmoji(emoji));
+    emojiPicker.append(button);
+  }
+}
+
+function toggleEmojiPicker() {
+  if (emojiPicker.hidden) {
+    renderEmojiPicker();
+    emojiPicker.hidden = false;
+    emojiToggle.setAttribute("aria-expanded", "true");
+  } else {
+    closeEmojiPicker();
+  }
+}
+
 function renderMentionSuggestions() {
   const token = mentionToken();
   if (!token) {
@@ -1007,6 +1157,7 @@ async function startCrypto() {
     return;
   }
   loadUnreadMarkers();
+  loadNotificationPreference();
   cryptoClient?.close();
   cryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
   await cryptoClient.initialize();
@@ -1087,6 +1238,7 @@ function connectRealtime() {
         } else {
           markConversationUnread(payload.conversationId, payload.serverSequence);
         }
+        notifyNewMessage(payload.conversationId);
       }
     } catch {
       // Ignore malformed realtime notifications; history remains authoritative.
@@ -1576,9 +1728,11 @@ function updateComposerState() {
   messageInput.disabled = !enabled || sendInProgress;
   photoInput.disabled = !enabled || sendInProgress || Boolean(editTarget);
   sendButton.disabled = !enabled || sendInProgress;
+  emojiToggle.disabled = !enabled || sendInProgress || Boolean(editTarget);
   messageSearchToggle.disabled = !enabled;
   messageInput.placeholder = enabled ? "Message this conversation" : "Select a conversation to start chatting";
   if (!enabled) {
+    closeEmojiPicker();
     attachmentPreview.hidden = true;
     uploadProgress.hidden = true;
     photoInput.value = "";
@@ -1946,6 +2100,7 @@ messagesPanel.addEventListener("contextmenu", (event) => {
 
 document.addEventListener("pointerdown", (event) => {
   if (!messageContextMenu.hidden && event.target instanceof Node && !messageContextMenu.contains(event.target)) closeMessageContextMenu();
+  if (!emojiPicker.hidden && event.target instanceof Node && !emojiPicker.contains(event.target) && event.target !== emojiToggle) closeEmojiPicker();
 });
 window.addEventListener("resize", closeMessageContextMenu);
 messagesPanel.addEventListener("scroll", closeMessageContextMenu, { passive: true });
@@ -2528,6 +2683,7 @@ composer.addEventListener("submit", async (event) => {
   sendInProgress = true;
   updateComposerState();
   hideMentionSuggestions();
+  closeEmojiPicker();
   const uploadController = file ? new AbortController() : undefined;
   uploadAbortController = uploadController;
   let textSent = false;
@@ -2651,6 +2807,8 @@ clearAttachment.addEventListener("click", () => {
 
 cancelReply.addEventListener("click", clearReplyTarget);
 cancelEdit.addEventListener("click", () => clearEditTarget());
+emojiToggle.addEventListener("click", toggleEmojiPicker);
+notificationToggle.addEventListener("click", () => void toggleNotifications());
 
 conversationSearch.addEventListener("input", () => {
   conversationSearchQuery = conversationSearch.value;
@@ -2710,7 +2868,8 @@ document.addEventListener("keydown", (event) => {
     conversationSearch.select();
   }
   if (event.key === "Escape") {
-    if (!mentionSuggestions.hidden) hideMentionSuggestions();
+    if (!emojiPicker.hidden) closeEmojiPicker();
+    else if (!mentionSuggestions.hidden) hideMentionSuggestions();
     else if (editTarget && document.activeElement === messageInput) clearEditTarget();
     else if (replyTarget && document.activeElement === messageInput) clearReplyTarget();
     else if (!messageSearchContainer.hidden) closeMessageSearch();

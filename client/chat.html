@@ -69,8 +69,9 @@
             </div>
              <div class="chat-actions">
                 <div id="connection-indicator" class="connection-status compact-connection-status" data-state="connecting" title="Connecting"><span class="status-dot" aria-hidden="true"></span><p id="status-line" class="status" role="status">Connecting…</p></div>
-               <button id="message-search-toggle" class="icon-button" type="button" title="Search messages" aria-label="Search messages" aria-expanded="false">⌕</button>
-               <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true">ⓘ</button>
+                <button id="message-search-toggle" class="icon-button" type="button" title="Search messages" aria-label="Search messages" aria-expanded="false">⌕</button>
+                <button id="notification-toggle" class="icon-button" type="button" title="Enable desktop notifications" aria-label="Enable desktop notifications" aria-pressed="false">♢</button>
+                <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true">ⓘ</button>
             </div>
           </header>
           <div class="chat-content">
@@ -90,9 +91,11 @@
             <div id="edit-preview" class="edit-preview" hidden><span id="edit-preview-text"></span><button id="cancel-edit" class="icon-button" type="button" title="Cancel edit" aria-label="Cancel edit">×</button></div>
             <div id="reply-preview" class="reply-preview" hidden><span id="reply-preview-text"></span><button id="cancel-reply" class="icon-button" type="button" title="Cancel reply" aria-label="Cancel reply">×</button></div>
             <div id="mention-suggestions" class="mention-suggestions" hidden></div>
+            <div id="emoji-picker" class="emoji-picker" hidden role="dialog" aria-label="Emoji picker"></div>
             <div class="composer-box">
               <label class="file-button" title="Attach encrypted file, image, or video">＋<input id="photo-input" type="file" aria-label="Attach encrypted file, image, or video" accept="*/*"></label>
               <textarea id="message-input" rows="1" maxlength="200000" placeholder="Message this conversation" aria-label="Message this conversation"></textarea>
+              <button id="emoji-toggle" class="composer-icon-button" type="button" title="Insert emoji" aria-label="Insert emoji" aria-expanded="false">☺</button>
               <button id="send-button" class="send-button" type="submit" title="Send encrypted message" aria-label="Send encrypted message">➤</button>
             </div>
             <div id="attachment-preview" class="attachment-preview" hidden><span id="attachment-label"></span><progress id="upload-progress" max="100" value="0" hidden aria-label="Upload progress"></progress><button id="clear-attachment" class="icon-button" type="button" title="Remove attachment" aria-label="Remove attachment">×</button></div>
