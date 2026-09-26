@@ -152,7 +152,7 @@ form.addEventListener("submit", async (event) => {
   try {
     const memberUserIds = [...selected.keys()];
     const result = await api.createConversation(memberUserIds.length === 1 ? "dm" : "group", memberUserIds);
-    window.location.assign(`/app?conversation=${encodeURIComponent(result.conversation.id)}`);
+     window.location.assign(`/channels/@me/${encodeURIComponent(result.conversation.id)}`);
   } catch (error) {
     setStatus(error instanceof ApiError ? error.code : error instanceof Error ? error.message : "request_failed", true);
     submit.disabled = false;

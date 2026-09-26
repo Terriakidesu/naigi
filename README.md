@@ -1,4 +1,6 @@
-# priv-chat
+# Naigi
+
+Secret conference, private consultation — a private discussion behind closed doors.
 
 An encrypted-first text chat backend built with Bun, Elysia, PostgreSQL, and Redis.
 

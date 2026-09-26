@@ -214,7 +214,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-        ?? { name: "priv-chat", version: "1.7.0" };
+         ?? { name: "Naigi", version: "1.7.0" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -222,6 +222,11 @@ export function createApp() {
       return file;
     })
     .get("/app", async ({ set }) => {
+      const file = await publicFile("chat.html", "text/html; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/channels/:serverId/:channelId", async ({ set }) => {
       const file = await publicFile("chat.html", "text/html; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
@@ -290,6 +295,14 @@ export function createApp() {
       const file = await publicFile("favicon.svg", "image/svg+xml");
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
+    })
+    .get("/assets/twemoji/:asset", async ({ params, set }) => {
+      if (!/^[A-Za-z0-9_.-]+$/.test(params.asset) || !params.asset.endsWith(".svg") && params.asset !== "NOTICE.txt") {
+        return respondError(set, 404, "asset_not_found");
+      }
+      const file = Bun.file(`${import.meta.dir}/../public/assets/twemoji/${params.asset}`);
+      if (!(await file.exists())) return respondError(set, 404, "asset_not_found");
+      return new Response(file, { headers: { "cache-control": "public, max-age=31536000, immutable", "content-type": params.asset.endsWith(".svg") ? "image/svg+xml" : "text/plain; charset=utf-8" } });
     })
     .get("/assets/:asset", async ({ params, set }) => {
       if (params.asset === "." || params.asset === ".." || !/^[A-Za-z0-9_.-]+$/.test(params.asset)) {

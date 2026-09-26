@@ -1,5 +1,6 @@
 import { ApiClient, ApiError, type Server, type ServerCategory, type ServerChannel, type ServerMember } from "./api";
 import { CryptoClient } from "./crypto";
+import { showOneTimeToken } from "./ui-dialog";
 import {
   clearSessionPassphrase,
   forgetRememberedPassphrase,
@@ -56,8 +57,9 @@ function readableError(error: unknown) {
   return error instanceof Error ? error.message : "request_failed";
 }
 
-function destination() {
-  return `/app?server=${encodeURIComponent(serverId ?? "")}`;
+function destination(channelId?: string) {
+  if (serverId && channelId) return `/channels/${encodeURIComponent(serverId)}/${encodeURIComponent(channelId)}`;
+  return "/app";
 }
 
 async function ensureCrypto() {
@@ -373,7 +375,7 @@ async function loadData() {
   categoryForm.querySelector("button")!.toggleAttribute("disabled", currentServer.role === "member");
   channelForm.querySelector("button")!.toggleAttribute("disabled", currentServer.role === "member");
   createInvite.disabled = currentServer.role === "member";
-  backToServer.href = destination();
+  backToServer.href = destination(channels[0]?.id);
 
   const metadataChannel = [...channels].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))[0];
   if (metadataChannel) {
@@ -466,12 +468,7 @@ createInvite.addEventListener("click", async () => {
   createInvite.disabled = true;
   try {
     const result = await api.createServerInvite(currentServer.id, { expiresInSeconds: 7 * 24 * 60 * 60 });
-    try {
-      await navigator.clipboard?.writeText(result.invite.token);
-    } catch {
-      // Clipboard permissions are optional; the token is shown once below.
-    }
-    window.alert(`Invite token (copy it now):\n\n${result.invite.token}`);
+    await showOneTimeToken(result.invite.token);
     await loadData();
     setStatus("Invite created.");
   } catch (error) {

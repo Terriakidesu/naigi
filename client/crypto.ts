@@ -157,6 +157,7 @@ export class CryptoClient {
   private initialized = false;
   private readonly preparedRooms = new Map<string, string>();
   private syncPromise?: Promise<number>;
+  private outboxPromise?: Promise<{ sent: number; pending: number; failed: number }>;
 
   constructor(api: ApiClient, accountUserId: string, storePassphrase: string) {
     this.api = api;
@@ -393,7 +394,19 @@ export class CryptoClient {
   }
 
   async flushPendingMessages() {
-    const records = await listPendingMessages();
+    if (this.outboxPromise) return this.outboxPromise;
+    this.outboxPromise = this.flushPendingMessagesInternal().finally(() => {
+      this.outboxPromise = undefined;
+    });
+    return this.outboxPromise;
+  }
+
+  async pendingMessages() {
+    return (await listPendingMessages()).filter((record) => record.senderDeviceId === this.deviceId);
+  }
+
+  private async flushPendingMessagesInternal() {
+    const records = await this.pendingMessages();
     let sent = 0;
     let pending = 0;
     let failed = 0;
@@ -428,7 +441,8 @@ export class CryptoClient {
   }
 
   async retryFailedMessages() {
-    const records = await listPendingMessages();
+    if (this.outboxPromise) await this.outboxPromise;
+    const records = await this.pendingMessages();
     for (const record of records) {
       if (record.status !== "failed") continue;
       record.status = "pending";
@@ -461,8 +475,37 @@ export class CryptoClient {
     });
   }
 
+  async sendEdit(conversationId: string, members: ConversationMember[], messageId: string, body: string, embeds: unknown[], mentions: string[] = []) {
+    return this.sendContent(conversationId, members, {
+      msgtype: "m.replace",
+      replaces: messageId,
+      body,
+      embeds,
+      ...(mentions.length > 0 ? { mentions: [...new Set(mentions)].slice(0, 50) } : {}),
+    });
+  }
+
+  async sendReaction(conversationId: string, members: ConversationMember[], messageId: string, key: string, action: "add" | "remove") {
+    return this.sendContent(conversationId, members, {
+      msgtype: "m.reaction",
+      relatesTo: messageId,
+      key,
+      action,
+    });
+  }
+
+  async sendPin(conversationId: string, members: ConversationMember[], messageId: string, action: "add" | "remove") {
+    return this.sendContent(conversationId, members, {
+      msgtype: "m.pin",
+      pins: messageId,
+      action,
+    });
+  }
+
   async sendMedia(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions = {}) {
+    options.signal?.throwIfAborted();
     const compressed = await prepareMedia(file);
+    options.signal?.throwIfAborted();
     const encrypted = Attachment.encrypt(new Uint8Array(await compressed.blob.arrayBuffer()));
     const encryptedBytes = encrypted.encryptedData;
     const mediaEncryptionInfo = encrypted.mediaEncryptionInfo;
@@ -472,13 +515,16 @@ export class CryptoClient {
     }
 
     try {
+      options.signal?.throwIfAborted();
       const attachment = await this.api.createAttachment(
         conversationId,
         encryptedBytes.byteLength,
         compressed.extension,
         compressed.mimeType,
       );
+      options.signal?.throwIfAborted();
       await this.api.putBytes(attachment.attachment.uploadPath, encryptedBytes, options);
+      options.signal?.throwIfAborted();
       const mediaFile = {
         ...jsonObject(mediaEncryptionInfo),
         url: attachment.attachment.uploadPath,

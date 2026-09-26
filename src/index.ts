@@ -6,7 +6,7 @@ import { closeRedis } from "./redis/client";
 // I have nothing but my burger and I want nothing more
 const app = createApp().listen({ hostname: config.host, port: config.port });
 
-console.log(`priv-chat is running at http://${app.server?.hostname}:${app.server?.port}`);
+console.log(`Naigi is running at http://${app.server?.hostname}:${app.server?.port}`);
 
 const shutdown = async () => {
   app.stop();

@@ -10,6 +10,7 @@ type Device = {
 
 const api = new ApiClient();
 const name = document.getElementById("settings-name") as HTMLElement;
+const avatar = document.getElementById("settings-avatar") as HTMLElement;
 const username = document.getElementById("settings-username") as HTMLElement;
 const deviceList = document.getElementById("device-list") as HTMLElement;
 const status = document.getElementById("settings-status") as HTMLElement;
@@ -32,6 +33,7 @@ function setStatus(message: string, error = false) {
 
 function renderProfile(user: User) {
   name.textContent = user.displayName;
+  avatar.textContent = user.displayName.slice(0, 1).toUpperCase();
   username.textContent = `@${user.username}`;
   displayNameInput.value = user.displayName;
 }
@@ -70,6 +72,7 @@ function renderDevices(devices: Device[]) {
       revoke.type = "button";
       revoke.textContent = "Revoke";
       revoke.addEventListener("click", async () => {
+        if (!window.confirm(`Revoke ${device.name || "this browser"}? It will lose future server access, but locally stored keys cannot be erased remotely.`)) return;
         revoke.disabled = true;
         try {
           await api.revokeDevice(device.id);
@@ -85,6 +88,19 @@ function renderDevices(devices: Device[]) {
     deviceList.append(row);
   }
 }
+
+function syncSettingsNav() {
+  const hash = window.location.hash || "#profile";
+  for (const link of document.querySelectorAll<HTMLAnchorElement>(".settings-nav-item")) {
+    const active = link.hash === hash;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "location");
+    else link.removeAttribute("aria-current");
+  }
+}
+
+window.addEventListener("hashchange", syncSettingsNav);
+syncSettingsNav();
 
 async function loadDevices() {
   renderDevices((await api.devices()).devices as Device[]);

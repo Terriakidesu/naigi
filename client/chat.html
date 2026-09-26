@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="no-referrer">
-    <title>Chat · priv-chat</title>
+    <title>Chat · Naigi</title>
     <link rel="stylesheet" href="/app.css">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   </head>
@@ -21,29 +21,35 @@
           <a class="rail-button" href="/settings" title="Settings" aria-label="Settings">⚙</a>
         </aside>
 
-        <aside class="sidebar">
+        <aside id="workspace-sidebar" class="sidebar">
           <div class="sidebar-heading">
             <div><strong id="workspace-name" class="workspace-name">Direct messages</strong><span id="workspace-subtitle" class="workspace-subtitle">Encrypted workspace</span></div>
             <div class="sidebar-heading-actions">
+              <button id="mobile-sidebar-close" class="icon-button mobile-sidebar-close" type="button" title="Close navigation" aria-label="Close navigation">×</button>
               <button id="server-invite-button" class="icon-button" type="button" title="Create invite" aria-label="Create invite" hidden>⌁</button>
               <button id="create-channel-button" class="icon-button" type="button" title="Create channel" aria-label="Create channel" hidden>＋</button>
               <a id="server-settings-button" class="icon-button" href="/server-settings" title="Server settings" aria-label="Server settings" hidden>☷</a>
               <a class="icon-button" href="/settings" title="Settings" aria-label="Settings">⚙</a>
             </div>
-           </div>
-           <label class="mobile-server-switcher" for="mobile-server-select"><span class="sr-only">Workspace</span><select id="mobile-server-select" aria-label="Switch workspace"></select></label>
-           <label class="sidebar-search" for="conversation-search"><span aria-hidden="true">⌕</span><input id="conversation-search" type="search" aria-label="Find a conversation" placeholder="Find a conversation" autocomplete="off"><kbd>⌘ K</kbd></label>
+          </div>
+          <label class="mobile-server-switcher" for="mobile-server-select"><span class="sr-only">Workspace</span><select id="mobile-server-select" aria-label="Switch workspace"></select></label>
+          <div class="mobile-workspace-actions">
+            <button id="mobile-create-server" class="secondary" type="button">Create server</button>
+            <button id="mobile-join-server" class="secondary" type="button">Join server</button>
+          </div>
+          <label class="sidebar-search" for="conversation-search"><span aria-hidden="true">⌕</span><input id="conversation-search" type="search" aria-label="Find a conversation" placeholder="Find a conversation" autocomplete="off"><kbd>Ctrl K</kbd></label>
           <div id="channel-section-heading" class="section-heading" hidden><span>TEXT CHANNELS</span><span class="section-count">encrypted</span></div>
           <div id="channel-list" class="channel-list" hidden></div>
-           <div id="direct-messages-heading" class="section-heading"><span>DIRECT MESSAGES</span><span class="section-count">private</span></div>
-           <div id="conversation-list" class="conversation-list"></div>
-           <a id="create-conversation-button" class="create-button secondary" href="/new"><span aria-hidden="true">＋</span> Create conversation</a>
-           <div class="sidebar-user">
-            <div class="user-avatar" aria-hidden="true">✦</div>
-            <div class="user-copy"><strong id="user-label">Loading…</strong><span>online · keys protected</span></div>
-             <span class="user-status-dot" aria-hidden="true"></span>
-             <button id="lock-button" class="icon-button" type="button" title="Lock this browser" aria-label="Lock this browser">⌑</button>
-           </div>
+          <div id="direct-messages-heading" class="section-heading"><span>DIRECT MESSAGES</span><span class="section-count">private</span></div>
+          <div id="conversation-list" class="conversation-list"></div>
+          <a id="create-conversation-button" class="create-button secondary" href="/new"><span aria-hidden="true">＋</span> Create conversation</a>
+          <div class="sidebar-user">
+            <button id="self-profile-button" class="self-profile-button" type="button" title="View your profile" aria-label="View your profile">
+              <span id="self-avatar" class="user-avatar" aria-hidden="true">✦</span>
+              <span class="user-copy"><strong id="user-label">Loading…</strong><span>Profile and account</span></span>
+            </button>
+            <button id="lock-button" class="icon-button" type="button" title="Lock this browser" aria-label="Lock this browser">⌑</button>
+          </div>
         </aside>
         <button id="mobile-sidebar-backdrop" class="mobile-sidebar-backdrop" type="button" aria-label="Close conversation list"></button>
 
@@ -62,31 +68,34 @@
               </div>
             </div>
              <div class="chat-actions">
-               <div class="connection-status compact-connection-status"><span class="status-dot" aria-hidden="true"></span><p id="status-line" class="status" role="status">Encrypted</p></div>
+                <div id="connection-indicator" class="connection-status compact-connection-status" data-state="connecting" title="Connecting"><span class="status-dot" aria-hidden="true"></span><p id="status-line" class="status" role="status">Connecting…</p></div>
                <button id="message-search-toggle" class="icon-button" type="button" title="Search messages" aria-label="Search messages" aria-expanded="false">⌕</button>
                <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true">ⓘ</button>
             </div>
           </header>
           <div class="chat-content">
-             <div id="messages" class="messages" aria-live="polite" aria-label="Messages"><button id="load-older-button" class="load-older-button" type="button" hidden>Load older messages</button></div>
-             <button id="jump-latest-button" class="jump-latest-button" type="button" hidden>↓ New messages</button>
+              <div id="messages" class="messages" aria-label="Messages"><button id="load-older-button" class="load-older-button" type="button" hidden>Load older messages</button></div>
+              <button id="jump-latest-button" class="jump-latest-button" type="button" hidden>↓ Jump to latest</button>
             <aside class="details-panel">
               <div class="details-heading"><strong>Conversation details</strong><button id="details-close" class="icon-button details-close" type="button" title="Close conversation details" aria-label="Close conversation details">×</button></div>
-              <div class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>End-to-end encrypted</strong><span>Only members can read messages.</span></div></div>
+               <div class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>End-to-end encrypted</strong><span>Only devices with the room keys can decrypt messages.</span></div></div>
               <div class="details-section-title">MEMBERS</div>
               <div id="member-list" class="member-list"><span class="muted">Choose a conversation</span></div>
             </aside>
           </div>
+          <div id="chat-toast" class="chat-toast" role="status" aria-live="polite" hidden><span id="chat-toast-text"></span><button id="chat-toast-close" class="icon-button" type="button" aria-label="Dismiss notification">×</button></div>
+          <div id="outbox-notice" class="outbox-notice" hidden><span id="outbox-label"></span><button id="outbox-retry" class="secondary" type="button">Retry now</button></div>
           <form id="composer" class="composer">
+            <div id="edit-preview" class="edit-preview" hidden><span id="edit-preview-text"></span><button id="cancel-edit" class="icon-button" type="button" title="Cancel edit" aria-label="Cancel edit">×</button></div>
             <div id="reply-preview" class="reply-preview" hidden><span id="reply-preview-text"></span><button id="cancel-reply" class="icon-button" type="button" title="Cancel reply" aria-label="Cancel reply">×</button></div>
             <div id="mention-suggestions" class="mention-suggestions" hidden></div>
             <div class="composer-box">
-              <label class="file-button" title="Attach encrypted file, image, or video" aria-label="Attach encrypted file, image, or video">＋<input id="photo-input" type="file" accept="*/*"></label>
-              <textarea id="message-input" rows="1" maxlength="200000" placeholder="Message this conversation"></textarea>
+              <label class="file-button" title="Attach encrypted file, image, or video">＋<input id="photo-input" type="file" aria-label="Attach encrypted file, image, or video" accept="*/*"></label>
+              <textarea id="message-input" rows="1" maxlength="200000" placeholder="Message this conversation" aria-label="Message this conversation"></textarea>
               <button id="send-button" class="send-button" type="submit" title="Send encrypted message" aria-label="Send encrypted message">➤</button>
             </div>
             <div id="attachment-preview" class="attachment-preview" hidden><span id="attachment-label"></span><progress id="upload-progress" max="100" value="0" hidden aria-label="Upload progress"></progress><button id="clear-attachment" class="icon-button" type="button" title="Remove attachment" aria-label="Remove attachment">×</button></div>
-            <div class="composer-actions"><span class="desktop-composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift + Enter</kbd> for a new line</span><span class="mobile-composer-hint">Enter sends · Shift + Enter for a new line</span><span class="composer-security"><span class="status-dot"></span>Encrypted</span></div>
+            <div class="composer-actions"><span class="desktop-composer-hint"><kbd>Enter</kbd> send · <kbd>Shift + Enter</kbd> new line · <kbd>@</kbd> mention</span><span class="mobile-composer-hint">Enter to send · @ to mention</span><span class="composer-security"><span class="status-dot"></span>Encrypted</span></div>
           </form>
         </main>
       </section>
@@ -94,7 +103,12 @@
     <div id="media-viewer" class="media-viewer" hidden role="dialog" aria-modal="true" aria-labelledby="media-viewer-title">
       <div class="media-viewer-toolbar">
         <strong id="media-viewer-title">Media viewer</strong>
-        <label class="media-zoom-control" for="media-zoom">Zoom <input id="media-zoom" type="range" min="1" max="3" step="0.1" value="1" aria-label="Zoom media"></label>
+        <div class="media-zoom-control">
+          <button id="media-zoom-out" class="icon-button" type="button" aria-label="Zoom out">−</button>
+          <input id="media-zoom" type="range" min="1" max="3" step="0.1" value="1" aria-label="Zoom media">
+          <button id="media-zoom-in" class="icon-button" type="button" aria-label="Zoom in">＋</button>
+          <button id="media-zoom-reset" class="zoom-reset" type="button" title="Reset zoom">100%</button>
+        </div>
         <button id="media-viewer-close" class="icon-button" type="button" title="Close media viewer" aria-label="Close media viewer">×</button>
       </div>
       <div id="media-viewer-stage" class="media-viewer-stage"></div>
@@ -109,6 +123,7 @@
         <a id="profile-modal-edit" class="text-link" href="/settings" hidden>Edit your profile</a>
       </div>
     </div>
+    <div id="message-context-menu" class="message-context-menu" hidden role="menu" aria-label="Message actions"></div>
     <script type="module" src="/main.js"></script>
   </body>
 </html>

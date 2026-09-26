@@ -1,4 +1,4 @@
-# priv-chat API v1
+# Naigi API v1
 
 This document describes the client-independent contract for native, desktop, and web
 frontends. The API is responsible for identity, authorization, ordering, and delivery of
