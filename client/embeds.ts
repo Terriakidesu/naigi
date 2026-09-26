@@ -1,16 +1,9 @@
 export type SafeEmbed =
   | { kind: "youtube"; id: string; url: string; embedUrl: string }
-  | { kind: "image"; url: string }
-  | { kind: "social"; network: "x"; url: string };
+  | { kind: "social"; network: "x"; url: string; statusId: string };
 
 const youtubeId = /^[A-Za-z0-9_-]{11}$/;
 const statusPath = /^\/(?:[^/]+\/)?status\/([0-9]+)(?:\/|$)/i;
-const imagePath = /\.(?:avif|gif|jpe?g|png|webp)$/i;
-const imageHosts = new Set([
-  "cdn.discordapp.com",
-  "media.discordapp.net",
-  "pbs.twimg.com",
-]);
 
 function cleanUrl(value: string) {
   return value.replace(/[),.!?:;]+$/g, "");
@@ -49,11 +42,8 @@ export function parseSafeEmbed(value: string): SafeEmbed | null {
   }
 
   if (host === "x.com" || host === "www.x.com" || host === "twitter.com" || host === "www.twitter.com") {
-    if (statusPath.test(url.pathname)) return { kind: "social", network: "x", url: url.toString() };
-  }
-
-  if (url.protocol === "https:" && (imagePath.test(url.pathname) || imageHosts.has(host))) {
-    return { kind: "image", url: url.toString() };
+    const status = url.pathname.match(statusPath);
+    if (status) return { kind: "social", network: "x", url: url.toString(), statusId: status[1] };
   }
 
   return null;
@@ -86,24 +76,52 @@ export function appendSafeEmbed(parent: HTMLElement, embed: SafeEmbed) {
     frame.setAttribute("sandbox", "allow-scripts allow-presentation");
     frame.setAttribute("allow", "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture");
     card.append(frame);
-  } else if (embed.kind === "image") {
-    const image = document.createElement("img");
-    image.className = "embed-image";
-    image.src = embed.url;
-    image.alt = "Linked image";
-    image.loading = "lazy";
-    image.decoding = "async";
-    image.referrerPolicy = "no-referrer";
-    image.addEventListener("error", () => card.remove(), { once: true });
-    card.append(image);
   } else {
+    const tweet = document.createElement("blockquote");
+    tweet.className = "twitter-tweet";
+    tweet.dataset.dnt = "true";
     const link = document.createElement("a");
     link.href = embed.url;
     link.target = "_blank";
     link.rel = "noreferrer noopener";
     link.textContent = "Open X post";
-    card.append(link);
+    tweet.append(link);
+    card.append(tweet);
+    void loadXWidgets().then((widgets) => widgets.widgets.load(card)).catch(() => undefined);
   }
 
   parent.append(card);
+}
+
+type XWidgets = {
+  widgets: { load(element?: HTMLElement): void };
+};
+
+declare global {
+  interface Window {
+    twttr?: XWidgets;
+  }
+}
+
+let xWidgetsPromise: Promise<XWidgets> | undefined;
+
+function loadXWidgets() {
+  if (window.twttr?.widgets) return Promise.resolve(window.twttr);
+  xWidgetsPromise ??= new Promise<XWidgets>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>("script[data-priv-chat-x-widgets]");
+    const script = existing ?? document.createElement("script");
+    const finish = () => {
+      if (window.twttr?.widgets) resolve(window.twttr);
+      else reject(new Error("x_widgets_unavailable"));
+    };
+    script.addEventListener("load", finish, { once: true });
+    script.addEventListener("error", () => reject(new Error("x_widgets_failed")), { once: true });
+    if (!existing) {
+      script.async = true;
+      script.src = "https://platform.x.com/widgets.js";
+      script.dataset.privChatXWidgets = "true";
+      document.head.append(script);
+    }
+  });
+  return xWidgetsPromise;
 }

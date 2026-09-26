@@ -17,18 +17,14 @@ describe("safe embeds", () => {
     expect(parseSafeEmbed("https://example.com/status/123")).toBeNull();
     expect(parseSafeEmbed("https://x.com.evil.example/status/123")).toBeNull();
     expect(parseSafeEmbed("javascript:alert(1)")).toBeNull();
-    expect(parseSafeEmbed("http://example.com/photo.jpg")).toBeNull();
-    expect(parseSafeEmbed("https://example.com/photo.svg")).toBeNull();
   });
 
-  test("renders safe direct image URLs", () => {
-    expect(parseSafeEmbed("https://example.com/photo.jpg?size=large")).toEqual({
-      kind: "image",
-      url: "https://example.com/photo.jpg?size=large",
-    });
-    expect(parseSafeEmbed("https://pbs.twimg.com/media/example?format=jpg&name=large")).toEqual({
-      kind: "image",
-      url: "https://pbs.twimg.com/media/example?format=jpg&name=large",
+  test("extracts an X status ID for the official widget", () => {
+    expect(parseSafeEmbed("https://x.com/example/status/123")).toEqual({
+      kind: "social",
+      network: "x",
+      url: "https://x.com/example/status/123",
+      statusId: "123",
     });
   });
 
