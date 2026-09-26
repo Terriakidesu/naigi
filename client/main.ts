@@ -1714,7 +1714,7 @@ async function scrollToMessage(messageId: string) {
   }
   if (unavailable) {
     unavailable.scrollIntoView({ behavior: "smooth", block: "center" });
-    setStatus("That message needs room keys from the original browser.");
+    setStatus("That message is locked on this device. Its keys may still be in your original browser.");
     return;
   }
   if (!article) {
@@ -1841,7 +1841,7 @@ function appendUnavailableMessage(messageId: string) {
     const heading = document.createElement("strong");
     heading.className = "unavailable-history-title";
     const explanation = document.createElement("p");
-    explanation.textContent = "This browser doesn't have their room keys. Your local passphrase only unlocks keys already on this device; use the original browser or a key backup to read them.";
+    explanation.textContent = "These messages are still encrypted, but this browser doesn't have the keys to read them. Your passphrase can't restore missing keys. Try the browser you used before.";
     copy.append(heading, explanation);
     notice.append(icon, copy);
     messagesPanel.append(notice);
@@ -1849,7 +1849,7 @@ function appendUnavailableMessage(messageId: string) {
   const count = Number(notice.dataset.count ?? "0") + 1;
   notice.dataset.count = String(count);
   notice.querySelector<HTMLElement>(".unavailable-history-title")!.textContent =
-    `${count} encrypted message${count === 1 ? "" : "s"} unavailable on this device`;
+    `${count} message${count === 1 ? " is" : "s are"} locked on this device`;
   unavailableMessageNotices.set(messageId, notice);
 }
 

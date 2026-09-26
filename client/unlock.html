@@ -21,13 +21,13 @@
       <div class="auth-mark" aria-hidden="true">⌁</div>
       <p class="eyebrow">LOCAL DEVICE</p>
       <h1>Unlock this browser.</h1>
-      <p class="muted">Your local passphrase unlocks the encrypted key store. It is never sent to the server.</p>
+      <p class="muted">Enter this browser’s encryption passphrase. It’s separate from your account password and never sent to the server.</p>
       <form id="unlock-form" class="stack">
         <label>Local encryption passphrase
           <input id="local-passphrase" type="password" autocomplete="off" required minlength="12" autofocus>
         </label>
         <label class="checkbox-label"><input id="remember-device" type="checkbox"> <span>Remember this device</span></label>
-        <p class="muted small">Stores an encrypted passphrase blob and a non-extractable browser key locally. Anyone who can use this browser profile may access this chat.</p>
+        <p class="muted small">Saves an encrypted copy of your passphrase in this browser. Anyone with access to this browser profile can unlock your chats.</p>
         <button id="unlock-submit" type="submit">Open encrypted chat</button>
       </form>
       <p id="unlock-status" class="form-status" role="status"></p>
