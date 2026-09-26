@@ -5,6 +5,7 @@ import { config } from "./config";
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "./encoding";
 import { db, pingDatabase } from "./db/client";
 import { pingRedis, publishMessageCreated } from "./redis/client";
+import { createRealtimeConnection, type RealtimeConnection } from "./realtime";
 
 type UserRow = {
   id: string;
@@ -29,6 +30,12 @@ type MessageRow = {
 function respondError(set: { status?: number | string }, status: number, error: string) {
   set.status = status;
   return { error };
+}
+
+function setSessionCookie(set: { headers: Record<string, string | number | undefined> }, token: string) {
+  const secure = config.environment === "production" ? "; Secure" : "";
+  set.headers["set-cookie"] =
+    `priv_chat_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionTtlSeconds}${secure}`;
 }
 
 function isUniqueViolation(error: unknown) {
@@ -66,14 +73,27 @@ const userBody = t.Object({
 
 const encryptedBytes = (maxLength: number) => t.String({ minLength: 1, maxLength });
 
+const realtimeCommand = t.Union([
+  t.Object({
+    type: t.Literal("subscribe"),
+    conversationId: t.String({ format: "uuid" }),
+  }),
+  t.Object({
+    type: t.Literal("unsubscribe"),
+    conversationId: t.String({ format: "uuid" }),
+  }),
+]);
+
 export function createApp() {
+  const realtimeConnections = new WeakMap<object, RealtimeConnection>();
+
   return new Elysia()
     .onError(({ code, set }) => {
       if (code === "VALIDATION") return respondError(set, 422, "validation_error");
       console.error("Unhandled request error");
       return respondError(set, 500, "internal_error");
     })
-    .get("/", () => ({ name: "priv-chat", version: "1.1.0" }))
+    .get("/", () => ({ name: "priv-chat", version: "1.2.0" }))
     .get("/health/live", () => ({ status: "ok" }))
     .get("/health/ready", async ({ set }) => {
       const [database, redis] = await Promise.allSettled([pingDatabase(), pingRedis()]);
@@ -101,6 +121,7 @@ export function createApp() {
           returning id, username, display_name, password_hash, created_at
         `;
         const session = await createSession(user.id);
+        setSessionCookie(set, session.token);
         set.status = 201;
         return { user: toPublicUser(user), ...session };
       } catch (error) {
@@ -118,15 +139,16 @@ export function createApp() {
       if (!valid || !user) return respondError(set, 401, "invalid_credentials");
 
       const session = await createSession(user.id);
+      setSessionCookie(set, session.token);
       return { user: toPublicUser(user), ...session };
     }, { body: userBody })
     .get("/v1/me", async ({ headers, set }) => {
-      const user = await authenticate(headers.authorization);
+      const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
       return { user };
     })
     .post("/v1/devices", async ({ body, headers, set }) => {
-      const user = await authenticate(headers.authorization);
+      const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
 
       let identityKey: Buffer;
@@ -182,7 +204,7 @@ export function createApp() {
       }),
     })
     .get("/v1/devices", async ({ headers, set }) => {
-      const user = await authenticate(headers.authorization);
+      const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
 
       const devices = await db<{
@@ -209,7 +231,7 @@ export function createApp() {
       };
     })
     .post("/v1/devices/:deviceId/revoke", async ({ headers, params, set }) => {
-      const user = await authenticate(headers.authorization);
+      const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
 
       const [revokedDevice] = await db<{ id: string }[]>`
@@ -224,7 +246,7 @@ export function createApp() {
       params: t.Object({ deviceId: t.String({ format: "uuid" }) }),
     })
     .post("/v1/conversations", async ({ body, headers, set }) => {
-      const user = await authenticate(headers.authorization);
+      const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
 
       const memberIds = [...new Set((body.memberUserIds ?? []).filter((id) => id !== user.id))];
@@ -280,7 +302,7 @@ export function createApp() {
       }),
     })
     .get("/v1/conversations", async ({ headers, set }) => {
-      const user = await authenticate(headers.authorization);
+      const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
 
       const conversations = await db<{
@@ -306,7 +328,7 @@ export function createApp() {
       };
     })
     .post("/v1/conversations/:conversationId/messages", async ({ body, headers, params, set }) => {
-      const user = await authenticate(headers.authorization);
+      const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
 
       const [membership] = await db<{ user_id: string }[]>`
@@ -392,7 +414,7 @@ export function createApp() {
       }),
     })
     .get("/v1/conversations/:conversationId/messages", async ({ headers, params, query, set }) => {
-      const user = await authenticate(headers.authorization);
+      const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
 
       const [membership] = await db<{ user_id: string }[]>`
@@ -433,5 +455,45 @@ export function createApp() {
         before: t.Optional(t.String({ pattern: "^[0-9]+$" })),
         limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })),
       }),
+    })
+    .ws("/v1/realtime", {
+      body: realtimeCommand,
+      open: async (ws) => {
+        const data = ws.data as { headers?: Record<string, string | undefined> };
+        const user = await authenticate(data.headers?.authorization, data.headers?.cookie);
+        if (!user) {
+          ws.close(4001, "unauthorized");
+          return;
+        }
+
+        try {
+          const connection = await createRealtimeConnection(ws, user.id);
+          realtimeConnections.set(ws, connection);
+          ws.send(JSON.stringify({ type: "ready" }));
+        } catch {
+          ws.close(1013, "realtime_unavailable");
+        }
+      },
+      message: async (ws, command) => {
+        const connection = realtimeConnections.get(ws);
+        if (!connection) {
+          ws.close(4001, "unauthorized");
+          return;
+        }
+
+        if (command.type === "subscribe") {
+          const subscribed = await connection.subscribe(command.conversationId);
+          if (!subscribed) {
+            ws.send(JSON.stringify({ type: "error", error: "not_a_conversation_member" }));
+          }
+          return;
+        }
+
+        await connection.unsubscribe(command.conversationId);
+      },
+      close: async (ws) => {
+        const connection = realtimeConnections.get(ws);
+        if (connection) await connection.close();
+      },
     });
 }

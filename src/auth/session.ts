@@ -53,8 +53,20 @@ export function extractBearerToken(authorization: string | undefined) {
   return token;
 }
 
-export async function authenticate(authorization: string | undefined): Promise<AuthenticatedUser | null> {
-  const token = extractBearerToken(authorization);
+export function extractCookieToken(cookieHeader: string | undefined) {
+  const cookie = cookieHeader?.split(";").find((part) => part.trim().startsWith("priv_chat_session="));
+  if (!cookie) return;
+
+  const token = cookie.slice(cookie.indexOf("=") + 1).trim();
+  if (token.length < 20 || token.length > 128) return;
+  return token;
+}
+
+export async function authenticate(
+  authorization: string | undefined,
+  cookieHeader?: string,
+): Promise<AuthenticatedUser | null> {
+  const token = extractBearerToken(authorization) ?? extractCookieToken(cookieHeader);
   if (!token) return null;
 
   const tokenHash = await hashSessionToken(token);

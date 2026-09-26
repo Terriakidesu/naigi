@@ -1,6 +1,6 @@
 {
   "name": "priv-chat",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "scripts": {
     "test": "bun test",
     "typecheck": "bunx --bun tsc --noEmit",
