@@ -1,7 +1,18 @@
-import { Elysia } from "elysia";
+import { createApp } from "./app";
+import { config } from "./config";
+import { closeDatabase } from "./db/client";
+import { closeRedis } from "./redis/client";
 
-const app = new Elysia().get("/", () => "Hello Elysia").listen(3000);
+// I have nothing but my burger and I want nothing more
+const app = createApp().listen({ hostname: config.host, port: config.port });
 
-console.log(
-  `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
-);
+console.log(`priv-chat is running at http://${app.server?.hostname}:${app.server?.port}`);
+
+const shutdown = async () => {
+  app.stop();
+  closeRedis();
+  await closeDatabase();
+};
+
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
