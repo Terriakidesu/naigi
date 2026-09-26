@@ -72,9 +72,19 @@ function localDeviceId(userId: string) {
   const key = `priv-chat.device.${userId}`;
   const stored = localStorage.getItem(key);
   if (stored && uuidPattern.test(stored)) return stored;
-  const created = crypto.randomUUID();
+  const created = randomUuid();
   localStorage.setItem(key, created);
   return created;
+}
+
+function randomUuid() {
+  if (typeof globalThis.crypto.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function jsonObject(value: string) {
@@ -240,7 +250,6 @@ export class CryptoClient {
       encryptionSettings,
     );
     encryptionSettings.free();
-    strategy.free();
     await this.sendToDeviceRequests(roomKeyRequests as unknown as OutgoingRequest[]);
     await this.processOutgoingRequests();
     this.preparedRooms.set(conversationId, roomKey);
@@ -293,25 +302,58 @@ export class CryptoClient {
     }
   }
 
-  async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>) {
+  private async encryptContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>) {
     await this.prepareConversation(conversationId, members);
     const roomId = new RoomId(matrixRoomId(conversationId));
-    const encryptedContent = await this.state.encryptRoomEvent(roomId, "m.room.message", JSON.stringify(content));
-    const event: MatrixEvent = {
-      type: "m.room.encrypted",
-      content: jsonObject(encryptedContent),
-      sender: matrixUserId(this.accountUserId),
-      event_id: `$${crypto.randomUUID()}:priv-chat`,
-      room_id: matrixRoomId(conversationId),
-      origin_server_ts: Date.now(),
-    };
-    roomId.free();
+    try {
+      const encryptedContent = await this.state.encryptRoomEvent(roomId, "m.room.message", JSON.stringify(content));
+      const event: MatrixEvent = {
+        type: "m.room.encrypted",
+        content: jsonObject(encryptedContent),
+        sender: matrixUserId(this.accountUserId),
+        event_id: `$${randomUuid()}:priv-chat`,
+        room_id: matrixRoomId(conversationId),
+        origin_server_ts: Date.now(),
+      };
+      return encodeBase64Url(new TextEncoder().encode(JSON.stringify(event)));
+    } finally {
+      roomId.free();
+    }
+  }
 
+  async encryptMetadata(conversationId: string, members: ConversationMember[], metadata: Record<string, unknown>) {
+    return this.encryptContent(conversationId, members, {
+      msgtype: "m.priv-chat.metadata",
+      body: JSON.stringify(metadata),
+    });
+  }
+
+  async decryptMetadata(conversationId: string, ciphertext: string) {
+    const decrypted = await this.decryptMessage(conversationId, {
+      id: randomUuid(),
+      conversationId,
+      senderDeviceId: this.deviceId,
+      senderUserId: null,
+      clientMessageId: randomUuid(),
+      serverSequence: "0",
+      protocol: "matrix-v1",
+      ciphertext,
+      protocolMetadata: "",
+      createdAt: new Date().toISOString(),
+    });
+    if (decrypted.content.msgtype !== "m.priv-chat.metadata" || typeof decrypted.content.body !== "string") {
+      throw new Error("invalid_encrypted_metadata");
+    }
+    return jsonObject(decrypted.content.body);
+  }
+
+  async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>) {
+    const ciphertext = await this.encryptContent(conversationId, members, content);
     return await this.api.sendMessage(conversationId, {
       senderDeviceId: this.deviceId,
-      clientMessageId: crypto.randomUUID(),
+      clientMessageId: randomUuid(),
       protocol: "matrix-v1",
-      ciphertext: encodeBase64Url(new TextEncoder().encode(JSON.stringify(event))),
+      ciphertext,
     });
   }
 

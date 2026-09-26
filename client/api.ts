@@ -9,12 +9,44 @@ export type Conversation = {
   id: string;
   kind: "dm" | "group";
   encryptedMetadata: string;
+  memberDisplayNames: string[];
   createdAt: string;
+};
+
+export type ServerRole = "owner" | "admin" | "member";
+
+export type Server = {
+  id: string;
+  ownerId: string;
+  encryptedMetadata: string;
+  role: ServerRole;
+  channelCount: number;
+  createdAt: string;
+};
+
+export type ServerChannel = {
+  id: string;
+  serverId: string;
+  conversationId: string;
+  encryptedMetadata: string;
+  kind: "text";
+  position: number;
+  createdAt: string;
+};
+
+export type ServerMember = {
+  userId: string;
+  username: string;
+  displayName: string;
+  role: ServerRole;
+  joinedAt: string;
 };
 
 export type ConversationMember = {
   userId: string;
   matrixUserId: string;
+  username: string;
+  displayName: string;
 };
 
 export type MessageEnvelope = {
@@ -102,6 +134,17 @@ export class ApiClient {
     });
   }
 
+  patch<T>(path: string, body: unknown) {
+    return this.request<T>(path, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  delete<T>(path: string) {
+    return this.request<T>(path, { method: "DELETE" });
+  }
+
   async putBytes(path: string, bytes: Uint8Array) {
     const body = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(body).set(bytes);
@@ -160,6 +203,10 @@ export class ApiClient {
     return this.get<{ devices: Device[] }>("/v1/devices");
   }
 
+  searchUsers(query: string) {
+    return this.get<{ users: User[] }>(`/v1/users/search?q=${encodeURIComponent(query)}`);
+  }
+
   revokeDevice(deviceId: string) {
     return this.post<{ revoked: boolean }>(`/v1/devices/${deviceId}/revoke`, {});
   }
@@ -172,12 +219,63 @@ export class ApiClient {
     return this.get<{ conversations: Conversation[] }>("/v1/conversations");
   }
 
+  servers() {
+    return this.get<{ servers: Server[] }>("/v1/servers");
+  }
+
+  server(serverId: string) {
+    return this.get<{ server: Server }>(`/v1/servers/${serverId}`);
+  }
+
+  serverChannels(serverId: string) {
+    return this.get<{ channels: ServerChannel[] }>(`/v1/servers/${serverId}/channels`);
+  }
+
+  serverMembers(serverId: string) {
+    return this.get<{ members: ServerMember[] }>(`/v1/servers/${serverId}/members`);
+  }
+
+  createServer(encryptedMetadata = "") {
+    return this.post<{ server: Server; channel: ServerChannel }>("/v1/servers", { encryptedMetadata });
+  }
+
+  updateServer(serverId: string, encryptedMetadata: string) {
+    return this.patch<{ server: Server }>(`/v1/servers/${serverId}`, { encryptedMetadata });
+  }
+
+  createChannel(serverId: string, encryptedMetadata = "") {
+    return this.post<{ channel: ServerChannel }>(`/v1/servers/${serverId}/channels`, { encryptedMetadata });
+  }
+
+  updateChannel(serverId: string, channelId: string, changes: { encryptedMetadata?: string; position?: number }) {
+    return this.patch<{ channel: ServerChannel }>(`/v1/servers/${serverId}/channels/${channelId}`, changes);
+  }
+
+  createServerInvite(serverId: string, options: { maxUses?: number; expiresInSeconds?: number } = {}) {
+    return this.post<{ invite: { id: string; token: string; maxUses: number; expiresAt: string | null } }>(
+      `/v1/servers/${serverId}/invites`,
+      options,
+    );
+  }
+
+  acceptInvite(token: string) {
+    return this.post<{ serverId: string; joined: boolean }>(`/v1/invites/${encodeURIComponent(token)}/accept`, {});
+  }
+
+  leaveServer(serverId: string) {
+    return this.post<{ left: boolean }>(`/v1/servers/${serverId}/leave`, {});
+  }
+
+  removeServerMember(serverId: string, userId: string) {
+    return this.delete<{ removed: boolean }>(`/v1/servers/${serverId}/members/${userId}`);
+  }
+
   conversationMembers(conversationId: string) {
     return this.get<{ members: ConversationMember[] }>(`/v1/conversations/${conversationId}/members`);
   }
 
   createConversation(kind: "dm" | "group", memberUserIds: string[]) {
-    return this.post<{ conversation: Conversation }>("/v1/conversations", {
+    return this.post<{ conversation: { id: string } }>("/v1/conversations", {
       kind,
       memberUserIds,
     });

@@ -6,21 +6,27 @@
     <meta name="referrer" content="no-referrer">
     <title>New conversation · priv-chat</title>
     <link rel="stylesheet" href="/app.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   </head>
   <body class="auth-page">
     <header class="topbar">
       <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">✦</span><div><strong>priv-chat</strong><span class="tag">new conversation</span></div></div>
       <a class="text-link" href="/app">Back to chat</a>
     </header>
-    <main class="auth-panel panel form-page-panel">
+    <main class="auth-panel panel form-page-panel new-conversation-panel">
       <p class="eyebrow">NEW CONVERSATION</p>
       <h1>Start a private space.</h1>
-      <p class="muted">Add one member for a direct message, or several members for a group. The server only sees account and membership metadata; messages remain encrypted.</p>
+      <p class="muted">Find people by username or display name. Add one member for a direct message, or several members for a group.</p>
       <form id="new-conversation-form" class="stack">
-        <label>Member user ID(s)
-          <input id="new-member-id" placeholder="UUID, comma-separated" required>
-        </label>
-        <button id="create-submit" type="submit">Create encrypted conversation</button>
+        <label for="member-search">Add members</label>
+        <div class="member-search-field">
+          <span aria-hidden="true">⌕</span>
+          <input id="member-search" type="search" placeholder="Search people" autocomplete="off" aria-label="Search people">
+        </div>
+        <div id="member-results" class="member-picker" aria-live="polite"><p class="muted">Type at least two characters to search.</p></div>
+        <div class="selected-members-heading"><span>SELECTED MEMBERS</span><span id="selected-count">0</span></div>
+        <div id="selected-members" class="selected-members"><p class="muted">No members selected yet.</p></div>
+        <button id="create-submit" type="submit" disabled>Create encrypted conversation</button>
       </form>
       <p id="new-status" class="form-status" role="status"></p>
     </main>

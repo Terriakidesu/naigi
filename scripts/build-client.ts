@@ -22,6 +22,7 @@ for (const page of ["index", "register", "unlock", "chat", "new", "settings"]) {
   await Bun.write(`public/${page}.html`, Bun.file(`client/${page}.html`));
 }
 await Bun.write("public/app.css", Bun.file("client/styles.css"));
+await Bun.write("public/favicon.svg", Bun.file("client/favicon.svg"));
 await Bun.write(
   "public/assets/matrix_sdk_crypto_wasm_bg.wasm",
   Bun.file("node_modules/@matrix-org/matrix-sdk-crypto-wasm/pkg/matrix_sdk_crypto_wasm_bg.wasm"),

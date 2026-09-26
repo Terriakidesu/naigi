@@ -117,6 +117,14 @@ function objectValue(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function validCryptoKey(value: unknown) {
+  const serialized = JSON.stringify(value);
+  if (!serialized || serialized.length > 16 * 1024) return false;
+  if (typeof value === "string") return value.length > 0;
+  const object = objectValue(value);
+  return Boolean(object && typeof object.key === "string" && object.key.length > 0 && object.key.length <= 4096);
+}
+
 function matrixUserId(userId: string) {
   return `@${userId}:priv-chat`;
 }
@@ -135,9 +143,34 @@ function parseCryptoUpload(value: unknown) {
   if (!deviceKeys || !keys || typeof deviceKeys.user_id !== "string" || !isUuid(deviceKeys.device_id)) return null;
   if (Object.keys(oneTimeKeys).length > 100 || Object.keys(fallbackKeys).length > 10) return null;
   if (!Object.values(keys).every((key) => typeof key === "string")) return null;
-  if (!Object.values(oneTimeKeys).every((key) => typeof key === "string")) return null;
-  if (!Object.values(fallbackKeys).every((key) => typeof key === "string")) return null;
+  if (!Object.values(oneTimeKeys).every(validCryptoKey)) return null;
+  if (!Object.values(fallbackKeys).every(validCryptoKey)) return null;
   return { deviceKeys, oneTimeKeys, fallbackKeys };
+}
+
+function decodeEncryptedMetadata(value: string | undefined) {
+  if (!value) return Buffer.alloc(0);
+  return decodeBase64(value, "encryptedMetadata", 64 * 1024, true);
+}
+
+async function serverMembership(serverId: string, userId: string) {
+  const [membership] = await db<{ role: "owner" | "admin" | "member" }[]>`
+    select role from server_members
+    where server_id = ${serverId} and user_id = ${userId} and left_at is null
+  `;
+  return membership;
+}
+
+function canManageServer(role: "owner" | "admin" | "member") {
+  return role === "owner" || role === "admin";
+}
+
+function newInviteToken() {
+  return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+}
+
+async function hashInviteToken(token: string) {
+  return Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)));
 }
 
 const userBody = t.Object({
@@ -232,6 +265,11 @@ export function createApp() {
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
+    .get("/favicon.svg", async ({ set }) => {
+      const file = await publicFile("favicon.svg", "image/svg+xml");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
     .get("/assets/:asset", async ({ params, set }) => {
       if (params.asset === "." || params.asset === ".." || !/^[A-Za-z0-9_.-]+$/.test(params.asset)) {
         return respondError(set, 404, "asset_not_found");
@@ -299,6 +337,567 @@ export function createApp() {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
       return { user };
+    })
+    .get("/v1/users/search", async ({ headers, query, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const search = query.q.trim();
+      if (search.length < 2) return { users: [] };
+      const pattern = `%${search.toLowerCase()}%`;
+      const users = await db<UserRow[]>`
+        select id, username, display_name, created_at
+        from users
+        where id <> ${user.id}
+          and (username_normalized like ${pattern} or lower(display_name) like ${pattern})
+        order by lower(display_name), username_normalized
+        limit 20
+      `;
+      return { users: users.map(toPublicUser) };
+    }, {
+      query: t.Object({ q: t.String({ maxLength: 80 }) }),
+    })
+    .post("/v1/servers", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      let metadata: Buffer;
+      try {
+        metadata = decodeEncryptedMetadata(body.encryptedMetadata);
+      } catch (error) {
+        if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_encrypted_metadata");
+        throw error;
+      }
+
+      const created = await db.begin(async (transaction) => {
+        const [server] = await transaction<{ id: string; owner_id: string; created_at: Date }[]>`
+          insert into servers (owner_id, encrypted_metadata)
+          values (${user.id}, ${metadata})
+          returning id, owner_id, created_at
+        `;
+        await transaction`
+          insert into server_members (server_id, user_id, role)
+          values (${server.id}, ${user.id}, 'owner')
+        `;
+        const [conversation] = await transaction<{ id: string }[]>`
+          insert into conversations (kind, created_by)
+          values ('channel', ${user.id})
+          returning id
+        `;
+        await transaction`
+          insert into conversation_members (conversation_id, user_id, role)
+          values (${conversation.id}, ${user.id}, 'owner')
+        `;
+        const [channel] = await transaction<{ id: string; position: number; created_at: Date }[]>`
+          insert into channels (server_id, conversation_id, created_by, position)
+          values (${server.id}, ${conversation.id}, ${user.id}, 0)
+          returning id, position, created_at
+        `;
+        return { server, channel, conversationId: conversation.id };
+      });
+
+      set.status = 201;
+      return {
+        server: {
+          id: created.server.id,
+          ownerId: created.server.owner_id,
+          encryptedMetadata: encodeBase64(metadata),
+          role: "owner",
+          channelCount: 1,
+          createdAt: created.server.created_at,
+        },
+        channel: {
+          id: created.channel.id,
+          serverId: created.server.id,
+          conversationId: created.conversationId,
+          encryptedMetadata: "",
+          kind: "text",
+          position: created.channel.position,
+          createdAt: created.channel.created_at,
+        },
+      };
+    }, {
+      body: t.Object({ encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })) }),
+    })
+    .get("/v1/servers", async ({ headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const servers = await db<{
+        id: string;
+        owner_id: string;
+        encrypted_metadata: Buffer;
+        role: "owner" | "admin" | "member";
+        channel_count: number;
+        created_at: Date;
+      }[]>`
+        select s.id, s.owner_id, s.encrypted_metadata, sm.role,
+          count(c.id)::int as channel_count, s.created_at
+        from servers s
+        join server_members sm on sm.server_id = s.id
+        left join channels c on c.server_id = s.id and c.archived_at is null
+        where sm.user_id = ${user.id} and sm.left_at is null
+        group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at
+        order by s.created_at asc
+      `;
+
+      return {
+        servers: servers.map((server) => ({
+          id: server.id,
+          ownerId: server.owner_id,
+          encryptedMetadata: encodeBase64(server.encrypted_metadata),
+          role: server.role,
+          channelCount: server.channel_count,
+          createdAt: server.created_at,
+        })),
+      };
+    })
+    .get("/v1/servers/:serverId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [server] = await db<{
+        id: string;
+        owner_id: string;
+        encrypted_metadata: Buffer;
+        role: "owner" | "admin" | "member";
+        channel_count: number;
+        created_at: Date;
+      }[]>`
+        select s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at,
+          count(c.id)::int as channel_count
+        from servers s
+        join server_members sm on sm.server_id = s.id
+        left join channels c on c.server_id = s.id and c.archived_at is null
+        where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
+        group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at
+      `;
+      if (!server) return respondError(set, 404, "server_not_found");
+      return {
+        server: {
+          id: server.id,
+          ownerId: server.owner_id,
+          encryptedMetadata: encodeBase64(server.encrypted_metadata),
+          role: server.role,
+          channelCount: server.channel_count,
+          createdAt: server.created_at,
+        },
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+    })
+    .patch("/v1/servers/:serverId", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+
+      let metadata: Buffer;
+      try {
+        metadata = decodeEncryptedMetadata(body.encryptedMetadata);
+      } catch (error) {
+        if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_encrypted_metadata");
+        throw error;
+      }
+
+      const [server] = await db<{
+        id: string;
+        owner_id: string;
+        encrypted_metadata: Buffer;
+        role: "owner" | "admin" | "member";
+        channel_count: number;
+        created_at: Date;
+      }[]>`
+        update servers s
+        set encrypted_metadata = ${metadata}, updated_at = now()
+        where s.id = ${params.serverId}
+        returning s.id, s.owner_id, s.encrypted_metadata,
+          (select role from server_members where server_id = s.id and user_id = ${user.id} and left_at is null) as role,
+          (select count(*)::int from channels where server_id = s.id and archived_at is null) as channel_count,
+          s.created_at
+      `;
+      if (!server) return respondError(set, 404, "server_not_found");
+      return {
+        server: {
+          id: server.id,
+          ownerId: server.owner_id,
+          encryptedMetadata: encodeBase64(server.encrypted_metadata),
+          role: server.role,
+          channelCount: server.channel_count,
+          createdAt: server.created_at,
+        },
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+      body: t.Object({ encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })) }),
+    })
+    .get("/v1/servers/:serverId/channels", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      if (!await serverMembership(params.serverId, user.id)) return respondError(set, 403, "not_a_server_member");
+
+      const channels = await db<{
+        id: string;
+        server_id: string;
+        conversation_id: string;
+        encrypted_metadata: Buffer;
+        kind: string;
+        position: number;
+        created_at: Date;
+      }[]>`
+        select id, server_id, conversation_id, encrypted_metadata, kind, position, created_at
+        from channels
+        where server_id = ${params.serverId} and archived_at is null
+        order by position asc, created_at asc
+      `;
+      return {
+        channels: channels.map((channel) => ({
+          id: channel.id,
+          serverId: channel.server_id,
+          conversationId: channel.conversation_id,
+          encryptedMetadata: encodeBase64(channel.encrypted_metadata),
+          kind: channel.kind,
+          position: channel.position,
+          createdAt: channel.created_at,
+        })),
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/servers/:serverId/channels", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+
+      let metadata: Buffer;
+      try {
+        metadata = decodeEncryptedMetadata(body.encryptedMetadata);
+      } catch (error) {
+        if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_encrypted_metadata");
+        throw error;
+      }
+
+      const created = await db.begin(async (transaction) => {
+        const [position] = await transaction<{ next_position: number }[]>`
+          select coalesce(max(position), -1) + 1 as next_position
+          from channels where server_id = ${params.serverId} and archived_at is null
+        `;
+        const [conversation] = await transaction<{ id: string }[]>`
+          insert into conversations (kind, created_by)
+          values ('channel', ${user.id})
+          returning id
+        `;
+        await transaction`
+          insert into conversation_members (conversation_id, user_id, role)
+          select ${conversation.id}, user_id, case when role = 'owner' then 'owner' else 'member' end
+          from server_members
+          where server_id = ${params.serverId} and left_at is null
+          on conflict (conversation_id, user_id) do nothing
+        `;
+        const [channel] = await transaction<{ id: string; position: number; created_at: Date }[]>`
+          insert into channels (server_id, conversation_id, created_by, encrypted_metadata, position)
+          values (${params.serverId}, ${conversation.id}, ${user.id}, ${metadata}, ${body.position ?? position.next_position})
+          returning id, position, created_at
+        `;
+        return { channel, conversationId: conversation.id };
+      });
+
+      set.status = 201;
+      return {
+        channel: {
+          id: created.channel.id,
+          serverId: params.serverId,
+          conversationId: created.conversationId,
+          encryptedMetadata: encodeBase64(metadata),
+          kind: "text",
+          position: created.channel.position,
+          createdAt: created.channel.created_at,
+        },
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
+        position: t.Optional(t.Integer({ minimum: 0, maximum: 1_000_000 })),
+      }),
+    })
+    .patch("/v1/servers/:serverId/channels/:channelId", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+
+      const [existing] = await db<{ id: string; encrypted_metadata: Buffer }[]>`
+        select id, encrypted_metadata from channels
+        where id = ${params.channelId} and server_id = ${params.serverId} and archived_at is null
+      `;
+      if (!existing) return respondError(set, 404, "channel_not_found");
+
+      let metadata: Buffer | undefined;
+      try {
+        metadata = body.encryptedMetadata === undefined
+          ? undefined
+          : decodeEncryptedMetadata(body.encryptedMetadata);
+      } catch (error) {
+        if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_encrypted_metadata");
+        throw error;
+      }
+
+      const [channel] = await db<{
+        id: string;
+        server_id: string;
+        conversation_id: string;
+        encrypted_metadata: Buffer;
+        kind: string;
+        position: number;
+        created_at: Date;
+      }[]>`
+        update channels
+        set encrypted_metadata = coalesce(${metadata ?? null}, encrypted_metadata),
+            position = coalesce(${body.position ?? null}, position)
+        where id = ${existing.id}
+        returning id, server_id, conversation_id, encrypted_metadata, kind, position, created_at
+      `;
+      return {
+        channel: {
+          id: channel.id,
+          serverId: channel.server_id,
+          conversationId: channel.conversation_id,
+          encryptedMetadata: encodeBase64(channel.encrypted_metadata),
+          kind: channel.kind,
+          position: channel.position,
+          createdAt: channel.created_at,
+        },
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), channelId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
+        position: t.Optional(t.Integer({ minimum: 0, maximum: 1_000_000 })),
+      }),
+    })
+    .get("/v1/servers/:serverId/members", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      if (!await serverMembership(params.serverId, user.id)) return respondError(set, 403, "not_a_server_member");
+
+      const members = await db<{
+        id: string;
+        username: string;
+        display_name: string;
+        role: "owner" | "admin" | "member";
+        joined_at: Date;
+      }[]>`
+        select u.id, u.username, u.display_name, sm.role, sm.joined_at
+        from server_members sm
+        join users u on u.id = sm.user_id
+        where sm.server_id = ${params.serverId} and sm.left_at is null
+        order by sm.joined_at asc
+      `;
+      return {
+        members: members.map((member) => ({
+          userId: member.id,
+          username: member.username,
+          displayName: member.display_name,
+          role: member.role,
+          joinedAt: member.joined_at,
+        })),
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/servers/:serverId/invites", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+
+      const token = newInviteToken();
+      const tokenHash = await hashInviteToken(token);
+      const [invite] = await db<{
+        id: string;
+        expires_at: Date | null;
+        max_uses: number;
+      }[]>`
+        insert into server_invites (server_id, created_by, token_hash, max_uses, expires_at)
+        values (
+          ${params.serverId}, ${user.id}, ${tokenHash}, ${body.maxUses ?? 0},
+          ${body.expiresInSeconds ? db`now() + make_interval(secs => ${body.expiresInSeconds})` : null}
+        )
+        returning id, expires_at, max_uses
+      `;
+      set.status = 201;
+      return { invite: { id: invite.id, token, maxUses: invite.max_uses, expiresAt: invite.expires_at } };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        maxUses: t.Optional(t.Integer({ minimum: 0, maximum: 100_000 })),
+        expiresInSeconds: t.Optional(t.Integer({ minimum: 300, maximum: 2_592_000 })),
+      }),
+    })
+    .post("/v1/invites/:token/accept", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const tokenHash = await hashInviteToken(params.token);
+
+      const result = await db.begin(async (transaction) => {
+        const [invite] = await transaction<{
+          id: string;
+          server_id: string;
+          max_uses: number;
+          uses: number;
+          expires_at: Date | null;
+          revoked_at: Date | null;
+        }[]>`
+          select id, server_id, max_uses, uses, expires_at, revoked_at
+          from server_invites where token_hash = ${tokenHash} for update
+        `;
+        if (!invite) return { error: "invite_not_found" as const };
+        if (invite.revoked_at || (invite.expires_at && invite.expires_at.getTime() <= Date.now())) {
+          return { error: "invite_expired" as const };
+        }
+        if (invite.max_uses > 0 && invite.uses >= invite.max_uses) return { error: "invite_exhausted" as const };
+
+        const [existingMember] = await transaction<{ left_at: Date | null }[]>`
+          select left_at from server_members
+          where server_id = ${invite.server_id} and user_id = ${user.id}
+        `;
+        if (existingMember && existingMember.left_at === null) {
+          return { serverId: invite.server_id, joined: false };
+        }
+
+        await transaction`
+          insert into server_members (server_id, user_id, role)
+          values (${invite.server_id}, ${user.id}, 'member')
+          on conflict (server_id, user_id) do update
+          set role = case when server_members.role in ('owner', 'admin') then server_members.role else 'member' end,
+              left_at = null,
+              joined_at = now()
+        `;
+        await transaction`
+          insert into conversation_members (conversation_id, user_id, role)
+          select c.conversation_id, ${user.id}, 'member'
+          from channels c
+          where c.server_id = ${invite.server_id} and c.archived_at is null
+          on conflict (conversation_id, user_id) do update set left_at = null
+        `;
+        await transaction`
+          update server_invites set uses = uses + 1 where id = ${invite.id}
+        `;
+        return { serverId: invite.server_id, joined: true };
+      });
+
+      if ("error" in result) {
+        const error = result.error ?? "invite_not_found";
+        return respondError(set, error === "invite_not_found" ? 404 : 409, error);
+      }
+      return { serverId: result.serverId, joined: result.joined };
+    }, {
+      params: t.Object({ token: t.String({ minLength: 20, maxLength: 255 }) }),
+    })
+    .delete("/v1/servers/:serverId/members/:userId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+      if (params.userId === user.id) return respondError(set, 400, "use_leave_server");
+
+      const [target] = await db<{ role: "owner" | "admin" | "member" }[]>`
+        select role from server_members
+        where server_id = ${params.serverId} and user_id = ${params.userId} and left_at is null
+      `;
+      if (!target) return respondError(set, 404, "server_member_not_found");
+      if (target.role === "owner") return respondError(set, 400, "cannot_remove_server_owner");
+      if (membership.role === "admin" && target.role === "admin") return respondError(set, 403, "insufficient_server_permissions");
+
+      await db.begin(async (transaction) => {
+        await transaction`
+          update server_members set left_at = now()
+          where server_id = ${params.serverId} and user_id = ${params.userId}
+        `;
+        await transaction`
+          update conversation_members cm
+          set left_at = now()
+          from channels c
+          where c.server_id = ${params.serverId}
+            and c.conversation_id = cm.conversation_id
+            and cm.user_id = ${params.userId}
+            and cm.left_at is null
+        `;
+      });
+      return { removed: true };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
+    })
+    .patch("/v1/servers/:serverId/members/:userId", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (membership.role !== "owner") return respondError(set, 403, "only_server_owner_can_change_roles");
+      if (params.userId === user.id) return respondError(set, 400, "cannot_change_owner_role");
+
+      const [target] = await db<{ role: "owner" | "admin" | "member" }[]>`
+        select role from server_members
+        where server_id = ${params.serverId} and user_id = ${params.userId} and left_at is null
+      `;
+      if (!target) return respondError(set, 404, "server_member_not_found");
+      await db`
+        update server_members set role = ${body.role}
+        where server_id = ${params.serverId} and user_id = ${params.userId}
+      `;
+      return { updated: true, role: body.role };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
+      body: t.Object({ role: t.Union([t.Literal("admin"), t.Literal("member")]) }),
+    })
+    .post("/v1/servers/:serverId/leave", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 404, "not_a_server_member");
+      if (membership.role === "owner") return respondError(set, 400, "server_owner_must_transfer_ownership");
+
+      await db.begin(async (transaction) => {
+        await transaction`
+          update server_members set left_at = now()
+          where server_id = ${params.serverId} and user_id = ${user.id} and left_at is null
+        `;
+        await transaction`
+          update conversation_members cm
+          set left_at = now()
+          from channels c
+          where c.server_id = ${params.serverId}
+            and c.conversation_id = cm.conversation_id
+            and cm.user_id = ${user.id}
+            and cm.left_at is null
+        `;
+      });
+      return { left: true };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+    })
+    .delete("/v1/servers/:serverId/invites/:inviteId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+      const [revoked] = await db<{ id: string }[]>`
+        update server_invites
+        set revoked_at = coalesce(revoked_at, now())
+        where id = ${params.inviteId} and server_id = ${params.serverId}
+        returning id
+      `;
+      if (!revoked) return respondError(set, 404, "invite_not_found");
+      return { revoked: true };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), inviteId: t.String({ format: "uuid" }) }),
     })
     .post("/v1/devices", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -867,11 +1466,23 @@ export function createApp() {
         kind: string;
         encrypted_metadata: Buffer;
         created_at: Date;
+        member_display_names: string[];
       }[]>`
-        select c.id, c.kind, c.encrypted_metadata, c.created_at
+        select c.id, c.kind, c.encrypted_metadata, c.created_at,
+          coalesce(
+            array_agg(other_user.display_name order by other_member.joined_at)
+              filter (where other_member.user_id <> ${user.id}),
+            array[]::text[]
+          ) as member_display_names
         from conversations c
         join conversation_members m on m.conversation_id = c.id
+        join conversation_members other_member on other_member.conversation_id = c.id and other_member.left_at is null
+        join users other_user on other_user.id = other_member.user_id
         where m.user_id = ${user.id} and m.left_at is null
+          and not exists (
+            select 1 from channels channel_filter where channel_filter.conversation_id = c.id
+          )
+        group by c.id, c.kind, c.encrypted_metadata, c.created_at
         order by c.created_at desc
       `;
 
@@ -880,6 +1491,7 @@ export function createApp() {
           id: conversation.id,
           kind: conversation.kind,
           encryptedMetadata: encodeBase64(conversation.encrypted_metadata),
+          memberDisplayNames: conversation.member_display_names,
           createdAt: conversation.created_at,
         })),
       };
@@ -894,15 +1506,19 @@ export function createApp() {
       `;
       if (!membership) return respondError(set, 403, "not_a_conversation_member");
 
-      const members = await db<{ id: string }[]>`
-        select user_id as id from conversation_members
-        where conversation_id = ${params.conversationId} and left_at is null
-        order by joined_at asc
+      const members = await db<{ id: string; username: string; display_name: string }[]>`
+        select u.id, u.username, u.display_name
+        from conversation_members m
+        join users u on u.id = m.user_id
+        where m.conversation_id = ${params.conversationId} and m.left_at is null
+        order by m.joined_at asc
       `;
       return {
         members: members.map((member) => ({
           userId: member.id,
           matrixUserId: matrixUserId(member.id),
+          username: member.username,
+          displayName: member.display_name,
         })),
       };
     }, {

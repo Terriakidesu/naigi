@@ -21,6 +21,24 @@ bun run db:migrate
 bun run dev
 ```
 
+To clear all local application data while preserving the schema and migrations:
+
+```bash
+bun run db:purge -- --yes
+```
+
+The purge refuses to run with `NODE_ENV=production` and does not remove files from
+`ATTACHMENTS_DIR`.
+
+## Servers and channels
+
+The `/v1/servers` API provides invite-only Discord-style servers with ordered text channels,
+memberships, owner/admin roles, and hashed expiring invites. Each channel has its own E2EE
+conversation identity; channel messages use the existing conversation message and realtime
+transport. Server and channel names are client-encrypted opaque metadata, so the backend
+only sees IDs, membership, roles, and ordering. The full future-frontend contract is in
+[`docs/api-v1.md`](docs/api-v1.md).
+
 The liveness endpoint does not require either dependency. Readiness is available at
 `/health/ready`.
 

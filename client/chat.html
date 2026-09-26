@@ -6,6 +6,7 @@
     <meta name="referrer" content="no-referrer">
     <title>Chat · priv-chat</title>
     <link rel="stylesheet" href="/app.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   </head>
   <body>
     <div class="shell">
@@ -20,21 +21,30 @@
         </div>
       </header>
 
-      <section id="chat-panel" class="chat-layout">
+      <section id="chat-panel" class="chat-layout mobile-sidebar-open">
         <aside class="workspace-rail" aria-label="Workspace navigation">
-          <a class="rail-button rail-active" href="/app" title="priv-chat home" aria-label="priv-chat home">✦</a>
+          <button id="home-rail-button" class="rail-button rail-active" type="button" title="Direct messages" aria-label="Direct messages">✦</button>
+          <div id="server-list" class="server-list" aria-label="Servers"></div>
           <span class="rail-divider" aria-hidden="true"></span>
+          <button id="create-server-button" class="rail-button rail-action" type="button" title="Create a server" aria-label="Create a server">＋</button>
+          <button id="join-server-button" class="rail-button rail-action" type="button" title="Join a server" aria-label="Join a server">↪</button>
           <a class="rail-button" href="/new" title="New conversation" aria-label="New conversation">＋</a>
           <a class="rail-button" href="/settings" title="Settings" aria-label="Settings">⚙</a>
         </aside>
 
         <aside class="sidebar">
           <div class="sidebar-heading">
-            <div><strong class="workspace-name">priv-chat</strong><span class="workspace-subtitle">Encrypted workspace</span></div>
-            <a class="icon-button" href="/settings" title="Settings" aria-label="Settings">⚙</a>
+            <div><strong id="workspace-name" class="workspace-name">Direct messages</strong><span id="workspace-subtitle" class="workspace-subtitle">Encrypted workspace</span></div>
+            <div class="sidebar-heading-actions">
+              <button id="server-invite-button" class="icon-button" type="button" title="Create invite" aria-label="Create invite" hidden>⌁</button>
+              <button id="create-channel-button" class="icon-button" type="button" title="Create channel" aria-label="Create channel" hidden>＋</button>
+              <a class="icon-button" href="/settings" title="Settings" aria-label="Settings">⚙</a>
+            </div>
           </div>
-          <div class="sidebar-search" aria-hidden="true"><span>⌕</span><span>Find a conversation</span><kbd>⌘ K</kbd></div>
-          <div class="section-heading"><span>CONVERSATIONS</span><span class="section-count">private</span></div>
+          <label class="sidebar-search" for="conversation-search"><span aria-hidden="true">⌕</span><input id="conversation-search" type="search" aria-label="Find a conversation" placeholder="Find a conversation" autocomplete="off"><kbd>⌘ K</kbd></label>
+          <div id="channel-section-heading" class="section-heading" hidden><span>TEXT CHANNELS</span><span class="section-count">encrypted</span></div>
+          <div id="channel-list" class="channel-list" hidden></div>
+          <div class="section-heading"><span>DIRECT MESSAGES</span><span class="section-count">private</span></div>
           <div id="conversation-list" class="conversation-list"></div>
           <a class="create-button secondary" href="/new"><span aria-hidden="true">＋</span> Create conversation</a>
           <div class="sidebar-user">
@@ -43,23 +53,31 @@
             <span class="user-status-dot" aria-hidden="true"></span>
           </div>
         </aside>
+        <button id="mobile-sidebar-backdrop" class="mobile-sidebar-backdrop" type="button" aria-label="Close conversation list"></button>
 
         <main class="panel chat-main">
           <header class="chat-header">
-            <div class="channel-heading">
-              <span class="channel-icon" aria-hidden="true">#</span>
-              <div><h2 id="conversation-title">Choose a conversation</h2><span class="channel-subtitle">Messages are end-to-end encrypted</span></div>
+            <div class="chat-header-main">
+              <div class="channel-heading">
+                <button id="mobile-sidebar-toggle" class="icon-button mobile-sidebar-toggle" type="button" title="Show conversations" aria-label="Show conversations" aria-expanded="true">☰</button>
+                <span id="channel-icon" class="channel-icon" aria-hidden="true">#</span>
+                <div class="channel-copy"><h2 id="conversation-title">Choose a conversation</h2><span id="conversation-subtitle" class="channel-subtitle">Messages are end-to-end encrypted</span></div>
+              </div>
+              <div id="message-search-container" class="message-search" hidden>
+                <span aria-hidden="true">⌕</span>
+                <input id="message-search" type="search" placeholder="Search this conversation" autocomplete="off">
+                <button id="message-search-close" class="icon-button" type="button" title="Close search" aria-label="Close search">×</button>
+              </div>
             </div>
             <div class="chat-actions">
-              <button class="icon-button" type="button" title="Search messages" aria-label="Search messages">⌕</button>
-              <button class="icon-button" type="button" title="Pinned messages" aria-label="Pinned messages">⌑</button>
-              <button class="icon-button" type="button" title="Conversation options" aria-label="Conversation options">⋯</button>
+              <button id="message-search-toggle" class="icon-button" type="button" title="Search messages" aria-label="Search messages" aria-expanded="false">⌕</button>
+              <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true">ⓘ</button>
             </div>
           </header>
           <div class="chat-content">
-            <div id="messages" class="messages" aria-live="polite"></div>
+            <div id="messages" class="messages" aria-live="polite" aria-label="Messages"></div>
             <aside class="details-panel">
-              <div class="details-heading"><strong>Conversation details</strong><span aria-hidden="true">⋯</span></div>
+              <div class="details-heading"><strong>Conversation details</strong><button id="details-close" class="icon-button details-close" type="button" title="Close conversation details" aria-label="Close conversation details">×</button></div>
               <div class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>End-to-end encrypted</strong><span>Only members can read messages.</span></div></div>
               <div class="details-section-title">MEMBERS</div>
               <div id="member-list" class="member-list"><span class="muted">Choose a conversation</span></div>
@@ -69,9 +87,10 @@
             <div class="composer-box">
               <label class="file-button" title="Attach encrypted photo" aria-label="Attach encrypted photo">＋<input id="photo-input" type="file" accept="image/avif,image/gif,image/heic,image/jpeg,image/png,image/webp"></label>
               <textarea id="message-input" rows="1" maxlength="200000" placeholder="Message this conversation"></textarea>
-              <button class="send-button" type="submit" title="Send encrypted message" aria-label="Send encrypted message">➤</button>
+              <button id="send-button" class="send-button" type="submit" title="Send encrypted message" aria-label="Send encrypted message">➤</button>
             </div>
-            <div class="composer-actions"><span><kbd>Enter</kbd> to send · <kbd>Shift + Enter</kbd> for a new line</span><span class="composer-security"><span class="status-dot"></span>Encrypted</span></div>
+            <div id="attachment-preview" class="attachment-preview" hidden><span id="attachment-label"></span><button id="clear-attachment" class="icon-button" type="button" title="Remove attachment" aria-label="Remove attachment">×</button></div>
+            <div class="composer-actions"><span class="desktop-composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift + Enter</kbd> for a new line</span><span class="mobile-composer-hint">Enter sends · Shift + Enter for a new line</span><span class="composer-security"><span class="status-dot"></span>Encrypted</span></div>
           </form>
         </main>
       </section>
