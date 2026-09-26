@@ -1158,7 +1158,7 @@ async function startCrypto() {
   }
   loadUnreadMarkers();
   loadNotificationPreference();
-  cryptoClient?.close();
+  await cryptoClient?.close();
   cryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
   await cryptoClient.initialize();
   confirmLocalUnlock();

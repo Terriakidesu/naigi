@@ -156,6 +156,7 @@ export class CryptoClient {
   private machine?: OlmMachine;
   private initialized = false;
   private readonly preparingRooms = new Map<string, Promise<void>>();
+  private cryptoOperation: Promise<void> = Promise.resolve();
   private syncPromise?: Promise<number>;
   private outboxPromise?: Promise<{ sent: number; pending: number; failed: number }>;
 
@@ -192,6 +193,12 @@ export class CryptoClient {
   private get state() {
     if (!this.machine || !this.initialized) throw new Error("crypto_not_initialized");
     return this.machine;
+  }
+
+  private runCryptoOperation<T>(operation: () => Promise<T>) {
+    const next = this.cryptoOperation.then(operation, operation);
+    this.cryptoOperation = next.then(() => undefined, () => undefined);
+    return next;
   }
 
   private async sendOutgoingRequest(request: OutgoingRequest) {
@@ -247,7 +254,7 @@ export class CryptoClient {
       return;
     }
 
-    const preparation = this.prepareConversationInternal(conversationId, members);
+    const preparation = this.runCryptoOperation(() => this.prepareConversationInternal(conversationId, members));
     this.preparingRooms.set(conversationId, preparation);
     try {
       await preparation;
@@ -302,7 +309,7 @@ export class CryptoClient {
 
   async syncToDevice() {
     if (this.syncPromise) return this.syncPromise;
-    this.syncPromise = this.syncToDeviceInternal().finally(() => {
+    this.syncPromise = this.runCryptoOperation(() => this.syncToDeviceInternal()).finally(() => {
       this.syncPromise = undefined;
     });
     return this.syncPromise;
@@ -348,21 +355,23 @@ export class CryptoClient {
 
   private async encryptContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>) {
     await this.prepareConversation(conversationId, members);
-    const roomId = new RoomId(matrixRoomId(conversationId));
-    try {
-      const encryptedContent = await this.state.encryptRoomEvent(roomId, "m.room.message", JSON.stringify(content));
-      const event: MatrixEvent = {
-        type: "m.room.encrypted",
-        content: jsonObject(encryptedContent),
-        sender: matrixUserId(this.accountUserId),
-        event_id: `$${randomUuid()}:priv-chat`,
-        room_id: matrixRoomId(conversationId),
-        origin_server_ts: Date.now(),
-      };
-      return encodeBase64Url(new TextEncoder().encode(JSON.stringify(event)));
-    } finally {
-      roomId.free();
-    }
+    return this.runCryptoOperation(async () => {
+      const roomId = new RoomId(matrixRoomId(conversationId));
+      try {
+        const encryptedContent = await this.state.encryptRoomEvent(roomId, "m.room.message", JSON.stringify(content));
+        const event: MatrixEvent = {
+          type: "m.room.encrypted",
+          content: jsonObject(encryptedContent),
+          sender: matrixUserId(this.accountUserId),
+          event_id: `$${randomUuid()}:priv-chat`,
+          room_id: matrixRoomId(conversationId),
+          origin_server_ts: Date.now(),
+        };
+        return encodeBase64Url(new TextEncoder().encode(JSON.stringify(event)));
+      } finally {
+        roomId.free();
+      }
+    });
   }
 
   async encryptMetadata(conversationId: string, members: ConversationMember[], metadata: Record<string, unknown>) {
@@ -574,19 +583,21 @@ export class CryptoClient {
 
   async decryptMessage(conversationId: string, message: MessageEnvelope): Promise<DecryptedMessage> {
     if (message.protocol !== "matrix-v1") throw new Error("unsupported_message_protocol");
-    const roomId = new RoomId(matrixRoomId(conversationId));
-    const settings = new DecryptionSettings(TrustRequirement.Untrusted);
-    try {
-      const decrypted = await this.state.decryptRoomEvent(JSON.stringify(eventForMessage(message)), roomId, settings);
-      const event = jsonObject(decrypted.event);
-      const sender = decrypted.sender.toString();
-      const content = jsonObject(JSON.stringify(event.content));
-      decrypted.free();
-      return { sender, content };
-    } finally {
-      settings.free();
-      roomId.free();
-    }
+    return this.runCryptoOperation(async () => {
+      const roomId = new RoomId(matrixRoomId(conversationId));
+      const settings = new DecryptionSettings(TrustRequirement.Untrusted);
+      try {
+        const decrypted = await this.state.decryptRoomEvent(JSON.stringify(eventForMessage(message)), roomId, settings);
+        const event = jsonObject(decrypted.event);
+        const sender = decrypted.sender.toString();
+        const content = jsonObject(JSON.stringify(event.content));
+        decrypted.free();
+        return { sender, content };
+      } finally {
+        settings.free();
+        roomId.free();
+      }
+    });
   }
 
   async decryptMedia(content: Record<string, unknown>, options: { signal?: AbortSignal; onProgress?: (loadedBytes: number, totalBytes: number) => void } = {}) {
@@ -616,7 +627,8 @@ export class CryptoClient {
     return this.decryptMedia(content, options);
   }
 
-  close() {
+  async close() {
+    await this.cryptoOperation;
     this.preparingRooms.clear();
     this.machine?.close();
     this.machine = undefined;
