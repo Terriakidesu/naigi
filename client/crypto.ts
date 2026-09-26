@@ -155,7 +155,7 @@ export class CryptoClient {
   private readonly requestedDeviceId: string;
   private machine?: OlmMachine;
   private initialized = false;
-  private readonly preparedRooms = new Map<string, string>();
+  private readonly preparingRooms = new Map<string, Promise<void>>();
   private syncPromise?: Promise<number>;
   private outboxPromise?: Promise<{ sent: number; pending: number; failed: number }>;
 
@@ -182,6 +182,9 @@ export class CryptoClient {
       this.storePassphrase,
     );
     this.initialized = true;
+    // Ask the SDK to request room keys when a device misses an original share.
+    // Forwarding remains controlled by the SDK's device-trust rules.
+    this.state.roomKeyRequestsEnabled = true;
     await this.processOutgoingRequests();
     await this.syncToDevice();
   }
@@ -238,9 +241,23 @@ export class CryptoClient {
   }
 
   async prepareConversation(conversationId: string, members: ConversationMember[]) {
+    const existingPreparation = this.preparingRooms.get(conversationId);
+    if (existingPreparation) {
+      await existingPreparation;
+      return;
+    }
+
+    const preparation = this.prepareConversationInternal(conversationId, members);
+    this.preparingRooms.set(conversationId, preparation);
+    try {
+      await preparation;
+    } finally {
+      if (this.preparingRooms.get(conversationId) === preparation) this.preparingRooms.delete(conversationId);
+    }
+  }
+
+  private async prepareConversationInternal(conversationId: string, members: ConversationMember[]) {
     const memberIds = [...new Set(members.map((member) => member.matrixUserId).concat(matrixUserId(this.accountUserId)))].sort();
-    const roomKey = `${conversationId}:${memberIds.join(",")}`;
-    if (this.preparedRooms.get(conversationId) === roomKey) return;
 
     const roomId = new RoomId(matrixRoomId(conversationId));
     const roomSettings = new RoomSettings();
@@ -253,6 +270,10 @@ export class CryptoClient {
     roomSettings.free();
 
     await this.state.updateTrackedUsers(memberIds.map((id) => new UserId(id)));
+    // The server does not maintain a Matrix sync token, so its device-list
+    // change set is intentionally empty. Refresh tracked users explicitly so
+    // a device opened after the first room-key share is discovered.
+    await this.state.markAllTrackedUsersAsDirty();
     await this.processOutgoingRequests();
 
     const missingSessions = await this.state.getMissingSessions(memberIds.map((id) => new UserId(id)));
@@ -274,9 +295,9 @@ export class CryptoClient {
       encryptionSettings,
     );
     encryptionSettings.free();
+    strategy.free();
     await this.sendToDeviceRequests(roomKeyRequests as unknown as OutgoingRequest[]);
     await this.processOutgoingRequests();
-    this.preparedRooms.set(conversationId, roomKey);
     roomId.free();
   }
 
@@ -597,6 +618,7 @@ export class CryptoClient {
   }
 
   close() {
+    this.preparingRooms.clear();
     this.machine?.close();
     this.machine = undefined;
     this.initialized = false;

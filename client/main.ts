@@ -80,6 +80,7 @@ const typingUsers = new Map<string, number>();
 const typingTimers = new Map<string, number>();
 let localTypingConversationId: string | undefined;
 let localTypingStopTimer: number | undefined;
+let lastRoomKeyRefreshAt = 0;
 const redactedMessageIds = new Set<string>();
 const redactionAuthors = new Map<string, string | null>();
 const MESSAGE_PAGE_SIZE = 50;
@@ -1031,6 +1032,16 @@ async function flushOutbox() {
   await refreshOutboxNotice();
 }
 
+async function refreshSelectedRoomKeys() {
+  if (!cryptoClient || !selectedConversationId || !conversationReady || selectedMembers.length === 0) return;
+  if (Date.now() - lastRoomKeyRefreshAt < 10_000) return;
+  const activeCryptoClient = cryptoClient;
+  const conversationId = selectedConversationId;
+  const members = [...selectedMembers];
+  lastRoomKeyRefreshAt = Date.now();
+  await activeCryptoClient.prepareConversation(conversationId, members);
+}
+
 function connectRealtime() {
   realtime?.close();
   realtimeReadySocket = undefined;
@@ -1656,6 +1667,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   const token = ++selectionToken;
   selectedConversationId = conversationId;
   conversationReady = false;
+  lastRoomKeyRefreshAt = 0;
   if (channel) selectedChannelId = channel.id;
   setDetailsForConversation(Boolean(channel));
   lastMessagesKey = "__not-rendered__";
@@ -2844,6 +2856,7 @@ async function boot() {
   window.setInterval(() => {
     if (cryptoClient) {
       void cryptoClient.syncToDevice()
+        .then(() => refreshSelectedRoomKeys().catch(() => undefined))
         .then(() => flushOutbox())
         .then(() => refreshMessages())
         .catch(() => undefined);
