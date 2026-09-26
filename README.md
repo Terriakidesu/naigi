@@ -45,6 +45,37 @@ The browser client supports safe Markdown rendering, cursor-based older-message 
 preservation while navigating, server/category management, profile/password settings, and an
 opt-in remembered local unlock. Remembered unlock stores only encrypted passphrase material and
 a non-extractable Web Crypto key in IndexedDB; use “Forget remembered unlock” on shared devices.
+On HTTPS or localhost, check **Remember this device** once on the unlock page to avoid
+entering the passphrase again on subsequent visits. The checkbox is opt-in because
+anyone with access to the browser profile can then unlock the encrypted key store.
+The passphrase is never transmitted to the server.
+
+### Access from another device
+
+Use HTTPS when accessing Naigi from a LAN address or remote host. Browsers do not
+enable the Web Crypto API required for remembered unlock on plain `http://` IP
+addresses; serving an E2EE app over HTTP also lets a network attacker replace
+the client code. Changing `HOST` or `NODE_ENV` does not make an HTTP origin secure.
+For example, with a domain pointed at your server and a reverse proxy such as Caddy:
+
+```caddyfile
+chat.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Run Naigi with `HOST=127.0.0.1` behind the proxy and visit
+`https://chat.example.com`. For LAN-only access, use a trusted local TLS
+certificate or an HTTPS tunnel instead. If you have SSH access to the host,
+you can forward its port without exposing an insecure HTTP origin:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 user@your-server
+```
+
+Then open `http://localhost:3000` on your own device. Browser storage is scoped to the exact
+origin, so a previously remembered unlock on `localhost` cannot be reused on
+a different domain or port.
 
 The liveness endpoint does not require either dependency. Readiness is available at
 `/health/ready`.

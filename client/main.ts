@@ -12,7 +12,7 @@ import {
 import { CryptoClient, type ReplyReference } from "./crypto";
 import { appendSafeEmbed, extractEmbeds, type SafeEmbed } from "./embeds";
 import { appendMarkdown } from "./markdown";
-import { clearSessionPassphrase, takeSessionPassphrase } from "./unlock-vault";
+import { confirmLocalUnlock, lockLocalSession, resolveLocalPassphrase } from "./unlock-vault";
 import { askText, showOneTimeToken } from "./ui-dialog";
 
 const api = new ApiClient();
@@ -901,7 +901,7 @@ function conversationLocation(conversationId: string) {
 
 async function startCrypto() {
   if (!currentUser) throw new Error("not_authenticated");
-  const localPassphrase = takeSessionPassphrase();
+  const localPassphrase = await resolveLocalPassphrase(currentUser.id);
   if (!localPassphrase) {
     const returnPath = `${window.location.pathname}${window.location.search}`;
     window.location.assign(`/unlock?return=${encodeURIComponent(returnPath)}`);
@@ -911,6 +911,7 @@ async function startCrypto() {
   cryptoClient?.close();
   cryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
   await cryptoClient.initialize();
+  confirmLocalUnlock();
   const outbox = await cryptoClient.flushPendingMessages().catch(() => ({ sent: 0, pending: 0, failed: 0 }));
   userLabel.textContent = `${currentUser.displayName} (@${currentUser.username})`;
   selfAvatar.textContent = currentUser.displayName.slice(0, 1).toUpperCase();
@@ -2601,7 +2602,7 @@ messagesPanel.addEventListener("scroll", () => {
   if (messagesPanel.scrollTop < 240 && nextBefore) void loadOlderMessages();
 });
 lockButton.addEventListener("click", () => {
-  clearSessionPassphrase();
+  lockLocalSession();
   cryptoClient?.close();
   const returnPath = `${window.location.pathname}${window.location.search}`;
   window.location.assign(`/unlock?manual=1&return=${encodeURIComponent(returnPath)}`);

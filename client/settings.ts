@@ -1,5 +1,5 @@
 import { ApiClient, ApiError, type User } from "./api";
-import { clearSessionPassphrase, forgetRememberedPassphrase } from "./unlock-vault";
+import { clearSessionPassphrase, forgetRememberedPassphrase, lockLocalSession } from "./unlock-vault";
 
 type Device = {
   id: string;
@@ -157,7 +157,7 @@ passwordForm.addEventListener("submit", async (event) => {
 });
 
 lockNow.addEventListener("click", () => {
-  clearSessionPassphrase();
+  lockLocalSession();
   window.location.assign(`/unlock?manual=1&return=${encodeURIComponent("/settings")}`);
 });
 

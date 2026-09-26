@@ -2,6 +2,7 @@ import { ApiClient, ApiError } from "./api";
 import {
   clearSessionPassphrase,
   forgetRememberedPassphrase,
+  localSessionLocked,
   recoverRememberedPassphrase,
   rememberPassphrase,
   rememberedUnlockSupported,
@@ -19,10 +20,12 @@ let currentUserId: string | undefined;
 
 if (!rememberedUnlockSupported()) {
   remember.disabled = true;
-  remember.title = "Remembered unlock requires HTTPS or localhost.";
+  remember.title = "Remembered unlock requires a secure browser context (HTTPS or localhost).";
   const hint = document.createElement("p");
   hint.className = "muted small";
-  hint.textContent = "Remembered unlock is unavailable here; use HTTPS or localhost to enable it.";
+  hint.textContent = window.isSecureContext
+    ? "Remembered unlock is unavailable in this browser. Check that Web Crypto and IndexedDB are enabled."
+    : "This address is not secure. To remember your passphrase, open Naigi over HTTPS (or localhost). Plain HTTP on another device cannot safely remember an unlock.";
   remember.closest("label")?.after(hint);
 }
 
@@ -33,7 +36,7 @@ function destination() {
 
 function readableError(error: unknown) {
   if (error instanceof Error && error.message === "remembered_unlock_requires_secure_context") {
-    return "Remembered unlock requires HTTPS or localhost.";
+    return "Remembered unlock requires HTTPS or localhost with Web Crypto and IndexedDB available.";
   }
   return error instanceof Error ? error.message : "Unable to unlock this browser.";
 }
@@ -47,7 +50,7 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   submit.disabled = true;
   try {
-    if (remember.checked && currentUserId) await rememberPassphrase(currentUserId, passphrase.value);
+    if (remember.checked) await rememberPassphrase(currentUserId ?? (await api.me()).user.id, passphrase.value);
     setSessionPassphrase(passphrase.value);
     window.location.assign(destination());
   } catch (error) {
@@ -70,7 +73,7 @@ async function boot() {
   try {
     const result = await api.me();
     currentUserId = result.user.id;
-    if (!reason && !manualUnlock) {
+    if (!reason && !manualUnlock && !localSessionLocked()) {
       const rememberedPassphrase = await recoverRememberedPassphrase(currentUserId).catch(() => null);
       if (rememberedPassphrase) {
         setStatus("Unlocking this browser…");

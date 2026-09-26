@@ -1,4 +1,5 @@
 const sessionPassphraseKey = "priv-chat.local-passphrase";
+const manualLockKey = "priv-chat.manual-lock";
 const vaultDatabaseName = "priv-chat-unlock-vault";
 const vaultStoreName = "passphrases";
 
@@ -49,6 +50,28 @@ export function setSessionPassphrase(value: string) {
 
 export function clearSessionPassphrase() {
   sessionStorage.removeItem(sessionPassphraseKey);
+}
+
+export function lockLocalSession() {
+  clearSessionPassphrase();
+  sessionStorage.setItem(manualLockKey, "1");
+}
+
+export function localSessionLocked() {
+  return sessionStorage.getItem(manualLockKey) === "1";
+}
+
+export function confirmLocalUnlock() {
+  sessionStorage.removeItem(manualLockKey);
+}
+
+// The navigation handoff is one-time; subsequent pages can recover only from
+// the opt-in, encrypted device vault on a secure origin.
+export async function resolveLocalPassphrase(userId: string) {
+  const handoff = takeSessionPassphrase();
+  if (handoff) return handoff;
+  if (localSessionLocked()) return null;
+  return recoverRememberedPassphrase(userId).catch(() => null);
 }
 
 export async function rememberPassphrase(userId: string, passphrase: string) {

@@ -3,9 +3,9 @@ import { CryptoClient } from "./crypto";
 import { showOneTimeToken } from "./ui-dialog";
 import {
   clearSessionPassphrase,
+  confirmLocalUnlock,
   forgetRememberedPassphrase,
-  recoverRememberedPassphrase,
-  takeSessionPassphrase,
+  resolveLocalPassphrase,
 } from "./unlock-vault";
 
 const api = new ApiClient();
@@ -64,13 +64,14 @@ function destination(channelId?: string) {
 
 async function ensureCrypto() {
   if (!currentUserId) throw new Error("not_authenticated");
-  const passphrase = takeSessionPassphrase() ?? await recoverRememberedPassphrase(currentUserId).catch(() => null);
+  const passphrase = await resolveLocalPassphrase(currentUserId);
   if (!passphrase) {
     window.location.assign(`/unlock?return=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
     return;
   }
   cryptoClient = new CryptoClient(api, currentUserId, passphrase);
   await cryptoClient.initialize();
+  confirmLocalUnlock();
 }
 
 async function prepareConversation(conversationId: string) {
