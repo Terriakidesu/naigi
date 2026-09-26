@@ -24,7 +24,7 @@ async function migrate() {
 
     const migration = await Bun.file(join(migrationsDirectory, file)).text();
     await db.begin(async (transaction) => {
-      await transaction(migration).simple();
+      await transaction.unsafe(migration).simple();
       await transaction`insert into schema_migrations (version) values (${version})`;
     });
 
