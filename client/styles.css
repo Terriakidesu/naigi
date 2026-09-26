@@ -175,6 +175,10 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .message-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #dcddde; font-size: 0.9rem; line-height: 1.45; }
 .message-deleted { margin: 0.15rem 0; font-size: 0.78rem; font-style: italic; }
 .message-deleted-row { opacity: 0.75; }
+.unavailable-history { display: flex; align-items: flex-start; gap: 0.7rem; max-width: 610px; margin: 0.8rem 0.5rem; padding: 0.8rem 0.9rem; border: 1px solid var(--line-soft); border-left: 3px solid var(--accent); border-radius: 5px; color: var(--text-muted); background: var(--bg-sidebar); }
+.unavailable-history-icon { display: grid; place-items: center; flex: 0 0 26px; width: 26px; height: 26px; border-radius: 50%; color: #c1c6ff; background: rgba(88, 101, 242, 0.2); font-size: 1.1rem; }
+.unavailable-history-title { display: block; color: var(--text); font-size: 0.78rem; }
+.unavailable-history p { margin: 0.3rem 0 0; font-size: 0.71rem; line-height: 1.45; }
 .markdown-body { color: #dcddde; font-size: 0.9rem; line-height: 1.5; overflow-wrap: anywhere; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }

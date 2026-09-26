@@ -10,6 +10,7 @@ import {
   type User,
 } from "./api";
 import { CryptoClient, type ReplyReference } from "./crypto";
+import { roomKeyUnavailable } from "./decryption";
 import { appendSafeEmbed, extractEmbeds, type SafeEmbed } from "./embeds";
 import { appendMarkdown } from "./markdown";
 import { confirmLocalUnlock, lockLocalSession, resolveLocalPassphrase } from "./unlock-vault";
@@ -66,6 +67,7 @@ const reactionOptions: ReactionOption[] = [
 let editTarget: EditTarget | undefined;
 let contextMessage: ContextMessage | undefined;
 const messageContextTargets = new Map<string, ContextMessage>();
+const unavailableMessageNotices = new Map<string, HTMLElement>();
 const messageReactions = new Map<string, Map<string, Set<string>>>();
 const reactionEvents = new Map<string, { targetId: string; key: string; senderKey: string; action: "add" | "remove" }>();
 const pinnedMessageIds = new Set<string>();
@@ -1515,10 +1517,11 @@ function applyMessageSearch() {
     if (match) matches += 1;
   }
   for (const divider of messagesPanel.querySelectorAll<HTMLElement>(".date-divider")) divider.hidden = Boolean(query);
+  for (const notice of messagesPanel.querySelectorAll<HTMLElement>(".unavailable-history")) notice.hidden = Boolean(query);
 
   const existing = messagesPanel.querySelector(".message-search-empty");
   existing?.remove();
-  if (query && matches === 0 && messagesPanel.querySelector(".message")) {
+  if (query && matches === 0 && messagesPanel.querySelector(".message, .unavailable-history")) {
     const empty = document.createElement("p");
     empty.className = "message-search-empty muted";
     empty.textContent = "No messages match your search.";
@@ -1555,6 +1558,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   editedMessageBodies.clear();
   closeMessageContextMenu();
   messageContextTargets.clear();
+  unavailableMessageNotices.clear();
   clearEditTarget(false);
   clearUnread();
   clearConversationUnread(conversationId);
@@ -1697,13 +1701,21 @@ function messageTargetFromHash() {
 
 async function scrollToMessage(messageId: string) {
   let article = findMessageArticle(messageId);
-  if (!article && nextAfter) {
+  let unavailable = unavailableMessageNotices.get(messageId);
+  if (!article && !unavailable && nextAfter) {
     await refreshMessages({ forceScrollToBottom: true }).catch(() => undefined);
     article = findMessageArticle(messageId);
+    unavailable = unavailableMessageNotices.get(messageId);
   }
-  for (let attempt = 0; !article && nextBefore && attempt < MAX_CATCH_UP_PAGES; attempt += 1) {
+  for (let attempt = 0; !article && !unavailable && nextBefore && attempt < MAX_CATCH_UP_PAGES; attempt += 1) {
     await loadOlderMessages();
     article = findMessageArticle(messageId);
+    unavailable = unavailableMessageNotices.get(messageId);
+  }
+  if (unavailable) {
+    unavailable.scrollIntoView({ behavior: "smooth", block: "center" });
+    setStatus("That message needs room keys from the original browser.");
+    return;
   }
   if (!article) {
     setStatus("The replied-to message is not loaded in this view.", true);
@@ -1813,6 +1825,32 @@ function appendDeletedMessage(messageContent: HTMLElement) {
   deleted.className = "message-deleted muted";
   deleted.textContent = "Message deleted";
   messageContent.append(deleted);
+}
+
+function appendUnavailableMessage(messageId: string) {
+  let notice: HTMLElement | null = messagesPanel.lastElementChild instanceof HTMLElement ? messagesPanel.lastElementChild : null;
+  if (!notice || !notice.classList.contains("unavailable-history")) {
+    notice = document.createElement("section");
+    notice.className = "unavailable-history";
+    notice.setAttribute("role", "note");
+    const icon = document.createElement("span");
+    icon.className = "unavailable-history-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "⌑";
+    const copy = document.createElement("div");
+    const heading = document.createElement("strong");
+    heading.className = "unavailable-history-title";
+    const explanation = document.createElement("p");
+    explanation.textContent = "This browser doesn't have their room keys. Your local passphrase only unlocks keys already on this device; use the original browser or a key backup to read them.";
+    copy.append(heading, explanation);
+    notice.append(icon, copy);
+    messagesPanel.append(notice);
+  }
+  const count = Number(notice.dataset.count ?? "0") + 1;
+  notice.dataset.count = String(count);
+  notice.querySelector<HTMLElement>(".unavailable-history-title")!.textContent =
+    `${count} encrypted message${count === 1 ? "" : "s"} unavailable on this device`;
+  unavailableMessageNotices.set(messageId, notice);
 }
 
 function renderMessage(
@@ -2024,6 +2062,7 @@ async function renderMessageHistory(options: { scrollAnchor?: ScrollAnchor; scro
   const activeCryptoClient = cryptoClient;
   if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
   messageContextTargets.clear();
+  unavailableMessageNotices.clear();
   messageReactions.clear();
   reactionEvents.clear();
   pinnedMessageIds.clear();
@@ -2047,6 +2086,10 @@ async function renderMessageHistory(options: { scrollAnchor?: ScrollAnchor; scro
     try {
       decrypted = await activeCryptoClient.decryptMessage(conversationId, message);
     } catch (caught) {
+      if (roomKeyUnavailable(caught)) {
+        appendUnavailableMessage(message.id);
+        continue;
+      }
       error = readableError(caught);
     }
     const created = new Date(message.createdAt);
@@ -2092,6 +2135,10 @@ async function appendNewMessages(messages: MessageEnvelope[], conversationId: st
     try {
       decrypted = await activeCryptoClient.decryptMessage(conversationId, message);
     } catch (caught) {
+      if (roomKeyUnavailable(caught)) {
+        appendUnavailableMessage(message.id);
+        continue;
+      }
       error = readableError(caught);
     }
     const created = new Date(message.createdAt);
