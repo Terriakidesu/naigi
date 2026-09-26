@@ -16,8 +16,16 @@ import {
   TrustRequirement,
   UserId,
 } from "@matrix-org/matrix-sdk-crypto-wasm";
-import type { ApiClient, ConversationMember, MessageEnvelope } from "./api";
-import { compressPhoto } from "./media";
+import { ApiError, type ApiClient, type ConversationMember, type MessageEnvelope, type UploadOptions } from "./api";
+import { prepareMedia } from "./media";
+import {
+  enqueuePendingMessage,
+  listPendingMessages,
+  removePendingMessage,
+  updatePendingMessage,
+  type PendingMessage,
+  type PendingMessagePayload,
+} from "./outbox";
 
 type OutgoingRequest = {
   type: RequestType;
@@ -130,6 +138,15 @@ export type ReplyReference = {
   sender: string;
   body: string;
 };
+
+export type SendContentResult = {
+  delivery: "sent" | "queued";
+  pending?: PendingMessage;
+};
+
+function canRetryMessage(error: unknown) {
+  return !(error instanceof ApiError) || error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+}
 
 export class CryptoClient {
   private readonly api: ApiClient;
@@ -353,21 +370,80 @@ export class CryptoClient {
     return jsonObject(decrypted.content.body);
   }
 
-  async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>) {
+  async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>): Promise<SendContentResult> {
     const ciphertext = await this.encryptContent(conversationId, members, content);
-    return await this.api.sendMessage(conversationId, {
+    const payload: PendingMessagePayload = {
       senderDeviceId: this.deviceId,
       clientMessageId: randomUuid(),
       protocol: "matrix-v1",
       ciphertext,
-    });
+    };
+    try {
+      await this.api.sendMessage(conversationId, payload);
+      return { delivery: "sent" };
+    } catch (error) {
+      if (!canRetryMessage(error)) throw error;
+      try {
+        const pending = await enqueuePendingMessage(conversationId, payload);
+        return { delivery: "queued", pending };
+      } catch {
+        throw error;
+      }
+    }
   }
 
-  async sendText(conversationId: string, members: ConversationMember[], body: string, embeds: unknown[], replyTo?: ReplyReference) {
+  async flushPendingMessages() {
+    const records = await listPendingMessages();
+    let sent = 0;
+    let pending = 0;
+    let failed = 0;
+    for (const record of records) {
+      if (record.status === "failed") {
+        failed += 1;
+        continue;
+      }
+      try {
+        await this.api.sendMessage(record.conversationId, {
+          senderDeviceId: record.senderDeviceId,
+          clientMessageId: record.clientMessageId,
+          protocol: record.protocol,
+          ciphertext: record.ciphertext,
+          protocolMetadata: record.protocolMetadata,
+        });
+        await removePendingMessage(record.id);
+        sent += 1;
+      } catch (error) {
+        record.attempts += 1;
+        record.lastError = error instanceof Error ? error.message : "send_failed";
+        if (!canRetryMessage(error)) {
+          record.status = "failed";
+          failed += 1;
+        } else {
+          pending += 1;
+        }
+        await updatePendingMessage(record);
+      }
+    }
+    return { sent, pending, failed };
+  }
+
+  async retryFailedMessages() {
+    const records = await listPendingMessages();
+    for (const record of records) {
+      if (record.status !== "failed") continue;
+      record.status = "pending";
+      record.lastError = undefined;
+      await updatePendingMessage(record);
+    }
+    return this.flushPendingMessages();
+  }
+
+  async sendText(conversationId: string, members: ConversationMember[], body: string, embeds: unknown[], replyTo?: ReplyReference, mentions: string[] = []) {
     return this.sendContent(conversationId, members, {
       msgtype: "m.text",
       body,
       embeds,
+      ...(mentions.length > 0 ? { mentions: [...new Set(mentions)].slice(0, 50) } : {}),
       ...(replyTo ? {
         replyTo: {
           messageId: replyTo.messageId,
@@ -378,8 +454,15 @@ export class CryptoClient {
     });
   }
 
-  async sendPhoto(conversationId: string, members: ConversationMember[], file: File) {
-    const compressed = await compressPhoto(file);
+  async sendRedaction(conversationId: string, members: ConversationMember[], messageId: string) {
+    return this.sendContent(conversationId, members, {
+      msgtype: "m.redaction",
+      redacts: messageId,
+    });
+  }
+
+  async sendMedia(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions = {}) {
+    const compressed = await prepareMedia(file);
     const encrypted = Attachment.encrypt(new Uint8Array(await compressed.blob.arrayBuffer()));
     const encryptedBytes = encrypted.encryptedData;
     const mediaEncryptionInfo = encrypted.mediaEncryptionInfo;
@@ -388,30 +471,39 @@ export class CryptoClient {
       throw new Error("missing_media_encryption_info");
     }
 
-    const attachment = await this.api.createAttachment(
-      conversationId,
-      encryptedBytes.byteLength,
-      compressed.extension,
-      compressed.mimeType,
-    );
-    await this.api.putBytes(attachment.attachment.uploadPath, encryptedBytes);
-    encrypted.free();
+    try {
+      const attachment = await this.api.createAttachment(
+        conversationId,
+        encryptedBytes.byteLength,
+        compressed.extension,
+        compressed.mimeType,
+      );
+      await this.api.putBytes(attachment.attachment.uploadPath, encryptedBytes, options);
+      const mediaFile = {
+        ...jsonObject(mediaEncryptionInfo),
+        url: attachment.attachment.uploadPath,
+      };
+      return this.sendContent(conversationId, members, {
+        msgtype: compressed.mimeType.startsWith("video/")
+          ? "m.video"
+          : compressed.mimeType.startsWith("image/") ? "m.image" : "m.file",
+        body: "",
+        filename: compressed.name.slice(0, 255),
+        info: {
+          mimetype: compressed.mimeType,
+          size: compressed.blob.size,
+          w: compressed.width || undefined,
+          h: compressed.height || undefined,
+        },
+        file: mediaFile,
+      });
+    } finally {
+      encrypted.free();
+    }
+  }
 
-    const mediaFile = {
-      ...jsonObject(mediaEncryptionInfo),
-      url: attachment.attachment.uploadPath,
-    };
-    return this.sendContent(conversationId, members, {
-      msgtype: "m.image",
-      body: compressed.name,
-      info: {
-        mimetype: compressed.mimeType,
-        size: compressed.blob.size,
-        w: compressed.width || undefined,
-        h: compressed.height || undefined,
-      },
-      file: mediaFile,
-    });
+  async sendPhoto(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions = {}) {
+    return this.sendMedia(conversationId, members, file, options);
   }
 
   async decryptMessage(conversationId: string, message: MessageEnvelope): Promise<DecryptedMessage> {
@@ -431,14 +523,14 @@ export class CryptoClient {
     }
   }
 
-  async decryptPhoto(content: Record<string, unknown>) {
+  async decryptMedia(content: Record<string, unknown>, options: { signal?: AbortSignal; onProgress?: (loadedBytes: number, totalBytes: number) => void } = {}) {
     const file = content.file;
     if (!file || typeof file !== "object" || Array.isArray(file)) throw new Error("invalid_encrypted_photo");
     const fileObject = file as Record<string, unknown>;
     if (typeof fileObject.url !== "string") throw new Error("invalid_encrypted_photo_url");
     const mediaInfo = { ...fileObject };
     delete mediaInfo.url;
-    const encryptedBytes = new Uint8Array(await this.api.downloadAttachment(fileObject.url));
+    const encryptedBytes = new Uint8Array(await this.api.downloadAttachment(fileObject.url, options));
     const encrypted = new EncryptedAttachment(encryptedBytes, JSON.stringify(mediaInfo));
     try {
       const clearBytes = Attachment.decrypt(encrypted);
@@ -452,6 +544,10 @@ export class CryptoClient {
     } finally {
       encrypted.free();
     }
+  }
+
+  async decryptPhoto(content: Record<string, unknown>, options: { signal?: AbortSignal; onProgress?: (loadedBytes: number, totalBytes: number) => void } = {}) {
+    return this.decryptMedia(content, options);
   }
 
   close() {

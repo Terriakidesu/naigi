@@ -5,12 +5,17 @@ const mimeToExtensions: Record<string, string[]> = {
   "image/jpeg": ["jpg", "jpeg"],
   "image/png": ["png"],
   "image/webp": ["webp"],
+  "video/mp4": ["mp4"],
+  "video/webm": ["webm"],
+  "video/ogg": ["ogv", "ogg"],
+  "video/quicktime": ["mov"],
 };
 
 function extensionFor(file: File) {
   const fromName = file.name.toLowerCase().match(/\.([a-z0-9]{1,12})$/)?.[1];
-  if (fromName && mimeToExtensions[file.type]?.includes(fromName)) return fromName;
-  return mimeToExtensions[file.type]?.[0] ?? null;
+  const mapped = mimeToExtensions[file.type.toLowerCase()];
+  if (fromName && (!mapped || mapped.includes(fromName))) return fromName;
+  return mapped?.[0] ?? "bin";
 }
 
 function canvasBlob(canvas: HTMLCanvasElement, mimeType: string, quality: number) {
@@ -25,6 +30,20 @@ export type CompressedPhoto = {
   height: number;
   name: string;
 };
+
+export type PreparedMedia = CompressedPhoto;
+
+export async function prepareMedia(file: File): Promise<PreparedMedia> {
+  const mimeType = file.type.toLowerCase() || "application/octet-stream";
+  if (mimeType.startsWith("video/")) {
+    const extension = extensionFor(file);
+    return { blob: file, extension, mimeType, width: 0, height: 0, name: file.name };
+  }
+  if (!mimeToExtensions[mimeType]) {
+    return { blob: file, extension: extensionFor(file), mimeType, width: 0, height: 0, name: file.name };
+  }
+  return compressPhoto(file);
+}
 
 /**
  * Resize and recompress a browser-supported still image before it is encrypted.

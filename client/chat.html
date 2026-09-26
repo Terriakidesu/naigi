@@ -30,13 +30,14 @@
               <a id="server-settings-button" class="icon-button" href="/server-settings" title="Server settings" aria-label="Server settings" hidden>☷</a>
               <a class="icon-button" href="/settings" title="Settings" aria-label="Settings">⚙</a>
             </div>
-          </div>
-          <label class="sidebar-search" for="conversation-search"><span aria-hidden="true">⌕</span><input id="conversation-search" type="search" aria-label="Find a conversation" placeholder="Find a conversation" autocomplete="off"><kbd>⌘ K</kbd></label>
+           </div>
+           <label class="mobile-server-switcher" for="mobile-server-select"><span class="sr-only">Workspace</span><select id="mobile-server-select" aria-label="Switch workspace"></select></label>
+           <label class="sidebar-search" for="conversation-search"><span aria-hidden="true">⌕</span><input id="conversation-search" type="search" aria-label="Find a conversation" placeholder="Find a conversation" autocomplete="off"><kbd>⌘ K</kbd></label>
           <div id="channel-section-heading" class="section-heading" hidden><span>TEXT CHANNELS</span><span class="section-count">encrypted</span></div>
           <div id="channel-list" class="channel-list" hidden></div>
-          <div class="section-heading"><span>DIRECT MESSAGES</span><span class="section-count">private</span></div>
-          <div id="conversation-list" class="conversation-list"></div>
-          <a class="create-button secondary" href="/new"><span aria-hidden="true">＋</span> Create conversation</a>
+           <div id="direct-messages-heading" class="section-heading"><span>DIRECT MESSAGES</span><span class="section-count">private</span></div>
+           <div id="conversation-list" class="conversation-list"></div>
+           <a id="create-conversation-button" class="create-button secondary" href="/new"><span aria-hidden="true">＋</span> Create conversation</a>
            <div class="sidebar-user">
             <div class="user-avatar" aria-hidden="true">✦</div>
             <div class="user-copy"><strong id="user-label">Loading…</strong><span>online · keys protected</span></div>
@@ -78,16 +79,35 @@
           </div>
           <form id="composer" class="composer">
             <div id="reply-preview" class="reply-preview" hidden><span id="reply-preview-text"></span><button id="cancel-reply" class="icon-button" type="button" title="Cancel reply" aria-label="Cancel reply">×</button></div>
+            <div id="mention-suggestions" class="mention-suggestions" hidden></div>
             <div class="composer-box">
-              <label class="file-button" title="Attach encrypted photo" aria-label="Attach encrypted photo">＋<input id="photo-input" type="file" accept="image/avif,image/gif,image/heic,image/jpeg,image/png,image/webp"></label>
+              <label class="file-button" title="Attach encrypted file, image, or video" aria-label="Attach encrypted file, image, or video">＋<input id="photo-input" type="file" accept="*/*"></label>
               <textarea id="message-input" rows="1" maxlength="200000" placeholder="Message this conversation"></textarea>
               <button id="send-button" class="send-button" type="submit" title="Send encrypted message" aria-label="Send encrypted message">➤</button>
             </div>
-            <div id="attachment-preview" class="attachment-preview" hidden><span id="attachment-label"></span><button id="clear-attachment" class="icon-button" type="button" title="Remove attachment" aria-label="Remove attachment">×</button></div>
+            <div id="attachment-preview" class="attachment-preview" hidden><span id="attachment-label"></span><progress id="upload-progress" max="100" value="0" hidden aria-label="Upload progress"></progress><button id="clear-attachment" class="icon-button" type="button" title="Remove attachment" aria-label="Remove attachment">×</button></div>
             <div class="composer-actions"><span class="desktop-composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift + Enter</kbd> for a new line</span><span class="mobile-composer-hint">Enter sends · Shift + Enter for a new line</span><span class="composer-security"><span class="status-dot"></span>Encrypted</span></div>
           </form>
         </main>
       </section>
+    </div>
+    <div id="media-viewer" class="media-viewer" hidden role="dialog" aria-modal="true" aria-labelledby="media-viewer-title">
+      <div class="media-viewer-toolbar">
+        <strong id="media-viewer-title">Media viewer</strong>
+        <label class="media-zoom-control" for="media-zoom">Zoom <input id="media-zoom" type="range" min="1" max="3" step="0.1" value="1" aria-label="Zoom media"></label>
+        <button id="media-viewer-close" class="icon-button" type="button" title="Close media viewer" aria-label="Close media viewer">×</button>
+      </div>
+      <div id="media-viewer-stage" class="media-viewer-stage"></div>
+    </div>
+    <div id="profile-modal" class="profile-modal" hidden role="dialog" aria-modal="true" aria-labelledby="profile-modal-name">
+      <div class="profile-modal-card">
+        <button id="profile-modal-close" class="icon-button profile-modal-close" type="button" title="Close profile" aria-label="Close profile">×</button>
+        <div id="profile-modal-avatar" class="profile-modal-avatar" aria-hidden="true">?</div>
+        <h2 id="profile-modal-name">Profile</h2>
+        <p id="profile-modal-username" class="muted"></p>
+        <p id="profile-modal-created" class="muted small"></p>
+        <a id="profile-modal-edit" class="text-link" href="/settings" hidden>Edit your profile</a>
+      </div>
     </div>
     <script type="module" src="/main.js"></script>
   </body>

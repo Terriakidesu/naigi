@@ -68,29 +68,43 @@ export function appendSafeEmbed(parent: HTMLElement, embed: SafeEmbed) {
   card.className = "embed-card";
 
   if (embed.kind === "youtube") {
-    const frame = document.createElement("iframe");
-    frame.src = `${embed.embedUrl}?rel=0&modestbranding=1&playsinline=1`;
-    frame.title = "YouTube video preview";
-    frame.loading = "lazy";
-    frame.referrerPolicy = "strict-origin-when-cross-origin";
-    frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation");
-    frame.setAttribute("allow", "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture");
-    card.append(frame);
+    const load = document.createElement("button");
+    load.className = "embed-load-button";
+    load.type = "button";
+    load.textContent = "Load YouTube preview";
+    load.addEventListener("click", () => {
+      const frame = document.createElement("iframe");
+      frame.src = `${embed.embedUrl}?rel=0&modestbranding=1&playsinline=1`;
+      frame.title = "YouTube video preview";
+      frame.loading = "lazy";
+      frame.referrerPolicy = "strict-origin-when-cross-origin";
+      frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation");
+      frame.setAttribute("allow", "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture");
+      load.replaceWith(frame);
+    });
+    card.append(load);
   } else {
-    const tweet = document.createElement("blockquote");
-    tweet.className = "twitter-tweet";
-    tweet.dataset.dnt = "true";
-    tweet.dataset.theme = "dark";
-    tweet.dataset.conversation = "none";
-    tweet.dataset.chrome = "noheader nofooter noborders transparent";
-    const link = document.createElement("a");
-    link.href = embed.url;
-    link.target = "_blank";
-    link.rel = "noreferrer noopener";
-    link.textContent = "Open X post";
-    tweet.append(link);
-    card.append(tweet);
-    void loadXWidgets().then((widgets) => widgets.widgets.load(card)).catch(() => undefined);
+    const load = document.createElement("button");
+    load.className = "embed-load-button";
+    load.type = "button";
+    load.textContent = "Load X preview";
+    load.addEventListener("click", () => {
+      const tweet = document.createElement("blockquote");
+      tweet.className = "twitter-tweet";
+      tweet.dataset.dnt = "true";
+      tweet.dataset.theme = "dark";
+      tweet.dataset.conversation = "none";
+      tweet.dataset.chrome = "noheader nofooter noborders transparent";
+      const link = document.createElement("a");
+      link.href = embed.url;
+      link.target = "_blank";
+      link.rel = "noreferrer noopener";
+      link.textContent = "Open X post";
+      tweet.append(link);
+      load.replaceWith(tweet);
+      void loadXWidgets().then((widgets) => widgets.widgets.load(tweet)).catch(() => undefined);
+    });
+    card.append(load);
   }
 
   parent.append(card);

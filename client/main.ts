@@ -42,6 +42,11 @@ let messageSearchQuery = "";
 const drafts = new Map<string, string>();
 let replyTarget: ReplyReference | undefined;
 let unreadCount = 0;
+let uploadAbortController: AbortController | undefined;
+type UnreadMarker = { count: number; lastSequence: string };
+const unreadMarkers = new Map<string, UnreadMarker>();
+const redactedMessageIds = new Set<string>();
+const redactionAuthors = new Map<string, string | null>();
 const MESSAGE_PAGE_SIZE = 50;
 const MAX_RENDERED_MESSAGES = 300;
 const MAX_CATCH_UP_PAGES = 100;
@@ -59,6 +64,7 @@ const statusLine = byId<HTMLElement>("status-line");
 const userLabel = byId<HTMLElement>("user-label");
 const conversationList = byId<HTMLElement>("conversation-list");
 const conversationSearch = byId<HTMLInputElement>("conversation-search");
+const mobileServerSelect = byId<HTMLSelectElement>("mobile-server-select");
 const conversationTitle = byId<HTMLElement>("conversation-title");
 const conversationSubtitle = byId<HTMLElement>("conversation-subtitle");
 const messagesPanel = byId<HTMLElement>("messages");
@@ -66,6 +72,8 @@ const memberList = byId<HTMLElement>("member-list");
 const serverList = byId<HTMLElement>("server-list");
 const channelSectionHeading = byId<HTMLElement>("channel-section-heading");
 const channelList = byId<HTMLElement>("channel-list");
+const directMessagesHeading = byId<HTMLElement>("direct-messages-heading");
+const createConversationButton = byId<HTMLAnchorElement>("create-conversation-button");
 const homeRailButton = byId<HTMLButtonElement>("home-rail-button");
 const createServerButton = byId<HTMLButtonElement>("create-server-button");
 const joinServerButton = byId<HTMLButtonElement>("join-server-button");
@@ -80,10 +88,12 @@ const photoInput = byId<HTMLInputElement>("photo-input");
 const sendButton = byId<HTMLButtonElement>("send-button");
 const attachmentPreview = byId<HTMLElement>("attachment-preview");
 const attachmentLabel = byId<HTMLElement>("attachment-label");
+const uploadProgress = byId<HTMLProgressElement>("upload-progress");
 const clearAttachment = byId<HTMLButtonElement>("clear-attachment");
 const replyPreview = byId<HTMLElement>("reply-preview");
 const replyPreviewText = byId<HTMLElement>("reply-preview-text");
 const cancelReply = byId<HTMLButtonElement>("cancel-reply");
+const mentionSuggestions = byId<HTMLElement>("mention-suggestions");
 const lockButton = byId<HTMLButtonElement>("lock-button");
 const mobileSidebarToggle = byId<HTMLButtonElement>("mobile-sidebar-toggle");
 const mobileSidebarBackdrop = byId<HTMLButtonElement>("mobile-sidebar-backdrop");
@@ -96,11 +106,80 @@ const detailsClose = byId<HTMLButtonElement>("details-close");
 const channelIcon = byId<HTMLElement>("channel-icon");
 const loadOlderButton = byId<HTMLButtonElement>("load-older-button");
 const jumpLatestButton = byId<HTMLButtonElement>("jump-latest-button");
+const mediaViewer = byId<HTMLElement>("media-viewer");
+const mediaViewerTitle = byId<HTMLElement>("media-viewer-title");
+const mediaViewerStage = byId<HTMLElement>("media-viewer-stage");
+const mediaViewerZoom = byId<HTMLInputElement>("media-zoom");
+const mediaViewerClose = byId<HTMLButtonElement>("media-viewer-close");
+let mediaViewerUrl: string | undefined;
+let mediaViewerElement: HTMLElement | undefined;
+const profileModal = byId<HTMLElement>("profile-modal");
+const profileModalClose = byId<HTMLButtonElement>("profile-modal-close");
+const profileModalAvatar = byId<HTMLElement>("profile-modal-avatar");
+const profileModalName = byId<HTMLElement>("profile-modal-name");
+const profileModalUsername = byId<HTMLElement>("profile-modal-username");
+const profileModalCreated = byId<HTMLElement>("profile-modal-created");
+const profileModalEdit = byId<HTMLAnchorElement>("profile-modal-edit");
 
 function setStatus(message: string, error = false) {
   statusLine.textContent = message;
   statusLine.classList.toggle("error", error);
 }
+
+function closeMediaViewer() {
+  if (mediaViewerUrl) URL.revokeObjectURL(mediaViewerUrl);
+  mediaViewerUrl = undefined;
+  mediaViewerElement = undefined;
+  mediaViewerStage.replaceChildren();
+  mediaViewerZoom.value = "1";
+  mediaViewer.hidden = true;
+}
+
+function openMediaViewer(blob: Blob, filename: string, video: boolean) {
+  closeMediaViewer();
+  mediaViewerUrl = URL.createObjectURL(blob);
+  const element = document.createElement(video ? "video" : "img");
+  element.className = video ? "media-viewer-video" : "media-viewer-image";
+  element.src = mediaViewerUrl;
+  if (video) {
+    const player = element as HTMLVideoElement;
+    player.controls = true;
+    player.preload = "metadata";
+  } else {
+    (element as HTMLImageElement).alt = filename || "Encrypted media";
+  }
+  mediaViewerElement = element;
+  mediaViewerTitle.textContent = filename || (video ? "Video viewer" : "Image viewer");
+  mediaViewerStage.append(element);
+  mediaViewer.hidden = false;
+  mediaViewerZoom.value = "1";
+  mediaViewerClose.focus();
+}
+
+async function openUserProfile(userId: string) {
+  profileModal.hidden = false;
+  profileModalName.textContent = "Loading profile…";
+  profileModalUsername.textContent = "";
+  profileModalCreated.textContent = "";
+  profileModalEdit.hidden = true;
+  try {
+    const result = await api.user(userId);
+    const user = result.user;
+    profileModalAvatar.textContent = user.displayName.slice(0, 1).toUpperCase();
+    setAvatarStyle(profileModalAvatar, user.id);
+    profileModalName.textContent = user.displayName;
+    profileModalUsername.textContent = `@${user.username}`;
+    profileModalCreated.textContent = `Joined ${new Date(user.createdAt).toLocaleDateString()}`;
+    profileModalEdit.hidden = user.id !== currentUser?.id;
+  } catch (error) {
+    profileModalName.textContent = "Profile unavailable";
+    profileModalUsername.textContent = readableError(error);
+  }
+}
+
+mediaViewerZoom.addEventListener("input", () => {
+  if (mediaViewerElement) mediaViewerElement.style.transform = `scale(${mediaViewerZoom.value})`;
+});
 
 function clearReplyTarget() {
   replyTarget = undefined;
@@ -116,6 +195,68 @@ function setReplyTarget(target: ReplyReference) {
   messageInput.focus();
 }
 
+function mentionedUserIds(body: string) {
+  const ids = new Set<string>();
+  for (const match of body.matchAll(/(^|[^A-Za-z0-9_.-])@([A-Za-z0-9_.-]+)/g)) {
+    const username = match[2].toLowerCase();
+    const member = selectedMembers.find((candidate) => candidate.username.toLowerCase() === username);
+    if (member) ids.add(member.userId);
+  }
+  return [...ids];
+}
+
+function mentionToken() {
+  const cursor = messageInput.selectionStart ?? messageInput.value.length;
+  const before = messageInput.value.slice(0, cursor);
+  const match = before.match(/(^|\s)@([A-Za-z0-9_.-]*)$/);
+  if (!match) return null;
+  return {
+    query: match[2].toLowerCase(),
+    start: before.length - match[0].length + match[1].length,
+    end: cursor,
+  };
+}
+
+function hideMentionSuggestions() {
+  mentionSuggestions.hidden = true;
+  mentionSuggestions.replaceChildren();
+}
+
+function renderMentionSuggestions() {
+  const token = mentionToken();
+  if (!token) {
+    hideMentionSuggestions();
+    return;
+  }
+  const candidates = selectedMembers
+    .filter((member) => !token.query || member.username.toLowerCase().startsWith(token.query))
+    .slice(0, 8);
+  mentionSuggestions.replaceChildren();
+  if (candidates.length === 0) {
+    hideMentionSuggestions();
+    return;
+  }
+  for (const member of candidates) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "mention-suggestion";
+    option.textContent = `@${member.username} · ${member.displayName || member.username}`;
+    option.addEventListener("mousedown", (event) => event.preventDefault());
+    option.addEventListener("click", () => {
+      const replacement = `@${member.username} `;
+      messageInput.value = `${messageInput.value.slice(0, token.start)}${replacement}${messageInput.value.slice(token.end)}`;
+      const nextCursor = token.start + replacement.length;
+      messageInput.setSelectionRange(nextCursor, nextCursor);
+      hideMentionSuggestions();
+      rememberDraft();
+      resizeMessageInput();
+      messageInput.focus();
+    });
+    mentionSuggestions.append(option);
+  }
+  mentionSuggestions.hidden = false;
+}
+
 function renderUnreadButton() {
   const distanceFromBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight;
   jumpLatestButton.textContent = unreadCount > 0
@@ -127,6 +268,54 @@ function renderUnreadButton() {
 function clearUnread() {
   unreadCount = 0;
   renderUnreadButton();
+}
+
+function unreadStorageKey() {
+  return currentUser ? `priv-chat.unread.${currentUser.id}` : "priv-chat.unread";
+}
+
+function loadUnreadMarkers() {
+  unreadMarkers.clear();
+  try {
+    const stored = JSON.parse(localStorage.getItem(unreadStorageKey()) ?? "{}") as Record<string, unknown>;
+    for (const [conversationId, value] of Object.entries(stored)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const marker = value as Record<string, unknown>;
+      if (typeof marker.count === "number" && Number.isInteger(marker.count) && marker.count > 0 && typeof marker.lastSequence === "string" && /^[0-9]+$/.test(marker.lastSequence)) {
+        unreadMarkers.set(conversationId, { count: marker.count, lastSequence: marker.lastSequence });
+      }
+    }
+  } catch {
+    // Local unread state is optional and never blocks chat startup.
+  }
+}
+
+function saveUnreadMarkers() {
+  try {
+    localStorage.setItem(unreadStorageKey(), JSON.stringify(Object.fromEntries(unreadMarkers)));
+  } catch {
+    // Local storage may be disabled or full.
+  }
+}
+
+function markConversationUnread(conversationId: string, serverSequence?: string) {
+  if (conversationId === selectedConversationId) return;
+  const existing = unreadMarkers.get(conversationId);
+  if (existing && serverSequence && BigInt(serverSequence) <= BigInt(existing.lastSequence)) return;
+  unreadMarkers.set(conversationId, {
+    count: (existing?.count ?? 0) + 1,
+    lastSequence: serverSequence ?? existing?.lastSequence ?? "0",
+  });
+  saveUnreadMarkers();
+  renderConversations();
+  renderChannels();
+}
+
+function clearConversationUnread(conversationId: string) {
+  if (!unreadMarkers.delete(conversationId)) return;
+  saveUnreadMarkers();
+  renderConversations();
+  renderChannels();
 }
 
 type ScrollAnchor = {
@@ -201,6 +390,7 @@ function restoreScrollAnchor(anchor: ScrollAnchor | undefined) {
 }
 
 function readableError(error: unknown) {
+  if (error instanceof Error && error.name === "AbortError") return "Upload canceled.";
   if (error instanceof ApiError) {
     if (error.code === "invalid_credentials") return "The username or password is incorrect.";
     if (error.code === "username_taken") return "That username is already in use.";
@@ -225,14 +415,27 @@ async function startCrypto() {
     window.location.assign(`/unlock?return=${encodeURIComponent(returnPath)}`);
     return;
   }
+  loadUnreadMarkers();
   cryptoClient?.close();
   cryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
   await cryptoClient.initialize();
+  const outbox = await cryptoClient.flushPendingMessages().catch(() => ({ sent: 0, pending: 0, failed: 0 }));
   userLabel.textContent = `${currentUser.displayName} (@${currentUser.username})`;
   await refreshServers();
   await refreshConversations();
   connectRealtime();
-  setStatus("Encrypted chat is ready.");
+  setStatus(outbox.sent > 0 ? `${outbox.sent} queued message${outbox.sent === 1 ? "" : "s"} delivered.` : "Encrypted chat is ready.");
+}
+
+async function flushOutbox() {
+  if (!cryptoClient) return;
+  const result = await cryptoClient.flushPendingMessages();
+  if (result.sent > 0) {
+    setStatus(`${result.sent} queued message${result.sent === 1 ? "" : "s"} delivered.`);
+    await refreshMessages();
+  } else if (result.failed > 0) {
+    setStatus(`${result.failed} queued message${result.failed === 1 ? "" : "s"} need attention.`, true);
+  }
 }
 
 function connectRealtime() {
@@ -242,13 +445,17 @@ function connectRealtime() {
   realtime = new WebSocket(url);
   realtime.addEventListener("open", () => {
     setStatus("Encrypted chat is connected.");
-    if (selectedConversationId) subscribeRealtime(selectedConversationId);
+    subscribeKnownConversations();
   });
   realtime.addEventListener("message", (event) => {
     try {
-      const payload = JSON.parse(event.data) as { type?: string; conversationId?: string };
-      if (payload.type === "message.created" && payload.conversationId === selectedConversationId) {
-        void refreshMessages().catch((error) => setStatus(readableError(error), true));
+      const payload = JSON.parse(event.data) as { type?: string; conversationId?: string; serverSequence?: string };
+      if (payload.type === "message.created" && payload.conversationId) {
+        if (payload.conversationId === selectedConversationId) {
+          void refreshMessages().catch((error) => setStatus(readableError(error), true));
+        } else {
+          markConversationUnread(payload.conversationId, payload.serverSequence);
+        }
       }
     } catch {
       // Ignore malformed realtime notifications; history remains authoritative.
@@ -267,6 +474,13 @@ function subscribeRealtime(conversationId: string) {
   if (realtime?.readyState === WebSocket.OPEN) {
     realtime.send(JSON.stringify({ type: "subscribe", conversationId }));
   }
+}
+
+function subscribeKnownConversations() {
+  const known = new Set(conversations.map((conversation) => conversation.id));
+  for (const channel of channels) known.add(channel.conversationId);
+  if (selectedConversationId) known.add(selectedConversationId);
+  for (const conversationId of known) subscribeRealtime(conversationId);
 }
 
 function avatarColor(seed: string) {
@@ -323,6 +537,19 @@ function renderServers() {
     serverList.append(button);
   }
 
+  mobileServerSelect.replaceChildren();
+  const homeOption = document.createElement("option");
+  homeOption.value = "";
+  homeOption.textContent = "Direct messages";
+  mobileServerSelect.append(homeOption);
+  for (const server of servers) {
+    const option = document.createElement("option");
+    option.value = server.id;
+    option.textContent = serverDisplayName(server);
+    mobileServerSelect.append(option);
+  }
+  mobileServerSelect.value = selectedServerId ?? "";
+
   homeRailButton.classList.toggle("rail-active", !selectedServerId);
   homeRailButton.setAttribute("aria-pressed", String(!selectedServerId));
   const activeServer = selectedServerId ? servers.find((server) => server.id === selectedServerId) : undefined;
@@ -374,6 +601,14 @@ function renderChannels() {
     name.className = "channel-item-name";
     name.textContent = channelDisplayName(channel);
     button.append(icon, name);
+    const unread = unreadMarkers.get(channel.conversationId)?.count ?? 0;
+    if (unread > 0) {
+      const badge = document.createElement("span");
+      badge.className = "unread-badge";
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      badge.setAttribute("aria-label", `${unread} unread message${unread === 1 ? "" : "s"}`);
+      button.append(badge);
+    }
     button.addEventListener("click", () => void selectChannel(channel.id));
     channelList.append(button);
   };
@@ -423,7 +658,14 @@ function renderConversationEmpty(message: string) {
 }
 
 function renderConversations() {
+  const visibleInWorkspace = !selectedServerId;
+  directMessagesHeading.hidden = !visibleInWorkspace;
+  createConversationButton.hidden = !visibleInWorkspace;
+  conversationList.hidden = !visibleInWorkspace;
+  conversationSearch.placeholder = visibleInWorkspace ? "Find a conversation" : "Find a channel";
+  conversationSearch.setAttribute("aria-label", visibleInWorkspace ? "Find a conversation" : "Find a channel");
   conversationList.replaceChildren();
+  if (!visibleInWorkspace) return;
   if (conversations.length === 0) {
     renderConversationEmpty("No conversations yet.");
     return;
@@ -465,6 +707,14 @@ function renderConversations() {
       : `${memberCount} members · encrypted`;
     copy.append(title, conversationStatus);
     button.append(icon, copy);
+    const unread = unreadMarkers.get(conversation.id)?.count ?? 0;
+    if (unread > 0) {
+      const badge = document.createElement("span");
+      badge.className = "unread-badge";
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      badge.setAttribute("aria-label", `${unread} unread message${unread === 1 ? "" : "s"}`);
+      button.append(badge);
+    }
     button.addEventListener("click", () => void openDirectMessage(conversation.id));
     conversationList.append(button);
   }
@@ -513,6 +763,7 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   categories = [];
   selectionToken += 1;
   renderServers();
+  renderConversations();
   renderChannels();
   renderMembers([]);
   updateComposerState();
@@ -528,6 +779,7 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
     if (token !== serverSelectionToken) return;
     channels = channelResult.channels;
     categories = categoryResult.categories;
+    subscribeKnownConversations();
     renderChannels();
     const requested = requestedChannelId && channels.find((channel) => channel.id === requestedChannelId);
     const channel = requested ?? channels[0];
@@ -562,6 +814,7 @@ async function openDirectMessage(conversationId: string) {
   selectedMembers = [];
   ++serverSelectionToken;
   renderServers();
+  renderConversations();
   renderChannels();
   await selectConversation(conversationId);
 }
@@ -575,6 +828,7 @@ async function showDirectMessages() {
   selectedMembers = [];
   ++serverSelectionToken;
   renderServers();
+  renderConversations();
   renderChannels();
   const requested = new URLSearchParams(window.location.search).get("conversation");
   const conversation = (requested && conversations.find((item) => item.id === requested)) ?? conversations[0];
@@ -592,6 +846,7 @@ async function showDirectMessages() {
 async function refreshConversations() {
   const result = await api.conversations();
   conversations = result.conversations;
+  subscribeKnownConversations();
   renderConversations();
   const selectedChannel = channels.some((channel) => channel.conversationId === selectedConversationId);
   if (selectedConversationId && !selectedChannel && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -623,9 +878,12 @@ function renderMembers(members: ConversationMember[]) {
     return;
   }
   for (const member of members) {
-    const row = document.createElement("div");
+    const row = document.createElement("button");
     const memberName = member.userId === currentUser?.id ? currentUser?.displayName ?? "You" : member.displayName || `@${member.username}`;
-    row.className = "member-row";
+    row.className = "member-row profile-trigger";
+    row.type = "button";
+    row.title = `View ${memberName}'s profile`;
+    row.addEventListener("click", () => void openUserProfile(member.userId));
     const avatar = document.createElement("span");
     avatar.className = "member-avatar";
     avatar.textContent = memberName.slice(0, 1).toUpperCase();
@@ -665,6 +923,7 @@ function updateComposerState() {
   messageInput.placeholder = enabled ? "Message this conversation" : "Select a conversation to start chatting";
   if (!enabled) {
     attachmentPreview.hidden = true;
+    uploadProgress.hidden = true;
     photoInput.value = "";
   }
 }
@@ -680,6 +939,11 @@ function senderLabel(message: MessageEnvelope, decrypted: { sender: string } | n
 
 function senderKey(message: MessageEnvelope, decrypted: { sender: string } | null) {
   return message.senderUserId ?? decrypted?.sender ?? "unknown";
+}
+
+function mentionUsernames(content: Record<string, unknown>) {
+  const values = Array.isArray(content.mentions) ? content.mentions.filter((value): value is string => typeof value === "string") : [];
+  return new Set(selectedMembers.filter((member) => values.includes(member.userId)).map((member) => member.username.toLowerCase()));
 }
 
 function dateKey(date: Date) {
@@ -703,6 +967,7 @@ function appendDateDivider(date: Date) {
   label.textContent = dateLabel(date);
   divider.append(label);
   messagesPanel.append(divider);
+  return divider;
 }
 
 function applyMessageSearch() {
@@ -743,7 +1008,10 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   nextBefore = null;
   nextAfter = null;
   latestObservedSequence = null;
+  redactedMessageIds.clear();
+  redactionAuthors.clear();
   clearUnread();
+  clearConversationUnread(conversationId);
   clearReplyTarget();
   messageInput.value = drafts.get(conversationId) ?? "";
   resizeMessageInput();
@@ -841,9 +1109,21 @@ function replyReferenceFromContent(content: Record<string, unknown>) {
   } satisfies ReplyReference;
 }
 
-function scrollToMessage(messageId: string) {
-  const article = [...messagesPanel.querySelectorAll<HTMLElement>(".message")]
+function findMessageArticle(messageId: string) {
+  return [...messagesPanel.querySelectorAll<HTMLElement>(".message")]
     .find((candidate) => candidate.dataset.messageId === messageId);
+}
+
+async function scrollToMessage(messageId: string) {
+  let article = findMessageArticle(messageId);
+  if (!article && nextAfter) {
+    await refreshMessages({ forceScrollToBottom: true }).catch(() => undefined);
+    article = findMessageArticle(messageId);
+  }
+  for (let attempt = 0; !article && nextBefore && attempt < MAX_CATCH_UP_PAGES; attempt += 1) {
+    await loadOlderMessages();
+    article = findMessageArticle(messageId);
+  }
   if (!article) {
     setStatus("The replied-to message is not loaded in this view.", true);
     return;
@@ -851,6 +1131,20 @@ function scrollToMessage(messageId: string) {
   article.scrollIntoView({ behavior: "smooth", block: "center" });
   article.classList.add("message-highlight");
   window.setTimeout(() => article.classList.remove("message-highlight"), 1_200);
+}
+
+function markMessageDeleted(messageId: string) {
+  const article = [...messagesPanel.querySelectorAll<HTMLElement>(".message")]
+    .find((candidate) => candidate.dataset.messageId === messageId);
+  const content = article?.querySelector<HTMLElement>(".message-content");
+  const header = content?.querySelector<HTMLElement>(".message-meta");
+  if (!article || !content || !header) return;
+  const deleted = document.createElement("p");
+  deleted.className = "message-deleted muted";
+  deleted.textContent = "Message deleted";
+  content.replaceChildren(header, deleted);
+  article.classList.add("message-deleted-row");
+  article.dataset.search = "message deleted";
 }
 
 function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sender: string, body: string) {
@@ -882,7 +1176,34 @@ function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sen
     });
     actions.append(copy);
   }
+  if (message.senderUserId === currentUser?.id) {
+    const remove = document.createElement("button");
+    remove.className = "message-action message-delete-action";
+    remove.type = "button";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", async () => {
+      if (!cryptoClient || !selectedConversationId || !window.confirm("Delete this message for everyone in this conversation?")) return;
+      remove.disabled = true;
+      try {
+        const result = await cryptoClient.sendRedaction(selectedConversationId, selectedMembers, message.id);
+        redactedMessageIds.add(message.id);
+        markMessageDeleted(message.id);
+        setStatus(result.delivery === "queued" ? "Deletion saved locally; it will retry when connected." : "Message deleted.");
+      } catch (error) {
+        remove.disabled = false;
+        setStatus(readableError(error), true);
+      }
+    });
+    actions.append(remove);
+  }
   parent.append(actions);
+}
+
+function appendDeletedMessage(messageContent: HTMLElement) {
+  const deleted = document.createElement("p");
+  deleted.className = "message-deleted muted";
+  deleted.textContent = "Message deleted";
+  messageContent.append(deleted);
 }
 
 function renderMessage(
@@ -890,7 +1211,7 @@ function renderMessage(
   decrypted: { sender: string; content: Record<string, unknown> } | null,
   error?: string,
   options: { grouped: boolean } = { grouped: false },
-) {
+): boolean {
   const article = document.createElement("article");
   article.className = "message";
   if (options.grouped) article.classList.add("message-compact");
@@ -909,8 +1230,11 @@ function renderMessage(
   messageContent.className = "message-content";
   const header = document.createElement("header");
   header.className = "message-meta";
-  const sender = document.createElement("strong");
+  const sender = document.createElement("button");
+  sender.className = "message-sender-link";
+  sender.type = "button";
   sender.textContent = senderIdentity;
+  if (message.senderUserId) sender.addEventListener("click", () => void openUserProfile(message.senderUserId as string));
   const time = document.createElement("time");
   const createdAt = new Date(message.createdAt);
   time.dateTime = createdAt.toISOString();
@@ -926,37 +1250,102 @@ function renderMessage(
     failed.textContent = error ? `Unable to decrypt (${error}).` : "Unable to decrypt this message.";
     messageContent.append(failed);
     messagesPanel.append(article);
-    return;
+    return true;
   }
 
   const content = decrypted.content;
+  if (content.msgtype === "m.redaction" && typeof content.redacts === "string") {
+    const target = loadedMessages.find((candidate) => candidate.id === content.redacts);
+    if (target?.senderUserId && message.senderUserId && target.senderUserId !== message.senderUserId) return false;
+    redactionAuthors.set(content.redacts, message.senderUserId);
+    redactedMessageIds.add(content.redacts);
+    markMessageDeleted(content.redacts);
+    return false;
+  }
+  const redactionAuthor = redactionAuthors.get(message.id);
+  if (redactionAuthor !== undefined && redactionAuthor && message.senderUserId && redactionAuthor !== message.senderUserId) {
+    redactedMessageIds.delete(message.id);
+    redactionAuthors.delete(message.id);
+  }
+  if (redactedMessageIds.has(message.id)) appendDeletedMessage(messageContent);
   const body = typeof content.body === "string" ? content.body : "";
-  if (content.msgtype === "m.text" || content.msgtype === "m.notice" || body) {
-    appendMarkdown(messageContent, body);
+  const mediaMessage = content.msgtype === "m.image" || content.msgtype === "m.video" || content.msgtype === "m.file";
+  const mentionNames = mentionUsernames(content);
+  const mentionedIds = Array.isArray(content.mentions) ? content.mentions : [];
+  if (currentUser && mentionedIds.includes(currentUser.id)) article.classList.add("message-mention");
+  if (!redactedMessageIds.has(message.id) && !mediaMessage && (content.msgtype === "m.text" || content.msgtype === "m.notice" || body)) {
+    appendMarkdown(messageContent, body, { mentionUsernames: mentionNames });
     for (const embed of extractEmbeds(body)) appendSafeEmbed(messageContent, embed);
   }
 
-  if (content.msgtype === "m.image") {
-    const photoButton = document.createElement("button");
-    photoButton.className = "encrypted-photo-button secondary";
-    photoButton.type = "button";
-    photoButton.textContent = `Load encrypted photo${body ? ` · ${body}` : ""}`;
-    photoButton.addEventListener("click", async () => {
-      photoButton.disabled = true;
+  if (!redactedMessageIds.has(message.id) && mediaMessage) {
+    const fileMessage = content.msgtype === "m.file";
+    const video = content.msgtype === "m.video";
+    const filename = typeof content.filename === "string" ? content.filename : "";
+    const mediaButton = document.createElement("button");
+    mediaButton.className = "encrypted-media-button secondary";
+    mediaButton.type = "button";
+    mediaButton.textContent = `Load encrypted ${fileMessage ? "file" : video ? "video" : "image"}`;
+    const mediaProgress = document.createElement("progress");
+    mediaProgress.className = "media-load-progress";
+    mediaProgress.max = 100;
+    mediaProgress.value = 0;
+    mediaProgress.hidden = true;
+    mediaButton.addEventListener("click", async () => {
+      const controller = new AbortController();
+      mediaButton.disabled = true;
+      mediaProgress.hidden = false;
+      mediaButton.textContent = `Loading encrypted ${fileMessage ? "file" : video ? "video" : "image"}…`;
       try {
-        const blob = await cryptoClient?.decryptPhoto(content);
+        const blob = await cryptoClient?.decryptMedia(content, {
+          signal: controller.signal,
+          onProgress: (loadedBytes, totalBytes) => {
+            mediaButton.textContent = totalBytes > 0
+              ? `Loading encrypted ${fileMessage ? "file" : video ? "video" : "image"} · ${Math.round((loadedBytes / totalBytes) * 100)}%`
+              : `Loading encrypted ${fileMessage ? "file" : video ? "video" : "image"}…`;
+            if (totalBytes > 0) mediaProgress.value = Math.round((loadedBytes / totalBytes) * 100);
+          },
+        });
         if (!blob) throw new Error("crypto_not_initialized");
-        const image = document.createElement("img");
-        image.className = "photo-preview";
-        image.alt = body || "Encrypted photo";
-        image.src = URL.createObjectURL(blob);
-        photoButton.replaceWith(image);
+        if (fileMessage) {
+          const download = document.createElement("a");
+          download.className = "media-file-download";
+          download.href = URL.createObjectURL(blob);
+          download.download = filename || "encrypted-file.bin";
+          download.textContent = `Download ${filename || "encrypted file"}`;
+          mediaProgress.remove();
+          mediaButton.replaceWith(download);
+          return;
+        }
+        const preview = document.createElement(video ? "video" : "img");
+        preview.className = `media-preview${video ? " video" : ""}`;
+        const previewUrl = URL.createObjectURL(blob);
+        preview.src = previewUrl;
+        if (video) {
+          const player = preview as HTMLVideoElement;
+          player.controls = true;
+          player.preload = "metadata";
+        } else {
+          (preview as HTMLImageElement).alt = "Encrypted image";
+        }
+        const mediaWrap = document.createElement("div");
+        mediaWrap.className = "media-preview-wrap";
+        const viewButton = document.createElement("button");
+        viewButton.className = "media-view-button secondary";
+        viewButton.type = "button";
+        viewButton.textContent = `Open ${video ? "video" : "image"} viewer`;
+        viewButton.addEventListener("click", () => openMediaViewer(blob, filename, video));
+        if (!video) preview.addEventListener("click", () => openMediaViewer(blob, filename, false));
+        mediaWrap.append(preview, viewButton);
+        mediaProgress.remove();
+        mediaButton.replaceWith(mediaWrap);
       } catch (loadError) {
-        photoButton.disabled = false;
-        photoButton.textContent = `Photo unavailable: ${readableError(loadError)}`;
+        mediaButton.disabled = false;
+        mediaProgress.hidden = true;
+        mediaButton.textContent = `${fileMessage ? "File" : video ? "Video" : "Image"} unavailable: ${readableError(loadError)}`;
       }
     });
-    messageContent.append(photoButton);
+    messageContent.append(mediaButton, mediaProgress);
   }
 
   const reply = replyReferenceFromContent(content);
@@ -966,12 +1355,13 @@ function renderMessage(
     replyContext.type = "button";
     replyContext.title = "Jump to replied message";
     replyContext.textContent = `↪ ${reply.sender}: ${(reply.body || "Encrypted message").replace(/\s+/g, " ").slice(0, 180)}`;
-    replyContext.addEventListener("click", () => scrollToMessage(reply.messageId));
+    replyContext.addEventListener("click", () => void scrollToMessage(reply.messageId));
     messageContent.insertBefore(replyContext, messageContent.children[1] ?? null);
   }
-  appendMessageActions(messageContent, message, senderIdentity, body);
+  if (!redactedMessageIds.has(message.id)) appendMessageActions(messageContent, message, senderIdentity, body);
 
   messagesPanel.append(article);
+  return true;
 }
 
 async function renderMessageHistory(options: { scrollAnchor?: ScrollAnchor; scrollToBottom?: boolean } = {}) {
@@ -1002,14 +1392,22 @@ async function renderMessageHistory(options: { scrollAnchor?: ScrollAnchor; scro
     const created = new Date(message.createdAt);
     const currentDay = dateKey(created);
     const sameDay = currentDay === previousDay;
-    if (currentDay !== previousDay) {
-      appendDateDivider(created);
+    const dayChanged = currentDay !== previousDay;
+    const previousDayBeforeMessage = previousDay;
+    let divider: HTMLElement | undefined;
+    if (dayChanged) {
+      divider = appendDateDivider(created);
       previousDay = currentDay;
     }
     const currentSender = senderKey(message, decrypted);
     const currentTimestamp = created.getTime();
     const grouped = sameDay && currentSender === previousSender && currentTimestamp - previousTimestamp <= 5 * 60 * 1000;
-    renderMessage(message, decrypted, error, { grouped });
+    const rendered = renderMessage(message, decrypted, error, { grouped });
+    if (!rendered) {
+      divider?.remove();
+      previousDay = previousDayBeforeMessage;
+      continue;
+    }
     previousSender = currentSender;
     previousTimestamp = currentTimestamp;
   }
@@ -1041,12 +1439,20 @@ async function appendNewMessages(messages: MessageEnvelope[], conversationId: st
     const currentSender = senderKey(message, decrypted);
     const currentTimestamp = created.getTime();
     const sameDay = currentDay === previousDay;
-    if (!sameDay) {
-      appendDateDivider(created);
+    const dayChanged = !sameDay;
+    const previousDayBeforeMessage = previousDay;
+    let divider: HTMLElement | undefined;
+    if (dayChanged) {
+      divider = appendDateDivider(created);
       previousDay = currentDay;
     }
     const grouped = sameDay && currentSender === previousSender && currentTimestamp - previousTimestamp <= 5 * 60 * 1000;
-    renderMessage(message, decrypted, error, { grouped });
+    const rendered = renderMessage(message, decrypted, error, { grouped });
+    if (!rendered) {
+      divider?.remove();
+      previousDay = previousDayBeforeMessage;
+      continue;
+    }
     previousSender = currentSender;
     previousTimestamp = currentTimestamp;
   }
@@ -1277,24 +1683,49 @@ composer.addEventListener("submit", async (event) => {
   const file = photoInput.files?.[0];
   if (!text && !file) return;
   sendButton.disabled = true;
+  const uploadController = file ? new AbortController() : undefined;
+  uploadAbortController = uploadController;
   try {
-    if (text) await cryptoClient.sendText(selectedConversationId, selectedMembers, text, extractEmbeds(text), replyTarget);
-    if (file) await cryptoClient.sendPhoto(selectedConversationId, selectedMembers, file);
+    let queued = false;
+    if (text) queued = (await cryptoClient.sendText(selectedConversationId, selectedMembers, text, extractEmbeds(text), replyTarget, mentionedUserIds(text))).delivery === "queued";
+    if (file) {
+      const attachmentKind = file.type.startsWith("video/") ? "video" : file.type.startsWith("image/") ? "image" : "file";
+      attachmentLabel.textContent = `Preparing encrypted ${attachmentKind}…`;
+      uploadProgress.value = 0;
+      uploadProgress.hidden = false;
+      queued ||= (await cryptoClient.sendMedia(selectedConversationId, selectedMembers, file, {
+        signal: uploadController?.signal,
+        onProgress: (loadedBytes, totalBytes) => {
+          const percent = totalBytes > 0 ? Math.round((loadedBytes / totalBytes) * 100) : 0;
+          attachmentLabel.textContent = `Uploading encrypted ${attachmentKind} · ${percent}%`;
+          uploadProgress.value = percent;
+        },
+      })).delivery === "queued";
+    }
     messageInput.value = "";
     if (selectedConversationId) drafts.delete(selectedConversationId);
     clearReplyTarget();
     photoInput.value = "";
     attachmentPreview.hidden = true;
+    uploadProgress.hidden = true;
     resizeMessageInput();
+    setStatus(queued ? "Message saved locally; it will retry when connected." : "Encrypted message sent.");
     await refreshMessages({ forceScrollToBottom: true });
   } catch (error) {
     setStatus(readableError(error), true);
+    if (error instanceof Error && error.name === "AbortError") attachmentLabel.textContent = "Upload canceled · remove or retry";
   } finally {
+    if (uploadAbortController === uploadController) uploadAbortController = undefined;
     updateComposerState();
   }
 });
 
 messageInput.addEventListener("keydown", (event) => {
+  if (!mentionSuggestions.hidden && (event.key === "Tab" || event.key === "ArrowDown")) {
+    event.preventDefault();
+    mentionSuggestions.querySelector<HTMLButtonElement>("button")?.focus();
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     composer.requestSubmit();
@@ -1303,16 +1734,25 @@ messageInput.addEventListener("keydown", (event) => {
 
 messageInput.addEventListener("input", resizeMessageInput);
 messageInput.addEventListener("input", () => rememberDraft());
+messageInput.addEventListener("input", renderMentionSuggestions);
 
 photoInput.addEventListener("change", () => {
   const file = photoInput.files?.[0];
   attachmentPreview.hidden = !file;
+  uploadProgress.hidden = true;
+  uploadProgress.value = 0;
   if (file) attachmentLabel.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB`;
 });
 
 clearAttachment.addEventListener("click", () => {
+  if (uploadAbortController) {
+    uploadAbortController.abort();
+    return;
+  }
   photoInput.value = "";
   attachmentPreview.hidden = true;
+  uploadProgress.hidden = true;
+  uploadProgress.value = 0;
 });
 
 cancelReply.addEventListener("click", clearReplyTarget);
@@ -1321,6 +1761,11 @@ conversationSearch.addEventListener("input", () => {
   conversationSearchQuery = conversationSearch.value;
   renderConversations();
   renderChannels();
+});
+
+mobileServerSelect.addEventListener("change", () => {
+  if (mobileServerSelect.value) void selectServer(mobileServerSelect.value);
+  else void showDirectMessages();
 });
 
 homeRailButton.addEventListener("click", () => void showDirectMessages());
@@ -1336,6 +1781,9 @@ document.addEventListener("keydown", (event) => {
     conversationSearch.select();
   }
   if (event.key === "Escape" && !messageSearchContainer.hidden) closeMessageSearch();
+  if (event.key === "Escape" && !mentionSuggestions.hidden) hideMentionSuggestions();
+  if (event.key === "Escape" && !mediaViewer.hidden) closeMediaViewer();
+  if (event.key === "Escape" && !profileModal.hidden) profileModal.hidden = true;
 });
 
 function closeMessageSearch() {
@@ -1356,6 +1804,15 @@ messageSearchClose.addEventListener("click", closeMessageSearch);
 messageSearch.addEventListener("input", () => {
   messageSearchQuery = messageSearch.value;
   applyMessageSearch();
+});
+
+mediaViewerClose.addEventListener("click", closeMediaViewer);
+mediaViewer.addEventListener("click", (event) => {
+  if (event.target === mediaViewer) closeMediaViewer();
+});
+profileModalClose.addEventListener("click", () => { profileModal.hidden = true; });
+profileModal.addEventListener("click", (event) => {
+  if (event.target === profileModal) profileModal.hidden = true;
 });
 
 detailsToggle.addEventListener("click", () => {
@@ -1388,7 +1845,7 @@ lockButton.addEventListener("click", () => {
   clearSessionPassphrase();
   cryptoClient?.close();
   const returnPath = `${window.location.pathname}${window.location.search}`;
-  window.location.assign(`/unlock?return=${encodeURIComponent(returnPath)}`);
+  window.location.assign(`/unlock?manual=1&return=${encodeURIComponent(returnPath)}`);
 });
 
 function syncDetailsButton() {
@@ -1428,7 +1885,12 @@ async function boot() {
   }
 
   window.setInterval(() => {
-    if (cryptoClient) void cryptoClient.syncToDevice().then(() => refreshMessages()).catch(() => undefined);
+    if (cryptoClient) {
+      void cryptoClient.syncToDevice()
+        .then(() => flushOutbox())
+        .then(() => refreshMessages())
+        .catch(() => undefined);
+    }
   }, 2000);
 }
 

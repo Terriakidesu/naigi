@@ -65,11 +65,12 @@ logout.addEventListener("click", async () => {
 
 async function boot() {
   const reason = new URLSearchParams(window.location.search).get("error");
+  const manualUnlock = new URLSearchParams(window.location.search).get("manual") === "1";
   if (reason) setStatus("That passphrase did not unlock this browser. Try again.", true);
   try {
     const result = await api.me();
     currentUserId = result.user.id;
-    if (!reason) {
+    if (!reason && !manualUnlock) {
       const rememberedPassphrase = await recoverRememberedPassphrase(currentUserId).catch(() => null);
       if (rememberedPassphrase) {
         setStatus("Unlocking this browser…");

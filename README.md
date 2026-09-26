@@ -71,11 +71,11 @@ implemented by the backend and must use a reviewed E2EE library.
 ## Encryption boundary
 
 The message endpoint accepts only base64url-encoded ciphertext, protocol identifiers, and
-opaque protocol metadata. Text, URLs, embed previews, photo keys, and other user content
+opaque protocol metadata. Text, URLs, embed previews, media keys, profile-related message content, and other user content
 must be encrypted by a client before they reach this server. No cryptographic protocol is
 implemented in the backend.
 
-## Photos and attachments
+## Photos, videos, and attachments
 
 The client must compress and optionally resize a photo before encryption. A recommended
 photo path is a maximum dimension of 2048 pixels and JPEG/WebP quality around 0.8; the
@@ -83,9 +83,11 @@ client may create an encrypted thumbnail at the same time. The backend receives 
 only the resulting encrypted bytes, so it never performs image compression, decoding, OCR,
 or content inspection. Users who need the original file can send it as a separate attachment.
 
-Create an attachment with `POST /v1/conversations/:conversationId/attachments`, upload the
-encrypted bytes with `PUT /v1/attachments/:attachmentId`, and download them with `GET
-/v1/attachments/:attachmentId`.
+Images are resized/recompressed where supported; videos and other files retain their
+client-selected MIME type and extension. All media is encrypted before upload. Create an attachment with
+`POST /v1/conversations/:conversationId/attachments`, upload the encrypted bytes with
+`PUT /v1/attachments/:attachmentId`, and download them with
+`GET /v1/attachments/:attachmentId`.
 
 ## Matrix crypto transport
 
@@ -115,8 +117,9 @@ bun run dev
 
 Then open `http://localhost:3000/`. The browser client uses Matrix Olm/Megolm through
 `@matrix-org/matrix-sdk-crypto-wasm`, keeps private state in an encrypted IndexedDB store,
-compresses supported photos before encrypting them, and only renders allowlisted YouTube
-and X previews. The local encryption passphrase is separate from the server password and
+compresses supported photos before encrypting them, supports encrypted video attachments,
+and only renders allowlisted YouTube and X previews after an explicit user action. The local
+encryption passphrase is separate from the server password and
 is never sent to the backend. The client is split into separate views instead of loading
 every workflow into one page:
 

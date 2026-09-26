@@ -106,10 +106,20 @@ const imageMimeExtensions: Record<string, string[]> = {
   webp: ["image/webp"],
 };
 
+const videoMimeExtensions: Record<string, string[]> = {
+  mp4: ["video/mp4"],
+  mov: ["video/quicktime"],
+  ogg: ["video/ogg"],
+  ogv: ["video/ogg"],
+  webm: ["video/webm"],
+};
+
 function attachmentMetadata(extension: string, mimeType: string) {
   const normalizedExtension = extension.toLowerCase();
   const normalizedMimeType = mimeType.toLowerCase();
-  if (!imageMimeExtensions[normalizedExtension]?.includes(normalizedMimeType)) return null;
+  const allowed = imageMimeExtensions[normalizedExtension] ?? videoMimeExtensions[normalizedExtension];
+  if (allowed && !allowed.includes(normalizedMimeType)) return null;
+  if (!allowed && !/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(normalizedMimeType)) return null;
   return { extension: normalizedExtension, mimeType: normalizedMimeType };
 }
 
@@ -409,6 +419,19 @@ export function createApp() {
       return { users: users.map(toPublicUser) };
     }, {
       query: t.Object({ q: t.String({ maxLength: 80 }) }),
+    })
+    .get("/v1/users/:userId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [profile] = await db<UserRow[]>`
+        select id, username, display_name, created_at
+        from users
+        where id = ${params.userId}
+      `;
+      if (!profile) return respondError(set, 404, "user_not_found");
+      return { user: toPublicUser(profile) };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
     })
     .post("/v1/servers", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -2085,16 +2108,16 @@ export function createApp() {
 
       if (after !== undefined) {
         const rows = await db<MessageRow[]>`
-             select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
-               m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
-               u.id as sender_user_id
-             from messages m
-             join devices d on d.id = m.sender_device_id
-             join users u on u.id = d.user_id
-             where m.conversation_id = ${params.conversationId} and m.server_sequence > ${after}
-             order by m.server_sequence asc
-             limit ${limit + 1}
-          `;
+          select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
+            m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
+            u.id as sender_user_id
+          from messages m
+          join devices d on d.id = m.sender_device_id
+          join users u on u.id = d.user_id
+          where m.conversation_id = ${params.conversationId} and m.server_sequence > ${after}
+          order by m.server_sequence asc
+          limit ${limit + 1}
+        `;
         const hasMore = rows.length > limit;
         const page = rows.slice(0, limit);
         return {
@@ -2104,29 +2127,29 @@ export function createApp() {
         };
       }
 
-       const rows = before === undefined
-         ? await db<MessageRow[]>`
-            select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
-              m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
-              u.id as sender_user_id
-            from messages m
-            join devices d on d.id = m.sender_device_id
-            join users u on u.id = d.user_id
-            where m.conversation_id = ${params.conversationId}
-            order by m.server_sequence desc
-            limit ${limit + 1}
-          `
+      const rows = before === undefined
+        ? await db<MessageRow[]>`
+          select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
+            m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
+            u.id as sender_user_id
+          from messages m
+          join devices d on d.id = m.sender_device_id
+          join users u on u.id = d.user_id
+          where m.conversation_id = ${params.conversationId}
+          order by m.server_sequence desc
+          limit ${limit + 1}
+        `
         : await db<MessageRow[]>`
-            select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
-              m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
-              u.id as sender_user_id
-            from messages m
-            join devices d on d.id = m.sender_device_id
-            join users u on u.id = d.user_id
-            where m.conversation_id = ${params.conversationId} and m.server_sequence < ${before}
-            order by m.server_sequence desc
-            limit ${limit + 1}
-          `;
+          select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
+            m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
+            u.id as sender_user_id
+          from messages m
+          join devices d on d.id = m.sender_device_id
+          join users u on u.id = d.user_id
+          where m.conversation_id = ${params.conversationId} and m.server_sequence < ${before}
+          order by m.server_sequence desc
+          limit ${limit + 1}
+        `;
 
       const hasMore = rows.length > limit;
       const page = rows.slice(0, limit).reverse();

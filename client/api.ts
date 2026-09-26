@@ -113,6 +113,16 @@ export class ApiError extends Error {
   }
 }
 
+export type UploadOptions = {
+  signal?: AbortSignal;
+  onProgress?: (loadedBytes: number, totalBytes: number) => void;
+};
+
+export type DownloadOptions = {
+  signal?: AbortSignal;
+  onProgress?: (loadedBytes: number, totalBytes: number) => void;
+};
+
 function jsonHeaders() {
   return { "content-type": "application/json" };
 }
@@ -166,39 +176,91 @@ export class ApiClient {
     return this.request<T>(path, { method: "DELETE" });
   }
 
-  async putBytes(path: string, bytes: Uint8Array) {
+  async putBytes(path: string, bytes: Uint8Array, options: UploadOptions = {}) {
     const body = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(body).set(bytes);
-    const response = await fetch(path, {
-      method: "PUT",
-      credentials: "include",
-      headers: { "content-type": "application/octet-stream" },
-      body,
-    });
-    if (!response.ok) {
-      let code = "upload_failed";
-      try {
-        const body = await response.json() as { error?: unknown };
-        if (typeof body.error === "string") code = body.error;
-      } catch {
-        // Keep the generic upload error.
-      }
-      throw new ApiError(response.status, code);
-    }
-    return await response.json() as {
+    return await new Promise<{
       attachment: { id: string; sizeBytes: number; sha256: string; uploadedAt: string };
-    };
+    }>((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      let settled = false;
+      const finish = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        options.signal?.removeEventListener("abort", abort);
+        callback();
+      };
+      const abort = () => request.abort();
+      request.open("PUT", path);
+      request.withCredentials = true;
+      request.setRequestHeader("content-type", "application/octet-stream");
+      request.upload.addEventListener("progress", (event) => {
+        if (event.lengthComputable) options.onProgress?.(event.loaded, event.total);
+      });
+      request.addEventListener("load", () => {
+        if (request.status < 200 || request.status >= 300) {
+          let code = "upload_failed";
+          try {
+            const response = JSON.parse(request.responseText) as { error?: unknown };
+            if (typeof response.error === "string") code = response.error;
+          } catch {
+            // Keep the generic upload error.
+          }
+          finish(() => reject(new ApiError(request.status, code)));
+          return;
+        }
+        try {
+          finish(() => resolve(JSON.parse(request.responseText)));
+        } catch {
+          finish(() => reject(new Error("invalid_upload_response")));
+        }
+      });
+      request.addEventListener("error", () => finish(() => reject(new Error("upload_failed"))));
+      request.addEventListener("abort", () => {
+        const error = new Error("upload_aborted");
+        error.name = "AbortError";
+        finish(() => reject(error));
+      });
+      if (options.signal?.aborted) {
+        abort();
+        return;
+      }
+      options.signal?.addEventListener("abort", abort, { once: true });
+      request.send(body);
+    });
   }
 
-  async downloadAttachment(path: string) {
+  async downloadAttachment(path: string, options: DownloadOptions = {}) {
     const url = new URL(path, window.location.origin);
     if (url.origin !== window.location.origin || !/^\/v1\/attachments\/[0-9a-f-]{36}$/i.test(url.pathname)) {
       throw new Error("invalid attachment URL");
     }
 
-    const response = await fetch(url, { credentials: "include" });
+    const response = await fetch(url, { credentials: "include", signal: options.signal });
     if (!response.ok) throw new ApiError(response.status, "attachment_download_failed");
-    return await response.arrayBuffer();
+    const totalBytes = Number(response.headers.get("content-length") ?? 0);
+    if (!response.body) return await response.arrayBuffer();
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let loadedBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        loadedBytes += value.byteLength;
+        chunks.push(value);
+        options.onProgress?.(loadedBytes, totalBytes);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = new Uint8Array(loadedBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes.buffer;
   }
 
   register(username: string, password: string, displayName: string) {
@@ -234,6 +296,10 @@ export class ApiClient {
 
   searchUsers(query: string) {
     return this.get<{ users: User[] }>(`/v1/users/search?q=${encodeURIComponent(query)}`);
+  }
+
+  user(userId: string) {
+    return this.get<{ user: User }>(`/v1/users/${encodeURIComponent(userId)}`);
   }
 
   revokeDevice(deviceId: string) {

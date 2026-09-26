@@ -142,7 +142,7 @@ passwordForm.addEventListener("submit", async (event) => {
 
 lockNow.addEventListener("click", () => {
   clearSessionPassphrase();
-  window.location.assign(`/unlock?return=${encodeURIComponent("/settings")}`);
+  window.location.assign(`/unlock?manual=1&return=${encodeURIComponent("/settings")}`);
 });
 
 forgetDevice.addEventListener("click", async () => {

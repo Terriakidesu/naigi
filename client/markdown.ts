@@ -128,14 +128,38 @@ export function parseMarkdown(value: string): MarkdownBlock[] {
   return blocks;
 }
 
-function appendInline(parent: HTMLElement, value: string) {
+function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<string>) {
+  const pattern = /@([A-Za-z0-9_.-]+)/g;
+  let offset = 0;
+  for (const match of value.matchAll(pattern)) {
+    const index = match.index ?? offset;
+    const username = match[1].toLowerCase();
+    const text = value.slice(offset, index).split("\n");
+    text.forEach((part, line) => {
+      if (line) parent.append(document.createElement("br"));
+      parent.append(document.createTextNode(part));
+    });
+    if (mentionUsernames?.has(username)) {
+      const mention = document.createElement("span");
+      mention.className = "user-mention";
+      mention.textContent = match[0];
+      parent.append(mention);
+    } else {
+      parent.append(document.createTextNode(match[0]));
+    }
+    offset = index + match[0].length;
+  }
+  const remainder = value.slice(offset).split("\n");
+  remainder.forEach((part, line) => {
+    if (line) parent.append(document.createElement("br"));
+    parent.append(document.createTextNode(part));
+  });
+}
+
+function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set<string>) {
   for (const token of parseInlineMarkdown(value)) {
     if (token.kind === "text") {
-      const text = token.value.split("\n");
-      text.forEach((part, index) => {
-        if (index) parent.append(document.createElement("br"));
-        parent.append(document.createTextNode(part));
-      });
+      appendText(parent, token.value, mentionUsernames);
       continue;
     }
     if (token.kind === "link") {
@@ -174,7 +198,7 @@ function appendInline(parent: HTMLElement, value: string) {
   }
 }
 
-export function appendMarkdown(parent: HTMLElement, value: string) {
+export function appendMarkdown(parent: HTMLElement, value: string, options: { mentionUsernames?: Set<string> } = {}) {
   const markdown = document.createElement("div");
   markdown.className = "markdown-body";
   for (const block of parseMarkdown(value)) {
@@ -189,13 +213,13 @@ export function appendMarkdown(parent: HTMLElement, value: string) {
     }
     if (block.kind === "heading") {
       const heading = document.createElement(block.level && block.level <= 2 ? "h3" : "h4");
-      appendInline(heading, block.value as string);
+      appendInline(heading, block.value as string, options.mentionUsernames);
       markdown.append(heading);
       continue;
     }
     if (block.kind === "quote") {
       const quote = document.createElement("blockquote");
-      appendInline(quote, (block.value as string[]).join("\n"));
+      appendInline(quote, (block.value as string[]).join("\n"), options.mentionUsernames);
       markdown.append(quote);
       continue;
     }
@@ -203,14 +227,14 @@ export function appendMarkdown(parent: HTMLElement, value: string) {
       const list = document.createElement(block.kind === "unordered-list" ? "ul" : "ol");
       for (const item of block.value as string[]) {
         const listItem = document.createElement("li");
-        appendInline(listItem, item);
+        appendInline(listItem, item, options.mentionUsernames);
         list.append(listItem);
       }
       markdown.append(list);
       continue;
     }
     const paragraph = document.createElement("p");
-    appendInline(paragraph, block.value as string);
+    appendInline(paragraph, block.value as string, options.mentionUsernames);
     markdown.append(paragraph);
   }
   parent.append(markdown);
