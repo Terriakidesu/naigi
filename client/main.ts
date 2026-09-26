@@ -5,11 +5,14 @@ import {
   type ConversationMember,
   type MessageEnvelope,
   type Server,
+  type ServerCategory,
   type ServerChannel,
   type User,
 } from "./api";
 import { CryptoClient } from "./crypto";
 import { appendSafeEmbed, extractEmbeds } from "./embeds";
+import { appendMarkdown } from "./markdown";
+import { clearSessionPassphrase, takeSessionPassphrase } from "./unlock-vault";
 
 const api = new ApiClient();
 let currentUser: User | undefined;
@@ -19,15 +22,22 @@ let selectedMembers: ConversationMember[] = [];
 let conversations: Conversation[] = [];
 let servers: Server[] = [];
 let channels: ServerChannel[] = [];
+let categories: ServerCategory[] = [];
 let selectedServerId: string | undefined;
 let selectedChannelId: string | undefined;
 const serverLabels = new Map<string, string>();
 const channelLabels = new Map<string, string>();
+const categoryLabels = new Map<string, string>();
+const collapsedCategories = new Set<string>();
 let realtime: WebSocket | undefined;
 let messagesLoading = false;
+let olderMessagesLoading = false;
 let lastMessagesKey = "__not-rendered__";
+let loadedMessages: MessageEnvelope[] = [];
+let nextBefore: string | null = null;
 let conversationSearchQuery = "";
 let messageSearchQuery = "";
+const drafts = new Map<string, string>();
 let selectionToken = 0;
 let serverSelectionToken = 0;
 
@@ -54,6 +64,7 @@ const createServerButton = byId<HTMLButtonElement>("create-server-button");
 const joinServerButton = byId<HTMLButtonElement>("join-server-button");
 const createChannelButton = byId<HTMLButtonElement>("create-channel-button");
 const serverInviteButton = byId<HTMLButtonElement>("server-invite-button");
+const serverSettingsButton = byId<HTMLAnchorElement>("server-settings-button");
 const workspaceName = byId<HTMLElement>("workspace-name");
 const workspaceSubtitle = byId<HTMLElement>("workspace-subtitle");
 const composer = byId<HTMLFormElement>("composer");
@@ -63,6 +74,7 @@ const sendButton = byId<HTMLButtonElement>("send-button");
 const attachmentPreview = byId<HTMLElement>("attachment-preview");
 const attachmentLabel = byId<HTMLElement>("attachment-label");
 const clearAttachment = byId<HTMLButtonElement>("clear-attachment");
+const lockButton = byId<HTMLButtonElement>("lock-button");
 const mobileSidebarToggle = byId<HTMLButtonElement>("mobile-sidebar-toggle");
 const mobileSidebarBackdrop = byId<HTMLButtonElement>("mobile-sidebar-backdrop");
 const messageSearchToggle = byId<HTMLButtonElement>("message-search-toggle");
@@ -72,6 +84,8 @@ const messageSearchClose = byId<HTMLButtonElement>("message-search-close");
 const detailsToggle = byId<HTMLButtonElement>("details-toggle");
 const detailsClose = byId<HTMLButtonElement>("details-close");
 const channelIcon = byId<HTMLElement>("channel-icon");
+const loadOlderButton = byId<HTMLButtonElement>("load-older-button");
+const jumpLatestButton = byId<HTMLButtonElement>("jump-latest-button");
 
 function setStatus(message: string, error = false) {
   statusLine.textContent = message;
@@ -85,6 +99,11 @@ function readableError(error: unknown) {
     if (error.code === "server_owner_must_transfer_ownership") return "The server owner must transfer ownership before leaving.";
     if (error.code === "invite_not_found") return "That invite is not valid.";
     if (error.code === "invite_expired" || error.code === "invite_exhausted") return "That invite is no longer active.";
+    if (error.code === "current_password_incorrect") return "The current password is incorrect.";
+    if (error.code === "category_not_found") return "That category no longer exists.";
+    if (error.code === "channel_not_found") return "That channel no longer exists.";
+    if (error.code === "cannot_archive_last_channel") return "A server must keep one active text channel.";
+    if (error.code === "cannot_archive_metadata_channel") return "The original channel anchors encrypted server metadata and cannot be archived.";
     return error.code;
   }
   return error instanceof Error ? error.message : "request_failed";
@@ -92,12 +111,12 @@ function readableError(error: unknown) {
 
 async function startCrypto() {
   if (!currentUser) throw new Error("not_authenticated");
-  const localPassphrase = sessionStorage.getItem("priv-chat.local-passphrase");
+  const localPassphrase = takeSessionPassphrase();
   if (!localPassphrase) {
-    window.location.assign("/unlock");
+    const returnPath = `${window.location.pathname}${window.location.search}`;
+    window.location.assign(`/unlock?return=${encodeURIComponent(returnPath)}`);
     return;
   }
-  sessionStorage.removeItem("priv-chat.local-passphrase");
   cryptoClient?.close();
   cryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
   await cryptoClient.initialize();
@@ -114,6 +133,7 @@ function connectRealtime() {
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   realtime = new WebSocket(url);
   realtime.addEventListener("open", () => {
+    setStatus("Encrypted chat is connected.");
     if (selectedConversationId) subscribeRealtime(selectedConversationId);
   });
   realtime.addEventListener("message", (event) => {
@@ -126,7 +146,11 @@ function connectRealtime() {
       // Ignore malformed realtime notifications; history remains authoritative.
     }
   });
+  realtime.addEventListener("error", () => {
+    setStatus("Realtime connection unavailable; history still works.", true);
+  });
   realtime.addEventListener("close", () => {
+    setStatus("Reconnecting encrypted chat…");
     if (cryptoClient) window.setTimeout(connectRealtime, 1500);
   });
 }
@@ -170,6 +194,11 @@ function channelDisplayName(channel: ServerChannel) {
   return channelLabels.get(channel.id) || (channel.position === 0 ? "general" : `channel-${channel.position + 1}`);
 }
 
+function categoryDisplayName(category: ServerCategory) {
+  const index = categories.findIndex((item) => item.id === category.id);
+  return categoryLabels.get(category.id) || `Category ${index + 1}`;
+}
+
 function renderServers() {
   serverList.replaceChildren();
   for (const server of servers) {
@@ -194,6 +223,8 @@ function renderServers() {
   const canManage = activeServer?.role === "owner" || activeServer?.role === "admin";
   createChannelButton.hidden = !canManage;
   serverInviteButton.hidden = !canManage;
+  serverSettingsButton.hidden = !canManage;
+  if (activeServer) serverSettingsButton.href = `/server-settings?server=${encodeURIComponent(activeServer.id)}`;
 }
 
 function renderChannels() {
@@ -214,7 +245,14 @@ function renderChannels() {
     return;
   }
 
+  const byCategory = new Map<string | null, ServerChannel[]>();
   for (const channel of visible) {
+    const list = byCategory.get(channel.categoryId) ?? [];
+    list.push(channel);
+    byCategory.set(channel.categoryId, list);
+  }
+
+  const appendChannel = (channel: ServerChannel) => {
     const button = document.createElement("button");
     button.className = "channel-item";
     button.type = "button";
@@ -230,7 +268,38 @@ function renderChannels() {
     button.append(icon, name);
     button.addEventListener("click", () => void selectChannel(channel.id));
     channelList.append(button);
-  }
+  };
+
+  const appendCategory = (category: ServerCategory | null, categoryChannels: ServerChannel[]) => {
+    const heading = document.createElement("button");
+    heading.className = "category-heading";
+    heading.type = "button";
+    heading.setAttribute("aria-expanded", String(!category || !collapsedCategories.has(category.id)));
+    const name = document.createElement("span");
+    name.textContent = category ? categoryDisplayName(category) : "TEXT CHANNELS";
+    const indicator = document.createElement("span");
+    indicator.textContent = category && collapsedCategories.has(category.id) ? "▸" : "⌄";
+    heading.append(name, indicator);
+    if (category) {
+      heading.addEventListener("click", () => {
+        if (collapsedCategories.has(category.id)) collapsedCategories.delete(category.id);
+        else collapsedCategories.add(category.id);
+        renderChannels();
+      });
+    } else {
+      heading.disabled = true;
+      heading.classList.add("category-heading-uncategorized");
+    }
+    channelList.append(heading);
+    if (!category || !collapsedCategories.has(category.id)) {
+      for (const channel of categoryChannels) appendChannel(channel);
+    }
+  };
+
+  const categoryIds = new Set(categories.map((category) => category.id));
+  for (const category of categories) appendCategory(category, byCategory.get(category.id) ?? []);
+  const uncategorized = visible.filter((channel) => !channel.categoryId || !categoryIds.has(channel.categoryId));
+  if (uncategorized.length > 0 || categories.length === 0) appendCategory(null, uncategorized);
 }
 
 function renderConversationEmpty(message: string) {
@@ -321,6 +390,7 @@ async function refreshServers() {
   selectedServerId = undefined;
   selectedChannelId = undefined;
   channels = [];
+  categories = [];
   renderServers();
   renderChannels();
 }
@@ -332,6 +402,7 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   selectedConversationId = undefined;
   selectedMembers = [];
   channels = [];
+  categories = [];
   selectionToken += 1;
   renderServers();
   renderChannels();
@@ -342,9 +413,13 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   channelIcon.textContent = "#";
 
   try {
-    const result = await api.serverChannels(serverId);
+    const [channelResult, categoryResult] = await Promise.all([
+      api.serverChannels(serverId),
+      api.serverCategories(serverId),
+    ]);
     if (token !== serverSelectionToken) return;
-    channels = result.channels;
+    channels = channelResult.channels;
+    categories = categoryResult.categories;
     renderChannels();
     const requested = requestedChannelId && channels.find((channel) => channel.id === requestedChannelId);
     const channel = requested ?? channels[0];
@@ -375,6 +450,7 @@ async function openDirectMessage(conversationId: string) {
   selectedServerId = undefined;
   selectedChannelId = undefined;
   channels = [];
+  categories = [];
   selectedMembers = [];
   ++serverSelectionToken;
   renderServers();
@@ -386,6 +462,7 @@ async function showDirectMessages() {
   selectedServerId = undefined;
   selectedChannelId = undefined;
   channels = [];
+  categories = [];
   selectedConversationId = undefined;
   selectedMembers = [];
   ++serverSelectionToken;
@@ -540,12 +617,25 @@ function applyMessageSearch() {
   }
 }
 
+function rememberDraft(conversationId = selectedConversationId) {
+  if (!conversationId) return;
+  const value = messageInput.value;
+  if (value) drafts.set(conversationId, value);
+  else drafts.delete(conversationId);
+}
+
 async function selectConversation(conversationId: string, channel?: ServerChannel) {
   if (!cryptoClient) return;
+  rememberDraft();
   const token = ++selectionToken;
   selectedConversationId = conversationId;
   if (channel) selectedChannelId = channel.id;
   lastMessagesKey = "__not-rendered__";
+  loadedMessages = [];
+  nextBefore = null;
+  jumpLatestButton.hidden = true;
+  messageInput.value = drafts.get(conversationId) ?? "";
+  resizeMessageInput();
   const conversation = conversations.find((item) => item.id === conversationId);
   conversationTitle.textContent = channel ? channelDisplayName(channel) : conversation ? conversationDisplayName(conversation) : "Conversation";
   conversationSubtitle.textContent = "Loading encrypted conversation…";
@@ -585,14 +675,39 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
     }
   }
   const activeServer = selectedServerId ? servers.find((server) => server.id === selectedServerId) : undefined;
+  const metadataChannel = activeServer
+    ? [...channels].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))[0]
+    : undefined;
+  let metadataMembers = selectedMembers;
+  if (metadataChannel && metadataChannel.conversationId !== conversationId) {
+    try {
+      metadataMembers = (await api.conversationMembers(metadataChannel.conversationId)).members;
+      await cryptoClient.prepareConversation(metadataChannel.conversationId, metadataMembers);
+      await cryptoClient.syncToDevice().catch(() => undefined);
+    } catch {
+      metadataMembers = selectedMembers;
+    }
+  }
+  const metadataConversationId = metadataChannel?.conversationId ?? conversationId;
   if (activeServer?.encryptedMetadata) {
     try {
-      const metadata = await cryptoClient.decryptMetadata(conversationId, activeServer.encryptedMetadata);
+      const metadata = await cryptoClient.decryptMetadata(metadataConversationId, activeServer.encryptedMetadata);
       if (typeof metadata.name === "string" && metadata.name.trim()) {
         serverLabels.set(activeServer.id, metadata.name.trim().slice(0, 80));
       }
     } catch {
       // See the channel metadata note above.
+    }
+  }
+  if (metadataChannel && categories.length > 0) {
+    for (const category of categories) {
+      if (!category.encryptedMetadata) continue;
+      try {
+        const metadata = await cryptoClient.decryptMetadata(metadataConversationId, category.encryptedMetadata);
+        if (typeof metadata.name === "string" && metadata.name.trim()) categoryLabels.set(category.id, metadata.name.trim().slice(0, 80));
+      } catch {
+        // Category labels are opaque and should never block the conversation.
+      }
     }
   }
   conversationTitle.textContent = channel ? channelDisplayName(channel) : conversation ? conversationDisplayName(conversation) : "Conversation";
@@ -648,10 +763,7 @@ function renderMessage(
   const content = decrypted.content;
   const body = typeof content.body === "string" ? content.body : "";
   if (content.msgtype === "m.text" || content.msgtype === "m.notice" || body) {
-    const text = document.createElement("p");
-    text.className = "message-body";
-    text.textContent = body;
-    messageContent.append(text);
+    appendMarkdown(messageContent, body);
     for (const embed of extractEmbeds(body)) appendSafeEmbed(messageContent, embed);
   }
 
@@ -681,6 +793,53 @@ function renderMessage(
   messagesPanel.append(article);
 }
 
+async function renderMessageHistory(options: { previousScrollTop?: number; preserveScroll?: boolean } = {}) {
+  if (!selectedConversationId || !cryptoClient) return;
+  const conversationId = selectedConversationId;
+  const activeCryptoClient = cryptoClient;
+  if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+  messagesPanel.replaceChildren();
+  messagesPanel.append(loadOlderButton);
+  loadOlderButton.hidden = !nextBefore;
+  if (loadedMessages.length === 0) {
+    renderConversationWelcome("This is the beginning", "Send a message to start this encrypted conversation.");
+    return;
+  }
+
+  let previousSender = "";
+  let previousTimestamp = 0;
+  let previousDay = "";
+  for (const message of loadedMessages) {
+    if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    let decrypted: { sender: string; content: Record<string, unknown> } | null = null;
+    let error: string | undefined;
+    try {
+      decrypted = await activeCryptoClient.decryptMessage(conversationId, message);
+    } catch (caught) {
+      error = readableError(caught);
+    }
+    const created = new Date(message.createdAt);
+    const currentDay = dateKey(created);
+    const sameDay = currentDay === previousDay;
+    if (currentDay !== previousDay) {
+      appendDateDivider(created);
+      previousDay = currentDay;
+    }
+    const currentSender = senderKey(message, decrypted);
+    const currentTimestamp = created.getTime();
+    const grouped = sameDay && currentSender === previousSender && currentTimestamp - previousTimestamp <= 5 * 60 * 1000;
+    renderMessage(message, decrypted, error, { grouped });
+    previousSender = currentSender;
+    previousTimestamp = currentTimestamp;
+  }
+  applyMessageSearch();
+  if (options.preserveScroll && options.previousScrollTop !== undefined) {
+    messagesPanel.scrollTop = options.previousScrollTop;
+  } else {
+    messagesPanel.scrollTop = messagesPanel.scrollHeight;
+  }
+}
+
 async function refreshMessages() {
   if (!selectedConversationId || !cryptoClient || messagesLoading) return;
   const conversationId = selectedConversationId;
@@ -690,51 +849,52 @@ async function refreshMessages() {
     await activeCryptoClient.syncToDevice();
     if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
     const result = await api.messages(conversationId);
-    const messageKey = result.messages.map((message) => `${message.id}:${message.createdAt}`).join("|");
+    if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    const previousMessages = loadedMessages;
+    const wasNearBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight < 100;
+    const previousScrollTop = messagesPanel.scrollTop;
+    const byId = new Map(previousMessages.map((message) => [message.id, message]));
+    for (const message of result.messages) byId.set(message.id, message);
+    loadedMessages = [...byId.values()].sort((left, right) => Number(BigInt(left.serverSequence) - BigInt(right.serverSequence)));
+    if (previousMessages.length === 0) nextBefore = result.nextBefore;
+    else if (nextBefore === null) nextBefore = result.nextBefore;
+    const messageKey = loadedMessages.map((message) => `${message.id}:${message.createdAt}`).join("|");
     if (messageKey === lastMessagesKey) {
       applyMessageSearch();
+      if (wasNearBottom) jumpLatestButton.hidden = true;
       return;
     }
-    const previousScrollTop = messagesPanel.scrollTop;
-    const wasNearBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight < 100;
-    const hadMessages = Boolean(messagesPanel.querySelector(".message"));
     lastMessagesKey = messageKey;
-    messagesPanel.replaceChildren();
-    if (result.messages.length === 0) {
-      renderConversationWelcome("This is the beginning", "Send a message to start this encrypted conversation.");
-      return;
-    }
-
-    let previousSender = "";
-    let previousTimestamp = 0;
-    let previousDay = "";
-    for (const message of result.messages) {
-      let decrypted: { sender: string; content: Record<string, unknown> } | null = null;
-      let error: string | undefined;
-      try {
-        decrypted = await activeCryptoClient.decryptMessage(conversationId, message);
-      } catch (caught) {
-        error = readableError(caught);
-      }
-      const created = new Date(message.createdAt);
-      const currentDay = dateKey(created);
-      const sameDay = currentDay === previousDay;
-      if (currentDay !== previousDay) {
-        appendDateDivider(created);
-        previousDay = currentDay;
-      }
-      const currentSender = senderKey(message, decrypted);
-      const currentTimestamp = created.getTime();
-      const grouped = sameDay && currentSender === previousSender && currentTimestamp - previousTimestamp <= 5 * 60 * 1000;
-      renderMessage(message, decrypted, error, { grouped });
-      previousSender = currentSender;
-      previousTimestamp = currentTimestamp;
-    }
-    applyMessageSearch();
-    if (wasNearBottom || !hadMessages) messagesPanel.scrollTop = messagesPanel.scrollHeight;
-    else messagesPanel.scrollTop = previousScrollTop;
+    await renderMessageHistory({
+      previousScrollTop,
+      preserveScroll: !wasNearBottom && previousMessages.length > 0,
+    });
+    jumpLatestButton.hidden = wasNearBottom || previousMessages.length === 0;
   } finally {
     messagesLoading = false;
+  }
+}
+
+async function loadOlderMessages() {
+  if (!selectedConversationId || !nextBefore || olderMessagesLoading) return;
+  olderMessagesLoading = true;
+  loadOlderButton.disabled = true;
+  const beforeHeight = messagesPanel.scrollHeight;
+  const beforeTop = messagesPanel.scrollTop;
+  try {
+    const result = await api.messages(selectedConversationId, nextBefore);
+    const byId = new Map(result.messages.concat(loadedMessages).map((message) => [message.id, message]));
+    loadedMessages = [...byId.values()].sort((left, right) => Number(BigInt(left.serverSequence) - BigInt(right.serverSequence)));
+    nextBefore = result.nextBefore;
+    lastMessagesKey = loadedMessages.map((message) => `${message.id}:${message.createdAt}`).join("|");
+    await renderMessageHistory();
+    messagesPanel.scrollTop = beforeTop + (messagesPanel.scrollHeight - beforeHeight);
+  } catch (error) {
+    setStatus(readableError(error), true);
+  } finally {
+    olderMessagesLoading = false;
+    loadOlderButton.disabled = false;
+    loadOlderButton.hidden = !nextBefore;
   }
 }
 
@@ -854,6 +1014,7 @@ composer.addEventListener("submit", async (event) => {
     if (text) await cryptoClient.sendText(selectedConversationId, selectedMembers, text, extractEmbeds(text));
     if (file) await cryptoClient.sendPhoto(selectedConversationId, selectedMembers, file);
     messageInput.value = "";
+    if (selectedConversationId) drafts.delete(selectedConversationId);
     photoInput.value = "";
     attachmentPreview.hidden = true;
     resizeMessageInput();
@@ -873,6 +1034,7 @@ messageInput.addEventListener("keydown", (event) => {
 });
 
 messageInput.addEventListener("input", resizeMessageInput);
+messageInput.addEventListener("input", () => rememberDraft());
 
 photoInput.addEventListener("change", () => {
   const file = photoInput.files?.[0];
@@ -938,6 +1100,21 @@ detailsClose.addEventListener("click", () => {
   if (window.matchMedia("(max-width: 1120px)").matches) chatLayout.classList.remove("details-open");
   else chatLayout.classList.add("details-hidden");
   detailsToggle.setAttribute("aria-expanded", "false");
+});
+
+loadOlderButton.addEventListener("click", () => void loadOlderMessages());
+jumpLatestButton.addEventListener("click", () => {
+  messagesPanel.scrollTo({ top: messagesPanel.scrollHeight, behavior: "smooth" });
+  jumpLatestButton.hidden = true;
+});
+messagesPanel.addEventListener("scroll", () => {
+  if (messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight < 100) jumpLatestButton.hidden = true;
+});
+lockButton.addEventListener("click", () => {
+  clearSessionPassphrase();
+  cryptoClient?.close();
+  const returnPath = `${window.location.pathname}${window.location.search}`;
+  window.location.assign(`/unlock?return=${encodeURIComponent(returnPath)}`);
 });
 
 function syncDetailsButton() {

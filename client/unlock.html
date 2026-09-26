@@ -26,6 +26,8 @@
         <label>Local encryption passphrase
           <input id="local-passphrase" type="password" autocomplete="off" required minlength="12" autofocus>
         </label>
+        <label class="checkbox-label"><input id="remember-device" type="checkbox"> <span>Remember this device</span></label>
+        <p class="muted small">Stores an encrypted passphrase blob and a non-extractable browser key locally. Anyone who can use this browser profile may access this chat.</p>
         <button id="unlock-submit" type="submit">Open encrypted chat</button>
       </form>
       <p id="unlock-status" class="form-status" role="status"></p>

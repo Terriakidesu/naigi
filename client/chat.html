@@ -10,17 +10,6 @@
   </head>
   <body>
     <div class="shell">
-      <header class="topbar">
-        <div class="brand-lockup">
-          <span class="brand-mark" aria-hidden="true">✦</span>
-          <div><strong>priv-chat</strong><span class="tag">private workspace</span></div>
-        </div>
-        <div class="connection-status">
-          <span class="status-dot" aria-hidden="true"></span>
-          <p id="status-line" class="status" role="status">Encrypted by your browser</p>
-        </div>
-      </header>
-
       <section id="chat-panel" class="chat-layout mobile-sidebar-open">
         <aside class="workspace-rail" aria-label="Workspace navigation">
           <button id="home-rail-button" class="rail-button rail-active" type="button" title="Direct messages" aria-label="Direct messages">✦</button>
@@ -38,6 +27,7 @@
             <div class="sidebar-heading-actions">
               <button id="server-invite-button" class="icon-button" type="button" title="Create invite" aria-label="Create invite" hidden>⌁</button>
               <button id="create-channel-button" class="icon-button" type="button" title="Create channel" aria-label="Create channel" hidden>＋</button>
+              <a id="server-settings-button" class="icon-button" href="/server-settings" title="Server settings" aria-label="Server settings" hidden>☷</a>
               <a class="icon-button" href="/settings" title="Settings" aria-label="Settings">⚙</a>
             </div>
           </div>
@@ -47,11 +37,12 @@
           <div class="section-heading"><span>DIRECT MESSAGES</span><span class="section-count">private</span></div>
           <div id="conversation-list" class="conversation-list"></div>
           <a class="create-button secondary" href="/new"><span aria-hidden="true">＋</span> Create conversation</a>
-          <div class="sidebar-user">
+           <div class="sidebar-user">
             <div class="user-avatar" aria-hidden="true">✦</div>
             <div class="user-copy"><strong id="user-label">Loading…</strong><span>online · keys protected</span></div>
-            <span class="user-status-dot" aria-hidden="true"></span>
-          </div>
+             <span class="user-status-dot" aria-hidden="true"></span>
+             <button id="lock-button" class="icon-button" type="button" title="Lock this browser" aria-label="Lock this browser">⌑</button>
+           </div>
         </aside>
         <button id="mobile-sidebar-backdrop" class="mobile-sidebar-backdrop" type="button" aria-label="Close conversation list"></button>
 
@@ -69,13 +60,15 @@
                 <button id="message-search-close" class="icon-button" type="button" title="Close search" aria-label="Close search">×</button>
               </div>
             </div>
-            <div class="chat-actions">
-              <button id="message-search-toggle" class="icon-button" type="button" title="Search messages" aria-label="Search messages" aria-expanded="false">⌕</button>
-              <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true">ⓘ</button>
+             <div class="chat-actions">
+               <div class="connection-status compact-connection-status"><span class="status-dot" aria-hidden="true"></span><p id="status-line" class="status" role="status">Encrypted</p></div>
+               <button id="message-search-toggle" class="icon-button" type="button" title="Search messages" aria-label="Search messages" aria-expanded="false">⌕</button>
+               <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true">ⓘ</button>
             </div>
           </header>
           <div class="chat-content">
-            <div id="messages" class="messages" aria-live="polite" aria-label="Messages"></div>
+             <div id="messages" class="messages" aria-live="polite" aria-label="Messages"><button id="load-older-button" class="load-older-button" type="button" hidden>Load older messages</button></div>
+             <button id="jump-latest-button" class="jump-latest-button" type="button" hidden>↓ New messages</button>
             <aside class="details-panel">
               <div class="details-heading"><strong>Conversation details</strong><button id="details-close" class="icon-button details-close" type="button" title="Close conversation details" aria-label="Close conversation details">×</button></div>
               <div class="privacy-card"><span class="privacy-icon" aria-hidden="true">✓</span><div><strong>End-to-end encrypted</strong><span>Only members can read messages.</span></div></div>

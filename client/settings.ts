@@ -1,4 +1,5 @@
 import { ApiClient, ApiError, type User } from "./api";
+import { clearSessionPassphrase, forgetRememberedPassphrase } from "./unlock-vault";
 
 type Device = {
   id: string;
@@ -13,6 +14,16 @@ const username = document.getElementById("settings-username") as HTMLElement;
 const deviceList = document.getElementById("device-list") as HTMLElement;
 const status = document.getElementById("settings-status") as HTMLElement;
 const logout = document.getElementById("logout-button") as HTMLButtonElement;
+const profileForm = document.getElementById("profile-form") as HTMLFormElement;
+const displayNameInput = document.getElementById("settings-display-name") as HTMLInputElement;
+const passwordForm = document.getElementById("password-form") as HTMLFormElement;
+const currentPassword = document.getElementById("current-password") as HTMLInputElement;
+const newPassword = document.getElementById("new-password") as HTMLInputElement;
+const confirmPassword = document.getElementById("confirm-password") as HTMLInputElement;
+const lockNow = document.getElementById("lock-now-button") as HTMLButtonElement;
+const forgetDevice = document.getElementById("forget-device-button") as HTMLButtonElement;
+const localUnlockStatus = document.getElementById("local-unlock-status") as HTMLElement;
+let currentUserId: string | undefined;
 
 function setStatus(message: string, error = false) {
   status.textContent = message;
@@ -22,6 +33,7 @@ function setStatus(message: string, error = false) {
 function renderProfile(user: User) {
   name.textContent = user.displayName;
   username.textContent = `@${user.username}`;
+  displayNameInput.value = user.displayName;
 }
 
 function renderDevices(devices: Device[]) {
@@ -81,6 +93,7 @@ async function loadDevices() {
 async function boot() {
   try {
     const result = await api.me();
+    currentUserId = result.user.id;
     renderProfile(result.user);
     await loadDevices();
   } catch (error) {
@@ -89,8 +102,66 @@ async function boot() {
   }
 }
 
+profileForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const value = displayNameInput.value.trim();
+  if (!value) return;
+  const button = profileForm.querySelector<HTMLButtonElement>("button[type=submit]");
+  if (button) button.disabled = true;
+  try {
+    const result = await api.updateProfile(value);
+    renderProfile(result.user);
+    setStatus("Profile saved.");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Unable to save profile.", true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+});
+
+passwordForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (newPassword.value !== confirmPassword.value) {
+    setStatus("The new passwords do not match.", true);
+    return;
+  }
+  const button = passwordForm.querySelector<HTMLButtonElement>("button[type=submit]");
+  if (button) button.disabled = true;
+  try {
+    await api.updatePassword(currentPassword.value, newPassword.value);
+    passwordForm.reset();
+    setStatus("Password changed.");
+  } catch (error) {
+    setStatus(error instanceof ApiError && error.code === "current_password_incorrect"
+      ? "The current password is incorrect."
+      : error instanceof Error ? error.message : "Unable to change password.", true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+});
+
+lockNow.addEventListener("click", () => {
+  clearSessionPassphrase();
+  window.location.assign(`/unlock?return=${encodeURIComponent("/settings")}`);
+});
+
+forgetDevice.addEventListener("click", async () => {
+  if (!currentUserId) return;
+  forgetDevice.disabled = true;
+  try {
+    await forgetRememberedPassphrase(currentUserId);
+    localUnlockStatus.textContent = "Remembered unlock removed from this browser.";
+  } catch {
+    localUnlockStatus.textContent = "Unable to remove the remembered unlock.";
+  } finally {
+    forgetDevice.disabled = false;
+  }
+});
+
 logout.addEventListener("click", async () => {
   await api.logout().catch(() => undefined);
+  clearSessionPassphrase();
+  if (currentUserId) await forgetRememberedPassphrase(currentUserId).catch(() => undefined);
   window.location.assign("/");
 });
 

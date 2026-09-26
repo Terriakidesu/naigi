@@ -28,6 +28,7 @@ if (!confirmed) {
           crypto_to_device_events,
           crypto_fallback_keys,
           server_invites,
+          categories,
           channels,
           server_members,
           servers
@@ -49,6 +50,7 @@ if (!confirmed) {
         (select count(*) from crypto_to_device_events) as crypto_to_device_events,
         (select count(*) from servers) as servers,
         (select count(*) from server_members) as server_members,
+        (select count(*) from categories) as categories,
         (select count(*) from channels) as channels,
         (select count(*) from server_invites) as server_invites
     `;

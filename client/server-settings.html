@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Server settings · priv-chat</title>
+    <link rel="stylesheet" href="/app.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  </head>
+  <body class="settings-page server-settings-page">
+    <header class="topbar">
+      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">✦</span><div><strong>priv-chat</strong><span class="tag">server settings</span></div></div>
+      <div class="topbar-links"><a id="back-to-server" class="text-link" href="/app">Back to server</a><button id="server-logout-button" class="text-link-button" type="button">Sign out</button></div>
+    </header>
+    <main class="server-settings-layout">
+      <section class="settings-section panel">
+        <p class="eyebrow">SERVER</p>
+        <h1 id="server-settings-title">Loading server…</h1>
+        <p id="server-settings-role" class="muted"></p>
+        <form id="server-form" class="settings-form">
+          <label for="server-name">Server name<input id="server-name" maxlength="80" required></label>
+          <label for="server-description">Description<textarea id="server-description" rows="3" maxlength="240"></textarea></label>
+          <button id="save-server-button" type="submit">Save server</button>
+        </form>
+      </section>
+
+      <section class="settings-section panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">CHANNEL ORGANIZATION</p><h2>Categories</h2></div><span class="muted small">Names are encrypted</span></div>
+        <form id="category-form" class="inline-settings-form">
+          <input id="new-category-name" maxlength="80" placeholder="New category name" required>
+          <button type="submit">Add category</button>
+        </form>
+        <div id="category-settings-list" class="settings-list"></div>
+      </section>
+
+      <section class="settings-section panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">TEXT CHANNELS</p><h2>Channels</h2></div><span class="muted small">Each channel has its own encrypted room</span></div>
+        <form id="channel-form" class="inline-settings-form channel-create-form">
+          <input id="new-channel-name" maxlength="80" placeholder="New channel name" required>
+          <select id="new-channel-category" aria-label="New channel category"><option value="">No category</option></select>
+          <button type="submit">Add channel</button>
+        </form>
+        <div id="channel-settings-list" class="settings-list"></div>
+      </section>
+
+      <section class="settings-section panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">PEOPLE</p><h2>Members</h2></div><span class="muted small">Membership is visible for authorization</span></div>
+        <div id="member-settings-list" class="settings-list"></div>
+      </section>
+
+      <section class="settings-section panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">INVITES</p><h2>Invite links</h2></div><button id="create-invite-settings" class="secondary" type="button">Create invite</button></div>
+        <div id="invite-settings-list" class="settings-list"></div>
+      </section>
+      <p id="server-settings-status" class="form-status" role="status"></p>
+    </main>
+    <script type="module" src="/server-settings.js"></script>
+  </body>
+</html>

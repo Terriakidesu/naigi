@@ -29,7 +29,7 @@ function newSessionToken() {
   return Buffer.from(bytes).toString("base64url");
 }
 
-async function hashSessionToken(token: string) {
+export async function hashSessionToken(token: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return Buffer.from(digest);
 }

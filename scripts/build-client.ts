@@ -1,6 +1,6 @@
 export {};
 
-for (const entry of ["auth", "register", "unlock", "main", "new", "settings"]) {
+for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "server-settings"]) {
   const result = await Bun.build({
     entrypoints: [`client/${entry}.ts`],
     outdir: "public",
@@ -18,7 +18,7 @@ for (const entry of ["auth", "register", "unlock", "main", "new", "settings"]) {
   }
 }
 
-for (const page of ["index", "register", "unlock", "chat", "new", "settings"]) {
+for (const page of ["index", "register", "unlock", "chat", "new", "settings", "server-settings"]) {
   await Bun.write(`public/${page}.html`, Bun.file(`client/${page}.html`));
 }
 await Bun.write("public/app.css", Bun.file("client/styles.css"));

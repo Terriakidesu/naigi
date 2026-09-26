@@ -29,7 +29,16 @@ export type ServerChannel = {
   serverId: string;
   conversationId: string;
   encryptedMetadata: string;
+  categoryId: string | null;
   kind: "text";
+  position: number;
+  createdAt: string;
+};
+
+export type ServerCategory = {
+  id: string;
+  serverId: string;
+  encryptedMetadata: string;
   position: number;
   createdAt: string;
 };
@@ -199,6 +208,14 @@ export class ApiClient {
     return this.get<{ user: User }>("/v1/me");
   }
 
+  updateProfile(displayName: string) {
+    return this.patch<{ user: User }>("/v1/me", { displayName });
+  }
+
+  updatePassword(currentPassword: string, newPassword: string) {
+    return this.post<{ updated: boolean }>("/v1/auth/password", { currentPassword, newPassword });
+  }
+
   devices() {
     return this.get<{ devices: Device[] }>("/v1/devices");
   }
@@ -243,12 +260,35 @@ export class ApiClient {
     return this.patch<{ server: Server }>(`/v1/servers/${serverId}`, { encryptedMetadata });
   }
 
-  createChannel(serverId: string, encryptedMetadata = "") {
-    return this.post<{ channel: ServerChannel }>(`/v1/servers/${serverId}/channels`, { encryptedMetadata });
+  createChannel(serverId: string, encryptedMetadata = "", categoryId: string | null = null) {
+    return this.post<{ channel: ServerChannel }>(`/v1/servers/${serverId}/channels`, { encryptedMetadata, categoryId });
   }
 
-  updateChannel(serverId: string, channelId: string, changes: { encryptedMetadata?: string; position?: number }) {
+  updateChannel(serverId: string, channelId: string, changes: { encryptedMetadata?: string; position?: number; categoryId?: string | null }) {
     return this.patch<{ channel: ServerChannel }>(`/v1/servers/${serverId}/channels/${channelId}`, changes);
+  }
+
+  deleteChannel(serverId: string, channelId: string) {
+    return this.delete<{ archived: boolean }>(`/v1/servers/${serverId}/channels/${channelId}`);
+  }
+
+  serverCategories(serverId: string) {
+    return this.get<{ categories: ServerCategory[] }>(`/v1/servers/${serverId}/categories`);
+  }
+
+  createCategory(serverId: string, encryptedMetadata = "", position?: number) {
+    return this.post<{ category: ServerCategory }>(`/v1/servers/${serverId}/categories`, {
+      encryptedMetadata,
+      ...(position === undefined ? {} : { position }),
+    });
+  }
+
+  updateCategory(serverId: string, categoryId: string, changes: { encryptedMetadata?: string; position?: number }) {
+    return this.patch<{ category: ServerCategory }>(`/v1/servers/${serverId}/categories/${categoryId}`, changes);
+  }
+
+  deleteCategory(serverId: string, categoryId: string) {
+    return this.delete<{ archived: boolean }>(`/v1/servers/${serverId}/categories/${categoryId}`);
   }
 
   createServerInvite(serverId: string, options: { maxUses?: number; expiresInSeconds?: number } = {}) {
@@ -256,6 +296,21 @@ export class ApiClient {
       `/v1/servers/${serverId}/invites`,
       options,
     );
+  }
+
+  serverInvites(serverId: string) {
+    return this.get<{ invites: Array<{
+      id: string;
+      maxUses: number;
+      uses: number;
+      expiresAt: string | null;
+      revokedAt: string | null;
+      createdAt: string;
+    }> }>(`/v1/servers/${serverId}/invites`);
+  }
+
+  revokeServerInvite(serverId: string, inviteId: string) {
+    return this.delete<{ revoked: boolean }>(`/v1/servers/${serverId}/invites/${inviteId}`);
   }
 
   acceptInvite(token: string) {
@@ -268,6 +323,10 @@ export class ApiClient {
 
   removeServerMember(serverId: string, userId: string) {
     return this.delete<{ removed: boolean }>(`/v1/servers/${serverId}/members/${userId}`);
+  }
+
+  updateServerMemberRole(serverId: string, userId: string, role: "admin" | "member") {
+    return this.patch<{ updated: boolean; role: "admin" | "member" }>(`/v1/servers/${serverId}/members/${userId}`, { role });
   }
 
   conversationMembers(conversationId: string) {

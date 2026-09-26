@@ -14,6 +14,7 @@ import {
   deleteSession,
   extractBearerToken,
   extractCookieToken,
+  hashSessionToken,
   normalizeUsername,
   verifyPassword,
 } from "./auth/session";
@@ -260,6 +261,16 @@ export function createApp() {
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
+    .get("/server-settings", async ({ set }) => {
+      const file = await publicFile("server-settings.html", "text/html; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/server-settings.js", async ({ set }) => {
+      const file = await publicFile("server-settings.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
     .get("/app.css", async ({ set }) => {
       const file = await publicFile("app.css", "text/css; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
@@ -338,6 +349,48 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       return { user };
     })
+    .patch("/v1/me", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const displayName = body.displayName.trim();
+      if (!displayName) return respondError(set, 400, "invalid_display_name");
+      const [updated] = await db<UserRow[]>`
+        update users
+        set display_name = ${displayName}, updated_at = now()
+        where id = ${user.id}
+        returning id, username, display_name, password_hash, created_at
+      `;
+      return { user: toPublicUser(updated) };
+    }, {
+      body: t.Object({ displayName: t.String({ minLength: 1, maxLength: 80 }) }),
+    })
+    .post("/v1/auth/password", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [record] = await db<UserRow[]>`
+        select id, username, display_name, password_hash, created_at
+        from users where id = ${user.id}
+      `;
+      if (!await verifyPassword(record, body.currentPassword)) return respondError(set, 400, "current_password_incorrect");
+      const passwordHash = await password.hash(body.newPassword);
+      await db`
+        update users set password_hash = ${passwordHash}, updated_at = now()
+        where id = ${user.id}
+      `;
+      const token = extractBearerToken(headers.authorization) ?? extractCookieToken(headers.cookie);
+      if (token) {
+        const tokenHash = await hashSessionToken(token);
+        await db`
+          delete from sessions where user_id = ${user.id} and token_hash <> ${tokenHash}
+        `;
+      }
+      return { updated: true };
+    }, {
+      body: t.Object({
+        currentPassword: t.String({ minLength: 1, maxLength: 128 }),
+        newPassword: t.String({ minLength: 12, maxLength: 128 }),
+      }),
+    })
     .get("/v1/users/search", async ({ headers, query, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
@@ -411,6 +464,7 @@ export function createApp() {
           serverId: created.server.id,
           conversationId: created.conversationId,
           encryptedMetadata: "",
+          categoryId: null,
           kind: "text",
           position: created.channel.position,
           createdAt: created.channel.created_at,
@@ -541,11 +595,12 @@ export function createApp() {
         server_id: string;
         conversation_id: string;
         encrypted_metadata: Buffer;
+        category_id: string | null;
         kind: string;
         position: number;
         created_at: Date;
       }[]>`
-        select id, server_id, conversation_id, encrypted_metadata, kind, position, created_at
+        select id, server_id, conversation_id, encrypted_metadata, category_id, kind, position, created_at
         from channels
         where server_id = ${params.serverId} and archived_at is null
         order by position asc, created_at asc
@@ -556,6 +611,7 @@ export function createApp() {
           serverId: channel.server_id,
           conversationId: channel.conversation_id,
           encryptedMetadata: encodeBase64(channel.encrypted_metadata),
+          categoryId: channel.category_id,
           kind: channel.kind,
           position: channel.position,
           createdAt: channel.created_at,
@@ -584,6 +640,13 @@ export function createApp() {
           select coalesce(max(position), -1) + 1 as next_position
           from channels where server_id = ${params.serverId} and archived_at is null
         `;
+        if (body.categoryId !== null && body.categoryId !== undefined) {
+          const [category] = await transaction<{ id: string }[]>`
+            select id from categories
+            where id = ${body.categoryId} and server_id = ${params.serverId} and archived_at is null
+          `;
+          if (!category) return { error: "category_not_found" as const };
+        }
         const [conversation] = await transaction<{ id: string }[]>`
           insert into conversations (kind, created_by)
           values ('channel', ${user.id})
@@ -597,13 +660,14 @@ export function createApp() {
           on conflict (conversation_id, user_id) do nothing
         `;
         const [channel] = await transaction<{ id: string; position: number; created_at: Date }[]>`
-          insert into channels (server_id, conversation_id, created_by, encrypted_metadata, position)
-          values (${params.serverId}, ${conversation.id}, ${user.id}, ${metadata}, ${body.position ?? position.next_position})
+          insert into channels (server_id, conversation_id, created_by, encrypted_metadata, category_id, position)
+          values (${params.serverId}, ${conversation.id}, ${user.id}, ${metadata}, ${body.categoryId ?? null}, ${body.position ?? position.next_position})
           returning id, position, created_at
         `;
         return { channel, conversationId: conversation.id };
       });
 
+      if ("error" in created) return respondError(set, 404, "category_not_found");
       set.status = 201;
       return {
         channel: {
@@ -611,6 +675,7 @@ export function createApp() {
           serverId: params.serverId,
           conversationId: created.conversationId,
           encryptedMetadata: encodeBase64(metadata),
+          categoryId: body.categoryId ?? null,
           kind: "text",
           position: created.channel.position,
           createdAt: created.channel.created_at,
@@ -620,6 +685,7 @@ export function createApp() {
       params: t.Object({ serverId: t.String({ format: "uuid" }) }),
       body: t.Object({
         encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
+        categoryId: t.Optional(t.Union([t.String({ format: "uuid" }), t.Null()])),
         position: t.Optional(t.Integer({ minimum: 0, maximum: 1_000_000 })),
       }),
     })
@@ -636,6 +702,14 @@ export function createApp() {
       `;
       if (!existing) return respondError(set, 404, "channel_not_found");
 
+      if (body.categoryId !== undefined && body.categoryId !== null) {
+        const [category] = await db<{ id: string }[]>`
+          select id from categories
+          where id = ${body.categoryId} and server_id = ${params.serverId} and archived_at is null
+        `;
+        if (!category) return respondError(set, 404, "category_not_found");
+      }
+
       let metadata: Buffer | undefined;
       try {
         metadata = body.encryptedMetadata === undefined
@@ -646,27 +720,41 @@ export function createApp() {
         throw error;
       }
 
-      const [channel] = await db<{
+      type ChannelUpdateRow = {
         id: string;
         server_id: string;
         conversation_id: string;
         encrypted_metadata: Buffer;
+        category_id: string | null;
         kind: string;
         position: number;
         created_at: Date;
-      }[]>`
-        update channels
-        set encrypted_metadata = coalesce(${metadata ?? null}, encrypted_metadata),
-            position = coalesce(${body.position ?? null}, position)
-        where id = ${existing.id}
-        returning id, server_id, conversation_id, encrypted_metadata, kind, position, created_at
-      `;
+      };
+      const channelRows = body.categoryId === undefined
+        ? await db<ChannelUpdateRow[]>`
+            update channels
+            set encrypted_metadata = coalesce(${metadata ?? null}, encrypted_metadata),
+                position = coalesce(${body.position ?? null}, position)
+            where id = ${existing.id}
+            returning id, server_id, conversation_id, encrypted_metadata, category_id, kind, position, created_at
+          `
+        : await db<ChannelUpdateRow[]>`
+            update channels
+            set encrypted_metadata = coalesce(${metadata ?? null}, encrypted_metadata),
+                category_id = ${body.categoryId},
+                position = coalesce(${body.position ?? null}, position)
+            where id = ${existing.id}
+            returning id, server_id, conversation_id, encrypted_metadata, category_id, kind, position, created_at
+          `;
+      const channel = channelRows[0];
+      if (!channel) return respondError(set, 404, "channel_not_found");
       return {
         channel: {
           id: channel.id,
           serverId: channel.server_id,
           conversationId: channel.conversation_id,
           encryptedMetadata: encodeBase64(channel.encrypted_metadata),
+          categoryId: channel.category_id,
           kind: channel.kind,
           position: channel.position,
           createdAt: channel.created_at,
@@ -676,8 +764,183 @@ export function createApp() {
       params: t.Object({ serverId: t.String({ format: "uuid" }), channelId: t.String({ format: "uuid" }) }),
       body: t.Object({
         encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
+        categoryId: t.Optional(t.Union([t.String({ format: "uuid" }), t.Null()])),
         position: t.Optional(t.Integer({ minimum: 0, maximum: 1_000_000 })),
       }),
+    })
+    .delete("/v1/servers/:serverId/channels/:channelId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+      const [activeCount] = await db<{ count: number }[]>`
+        select count(*)::int as count from channels
+        where server_id = ${params.serverId} and archived_at is null
+      `;
+      if (activeCount.count <= 1) return respondError(set, 409, "cannot_archive_last_channel");
+      const [metadataAnchor] = await db<{ id: string }[]>`
+        select id from channels
+        where server_id = ${params.serverId}
+        order by created_at asc
+        limit 1
+      `;
+      if (metadataAnchor?.id === params.channelId) return respondError(set, 409, "cannot_archive_metadata_channel");
+      const [archived] = await db<{ id: string }[]>`
+        update channels set archived_at = coalesce(archived_at, now())
+        where id = ${params.channelId} and server_id = ${params.serverId} and archived_at is null
+        returning id
+      `;
+      if (!archived) return respondError(set, 404, "channel_not_found");
+      return { archived: true };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), channelId: t.String({ format: "uuid" }) }),
+    })
+    .get("/v1/servers/:serverId/categories", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      if (!await serverMembership(params.serverId, user.id)) return respondError(set, 403, "not_a_server_member");
+      const categories = await db<{
+        id: string;
+        server_id: string;
+        encrypted_metadata: Buffer;
+        position: number;
+        created_at: Date;
+      }[]>`
+        select id, server_id, encrypted_metadata, position, created_at
+        from categories
+        where server_id = ${params.serverId} and archived_at is null
+        order by position asc, created_at asc
+      `;
+      return {
+        categories: categories.map((category) => ({
+          id: category.id,
+          serverId: category.server_id,
+          encryptedMetadata: encodeBase64(category.encrypted_metadata),
+          position: category.position,
+          createdAt: category.created_at,
+        })),
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/servers/:serverId/categories", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+
+      let metadata: Buffer;
+      try {
+        metadata = decodeEncryptedMetadata(body.encryptedMetadata);
+      } catch (error) {
+        if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_encrypted_metadata");
+        throw error;
+      }
+      const [position] = await db<{ next_position: number }[]>`
+        select coalesce(max(position), -1) + 1 as next_position
+        from categories where server_id = ${params.serverId} and archived_at is null
+      `;
+      const [category] = await db<{
+        id: string;
+        server_id: string;
+        encrypted_metadata: Buffer;
+        position: number;
+        created_at: Date;
+      }[]>`
+        insert into categories (server_id, created_by, encrypted_metadata, position)
+        values (${params.serverId}, ${user.id}, ${metadata}, ${body.position ?? position.next_position})
+        returning id, server_id, encrypted_metadata, position, created_at
+      `;
+      set.status = 201;
+      return {
+        category: {
+          id: category.id,
+          serverId: category.server_id,
+          encryptedMetadata: encodeBase64(category.encrypted_metadata),
+          position: category.position,
+          createdAt: category.created_at,
+        },
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
+        position: t.Optional(t.Integer({ minimum: 0, maximum: 1_000_000 })),
+      }),
+    })
+    .patch("/v1/servers/:serverId/categories/:categoryId", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+
+      const [existing] = await db<{ id: string }[]>`
+        select id from categories
+        where id = ${params.categoryId} and server_id = ${params.serverId} and archived_at is null
+      `;
+      if (!existing) return respondError(set, 404, "category_not_found");
+      let metadata: Buffer | undefined;
+      try {
+        metadata = body.encryptedMetadata === undefined ? undefined : decodeEncryptedMetadata(body.encryptedMetadata);
+      } catch (error) {
+        if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_encrypted_metadata");
+        throw error;
+      }
+      const [category] = await db<{
+        id: string;
+        server_id: string;
+        encrypted_metadata: Buffer;
+        position: number;
+        created_at: Date;
+      }[]>`
+        update categories
+        set encrypted_metadata = coalesce(${metadata ?? null}, encrypted_metadata),
+            position = coalesce(${body.position ?? null}, position)
+        where id = ${existing.id}
+        returning id, server_id, encrypted_metadata, position, created_at
+      `;
+      return {
+        category: {
+          id: category.id,
+          serverId: category.server_id,
+          encryptedMetadata: encodeBase64(category.encrypted_metadata),
+          position: category.position,
+          createdAt: category.created_at,
+        },
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), categoryId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
+        position: t.Optional(t.Integer({ minimum: 0, maximum: 1_000_000 })),
+      }),
+    })
+    .delete("/v1/servers/:serverId/categories/:categoryId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+      const archived = await db.begin(async (transaction) => {
+        const [category] = await transaction<{ id: string }[]>`
+          update categories set archived_at = coalesce(archived_at, now())
+          where id = ${params.categoryId} and server_id = ${params.serverId} and archived_at is null
+          returning id
+        `;
+        if (!category) return false;
+        await transaction`
+          update channels set category_id = null
+          where server_id = ${params.serverId} and category_id = ${params.categoryId}
+        `;
+        return true;
+      });
+      if (!archived) return respondError(set, 404, "category_not_found");
+      return { archived: true };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), categoryId: t.String({ format: "uuid" }) }),
     })
     .get("/v1/servers/:serverId/members", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -704,6 +967,39 @@ export function createApp() {
           displayName: member.display_name,
           role: member.role,
           joinedAt: member.joined_at,
+        })),
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+    })
+    .get("/v1/servers/:serverId/invites", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 403, "not_a_server_member");
+      if (!canManageServer(membership.role)) return respondError(set, 403, "insufficient_server_permissions");
+      const invites = await db<{
+        id: string;
+        max_uses: number;
+        uses: number;
+        expires_at: Date | null;
+        revoked_at: Date | null;
+        created_at: Date;
+      }[]>`
+        select id, max_uses, uses, expires_at, revoked_at, created_at
+        from server_invites
+        where server_id = ${params.serverId}
+        order by created_at desc
+        limit 100
+      `;
+      return {
+        invites: invites.map((invite) => ({
+          id: invite.id,
+          maxUses: invite.max_uses,
+          uses: invite.uses,
+          expiresAt: invite.expires_at,
+          revokedAt: invite.revoked_at,
+          createdAt: invite.created_at,
         })),
       };
     }, {

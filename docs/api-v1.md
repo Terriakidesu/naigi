@@ -17,6 +17,9 @@ Authorization: Bearer <session-token>
 All protected endpoints return `{ "error": "stable_error_code" }` on failure. Clients
 should branch on the HTTP status and error code rather than display server text.
 
+`PATCH /v1/me` changes the display name. `POST /v1/auth/password` accepts the current
+password and a new password; changing it revokes the account's other sessions.
+
 ## Servers and channels
 
 Servers are invite-only. Server membership, roles, channel order, IDs, and timestamps are
@@ -37,7 +40,12 @@ the backend does not depend on that representation.
 | `POST` | `/v1/servers` | Create a server and its initial `general` channel |
 | `GET` | `/v1/servers/:serverId` | Fetch one authorized server |
 | `PATCH` | `/v1/servers/:serverId` | Replace encrypted server metadata (owner/admin) |
+| `GET` | `/v1/servers/:serverId/categories` | List ordered active categories |
+| `POST` | `/v1/servers/:serverId/categories` | Create a category (owner/admin) |
+| `PATCH` | `/v1/servers/:serverId/categories/:categoryId` | Replace metadata or set `position` |
+| `DELETE` | `/v1/servers/:serverId/categories/:categoryId` | Archive a category and uncategorize its channels |
 | `GET` | `/v1/servers/:serverId/members` | List active members and roles |
+| `GET` | `/v1/servers/:serverId/invites` | List invite metadata (owner/admin) |
 | `POST` | `/v1/servers/:serverId/invites` | Create a hashed, expiring invite (owner/admin) |
 | `DELETE` | `/v1/servers/:serverId/invites/:inviteId` | Revoke an invite |
 | `POST` | `/v1/invites/:token/accept` | Join using a one-time-presented invite token |
@@ -51,11 +59,20 @@ the backend does not depend on that representation.
 | --- | --- | --- |
 | `GET` | `/v1/servers/:serverId/channels` | List ordered active text channels |
 | `POST` | `/v1/servers/:serverId/channels` | Create a text channel (owner/admin) |
-| `PATCH` | `/v1/servers/:serverId/channels/:channelId` | Replace metadata or set `position` |
+| `PATCH` | `/v1/servers/:serverId/channels/:channelId` | Replace metadata, category, or `position` |
+| `DELETE` | `/v1/servers/:serverId/channels/:channelId` | Archive a channel |
+
+The original channel created with a server is retained as the reference client's encrypted
+metadata anchor; it cannot be archived. The server also always retains at least one active
+text channel.
 
 Every channel includes a `conversationId`. This is the E2EE room identity and is used with
 the generic conversation endpoints below. It is distinct from the channel ID so a future
 frontend can keep navigation and cryptographic room state separate.
+
+Category IDs and channel ordering are server-visible for navigation. Category names and
+descriptions remain inside `encryptedMetadata`; the reference browser client encrypts
+category metadata in the first active channel room.
 
 ## Encrypted conversations
 
