@@ -201,6 +201,16 @@ const realtimeCommand = t.Union([
     type: t.Literal("unsubscribe"),
     conversationId: t.String({ format: "uuid" }),
   }),
+  t.Object({
+    type: t.Literal("typing"),
+    conversationId: t.String({ format: "uuid" }),
+    isTyping: t.Boolean(),
+  }),
+  t.Object({
+    type: t.Literal("presence"),
+    conversationId: t.String({ format: "uuid" }),
+    state: t.Union([t.Literal("online"), t.Literal("idle"), t.Literal("offline")]),
+  }),
 ]);
 
 export function createApp() {
@@ -2212,7 +2222,32 @@ export function createApp() {
           return;
         }
 
-        await connection.unsubscribe(command.conversationId);
+        if (command.type === "unsubscribe") {
+          await connection.unsubscribe(command.conversationId);
+          return;
+        }
+
+        if (command.type === "typing") {
+          const published = await connection.publish(command.conversationId, {
+            type: "typing",
+            conversationId: command.conversationId,
+            isTyping: command.isTyping,
+          });
+          if (!published) ws.send(JSON.stringify({ type: "error", error: "not_a_conversation_member" }));
+          return;
+        }
+
+        if (command.type === "presence") {
+          const published = await connection.publish(command.conversationId, {
+            type: "presence",
+            conversationId: command.conversationId,
+            state: command.state,
+          });
+          if (!published) ws.send(JSON.stringify({ type: "error", error: "not_a_conversation_member" }));
+          return;
+        }
+
+        ws.close(1003, "unsupported_realtime_command");
       },
       close: async (ws) => {
         const connection = realtimeConnections.get(ws);

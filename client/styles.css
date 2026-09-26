@@ -264,6 +264,10 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .member-copy strong, .member-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .member-copy strong { color: var(--text-muted); font-size: 0.7rem; }
 .member-copy span { margin-top: 0.12rem; color: var(--text-faint); font-size: 0.6rem; }
+.member-presence { display: inline-flex; align-items: center; gap: 0.25rem; }
+.member-presence::before { width: 6px; height: 6px; border-radius: 50%; content: ""; background: var(--text-faint); }
+.member-presence[data-state="online"]::before { background: var(--green); }
+.member-presence[data-state="idle"]::before { background: #f1bc66; }
 
 .composer { display: grid; gap: 0.4rem; margin: 0 1rem 1rem; }
 .chat-toast { position: absolute; z-index: 8; right: 1.2rem; bottom: 6.6rem; display: flex; align-items: center; gap: 0.75rem; max-width: min(440px, calc(100% - 2rem)); min-height: 44px; padding: 0.55rem 0.55rem 0.55rem 0.9rem; border: 1px solid rgba(142, 230, 175, 0.45); border-radius: 8px; color: var(--text); background: #24332c; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3); font-size: 0.78rem; line-height: 1.35; }
@@ -271,6 +275,9 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .chat-toast .icon-button { flex: 0 0 auto; margin-left: auto; }
 .outbox-notice { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; margin: 0.65rem 1.2rem; padding: 0.55rem 0.75rem; border: 1px solid rgba(241, 188, 102, 0.3); border-radius: 6px; color: #f5d9a4; background: rgba(241, 188, 102, 0.09); font-size: 0.75rem; }
 .outbox-notice button { flex: 0 0 auto; padding: 0.35rem 0.6rem; font-size: 0.7rem; }
+.typing-indicator { min-height: 1rem; margin: 0 1rem 0.25rem; color: var(--text-faint); font-size: 0.65rem; font-style: italic; }
+.typing-indicator::before { display: inline-block; width: 1.1rem; content: ""; }
+.typing-indicator[data-active="true"]::before { content: "•••"; color: var(--accent); font-style: normal; letter-spacing: 0.08em; }
 .reply-preview { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; min-width: 0; padding: 0.45rem 0.55rem 0.45rem 0.7rem; border-left: 3px solid var(--accent); border-radius: 4px; color: var(--text-muted); background: var(--bg-elevated); font-size: 0.7rem; }
 .reply-preview span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-suggestions { display: grid; gap: 0.2rem; max-height: 190px; overflow: auto; padding: 0.35rem; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--bg-elevated); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25); }

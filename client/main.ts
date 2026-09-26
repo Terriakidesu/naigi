@@ -73,7 +73,13 @@ const reactionEvents = new Map<string, { targetId: string; key: string; senderKe
 const pinnedMessageIds = new Set<string>();
 const editedMessageBodies = new Map<string, { body: string; embeds: SafeEmbed[]; mentions: string[] }>();
 type UnreadMarker = { count: number; lastSequence: string };
+type PresenceState = "online" | "idle" | "offline";
 const unreadMarkers = new Map<string, UnreadMarker>();
+const presenceByUser = new Map<string, PresenceState>();
+const typingUsers = new Map<string, number>();
+const typingTimers = new Map<string, number>();
+let localTypingConversationId: string | undefined;
+let localTypingStopTimer: number | undefined;
 const redactedMessageIds = new Set<string>();
 const redactionAuthors = new Map<string, string | null>();
 const MESSAGE_PAGE_SIZE = 50;
@@ -98,6 +104,7 @@ const chatToastClose = byId<HTMLButtonElement>("chat-toast-close");
 const outboxNotice = byId<HTMLElement>("outbox-notice");
 const outboxLabel = byId<HTMLElement>("outbox-label");
 const outboxRetry = byId<HTMLButtonElement>("outbox-retry");
+const typingIndicator = byId<HTMLElement>("typing-indicator");
 const userLabel = byId<HTMLElement>("user-label");
 const selfAvatar = byId<HTMLElement>("self-avatar");
 const selfProfileButton = byId<HTMLButtonElement>("self-profile-button");
@@ -185,6 +192,95 @@ function setConnectionStatus(message: string, state: "connected" | "connecting" 
   statusLine.textContent = message;
   connectionIndicator.dataset.state = state;
   connectionIndicator.title = message;
+}
+
+function sendRealtimeCommand(command: Record<string, unknown>) {
+  if (realtimeReadySocket !== realtime || realtime?.readyState !== WebSocket.OPEN) return false;
+  realtime.send(JSON.stringify(command));
+  return true;
+}
+
+function knownConversationIds() {
+  const known = new Set(conversations.map((conversation) => conversation.id));
+  for (const channel of channels) known.add(channel.conversationId);
+  if (selectedConversationId) known.add(selectedConversationId);
+  return known;
+}
+
+function publishPresence(state: PresenceState) {
+  for (const conversationId of knownConversationIds()) {
+    sendRealtimeCommand({ type: "presence", conversationId, state });
+  }
+}
+
+function stopLocalTyping() {
+  window.clearTimeout(localTypingStopTimer);
+  localTypingStopTimer = undefined;
+  if (localTypingConversationId) {
+    sendRealtimeCommand({ type: "typing", conversationId: localTypingConversationId, isTyping: false });
+    localTypingConversationId = undefined;
+  }
+}
+
+function updateLocalTyping() {
+  if (!selectedConversationId || !conversationReady || !messageInput.value.trim()) {
+    stopLocalTyping();
+    return;
+  }
+  const conversationId = selectedConversationId;
+  if (localTypingConversationId !== conversationId) {
+    stopLocalTyping();
+    localTypingConversationId = conversationId;
+    sendRealtimeCommand({ type: "typing", conversationId, isTyping: true });
+  }
+  window.clearTimeout(localTypingStopTimer);
+  localTypingStopTimer = window.setTimeout(stopLocalTyping, 2_500);
+}
+
+function renderTypingIndicator() {
+  const names = [...typingUsers.keys()]
+    .map((userId) => selectedMembers.find((member) => member.userId === userId)?.displayName
+      || selectedMembers.find((member) => member.userId === userId)?.username
+      || "Someone")
+    .filter((name, index, values) => values.indexOf(name) === index);
+  if (names.length === 0) {
+    typingIndicator.hidden = true;
+    typingIndicator.dataset.active = "false";
+    typingIndicator.textContent = "";
+    return;
+  }
+  typingIndicator.hidden = false;
+  typingIndicator.dataset.active = "true";
+  typingIndicator.textContent = names.length === 1
+    ? `${names[0]} is typing…`
+    : names.length === 2
+      ? `${names[0]} and ${names[1]} are typing…`
+      : `${names[0]}, ${names[1]}, and ${names.length - 2} others are typing…`;
+}
+
+function receiveTyping(conversationId: string, userId: string, isTyping: boolean) {
+  if (conversationId !== selectedConversationId || userId === currentUser?.id) return;
+  const previousTimer = typingTimers.get(userId);
+  if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+  if (!isTyping) {
+    typingUsers.delete(userId);
+    typingTimers.delete(userId);
+    renderTypingIndicator();
+    return;
+  }
+  typingUsers.set(userId, Date.now());
+  typingTimers.set(userId, window.setTimeout(() => {
+    typingUsers.delete(userId);
+    typingTimers.delete(userId);
+    renderTypingIndicator();
+  }, 4_000));
+  renderTypingIndicator();
+}
+
+function receivePresence(conversationId: string, userId: string, state: PresenceState) {
+  if (conversationId !== selectedConversationId || userId === currentUser?.id) return;
+  presenceByUser.set(userId, state);
+  renderMembers(selectedMembers);
 }
 
 function appendTwemoji(parent: HTMLElement, option: ReactionOption, className = "twemoji") {
@@ -950,12 +1046,28 @@ function connectRealtime() {
   socket.addEventListener("message", (event) => {
     if (socket !== realtime) return;
     try {
-      const payload = JSON.parse(event.data) as { type?: string; conversationId?: string; serverSequence?: string };
+      const payload = JSON.parse(event.data) as {
+        type?: string;
+        conversationId?: string;
+        serverSequence?: string;
+        userId?: string;
+        isTyping?: boolean;
+        state?: PresenceState;
+      };
       if (payload.type === "ready") {
         realtimeReadySocket = socket;
         setConnectionStatus("Connected", "connected");
         subscribeKnownConversations();
+        publishPresence(document.visibilityState === "hidden" ? "idle" : "online");
         void refreshMessages().catch((error) => setStatus(readableError(error), true));
+        return;
+      }
+      if (payload.type === "typing" && payload.conversationId && payload.userId && typeof payload.isTyping === "boolean") {
+        receiveTyping(payload.conversationId, payload.userId, payload.isTyping);
+        return;
+      }
+      if (payload.type === "presence" && payload.conversationId && payload.userId && payload.state) {
+        receivePresence(payload.conversationId, payload.userId, payload.state);
         return;
       }
       if (payload.type === "message.created" && payload.conversationId) {
@@ -981,16 +1093,11 @@ function connectRealtime() {
 }
 
 function subscribeRealtime(conversationId: string) {
-  if (realtimeReadySocket === realtime && realtime?.readyState === WebSocket.OPEN) {
-    realtime.send(JSON.stringify({ type: "subscribe", conversationId }));
-  }
+  sendRealtimeCommand({ type: "subscribe", conversationId });
 }
 
 function subscribeKnownConversations() {
-  const known = new Set(conversations.map((conversation) => conversation.id));
-  for (const channel of channels) known.add(channel.conversationId);
-  if (selectedConversationId) known.add(selectedConversationId);
-  for (const conversationId of known) subscribeRealtime(conversationId);
+  for (const conversationId of knownConversationIds()) subscribeRealtime(conversationId);
 }
 
 function avatarColor(seed: string) {
@@ -1412,7 +1519,12 @@ function renderMembers(members: ConversationMember[]) {
     const name = document.createElement("strong");
     name.textContent = memberName;
     const identity = document.createElement("span");
-    identity.textContent = member.userId === currentUser?.id ? "you · keys protected" : "keys protected";
+    identity.className = "member-presence";
+    const state = member.userId === currentUser?.id ? "online" : presenceByUser.get(member.userId) ?? "offline";
+    identity.dataset.state = state;
+    identity.textContent = member.userId === currentUser?.id
+      ? `you · ${state}`
+      : `${state} · keys protected`;
     copy.append(name, identity);
     row.append(avatar, copy);
     memberList.append(row);
@@ -1540,6 +1652,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   if (!cryptoClient) return;
   rememberDraft();
   uploadAbortController?.abort();
+  stopLocalTyping();
   const token = ++selectionToken;
   selectedConversationId = conversationId;
   conversationReady = false;
@@ -1559,6 +1672,11 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   closeMessageContextMenu();
   messageContextTargets.clear();
   unavailableMessageNotices.clear();
+  typingUsers.clear();
+  for (const timer of typingTimers.values()) window.clearTimeout(timer);
+  typingTimers.clear();
+  presenceByUser.clear();
+  renderTypingIndicator();
   clearEditTarget(false);
   clearUnread();
   clearConversationUnread(conversationId);
@@ -2394,6 +2512,7 @@ composer.addEventListener("submit", async (event) => {
   const text = messageInput.value.trim();
   const file = activeEdit ? undefined : photoInput.files?.[0];
   if (!text && !file) return;
+  stopLocalTyping();
   sendInProgress = true;
   updateComposerState();
   hideMentionSuggestions();
@@ -2495,6 +2614,7 @@ messageInput.addEventListener("keydown", (event) => {
 messageInput.addEventListener("input", resizeMessageInput);
 messageInput.addEventListener("input", () => {
   if (!editTarget) rememberDraft();
+  updateLocalTyping();
 });
 messageInput.addEventListener("input", renderMentionSuggestions);
 
@@ -2698,6 +2818,13 @@ mobileSidebarBackdrop.addEventListener("click", () => {
 
 window.addEventListener("resize", () => setMobileSidebar(chatLayout.classList.contains("mobile-sidebar-open")));
 setMobileSidebar(chatLayout.classList.contains("mobile-sidebar-open"));
+document.addEventListener("visibilitychange", () => {
+  publishPresence(document.visibilityState === "hidden" ? "idle" : "online");
+});
+window.addEventListener("pagehide", () => {
+  stopLocalTyping();
+  publishPresence("offline");
+});
 
 updateComposerState();
 resizeMessageInput();
