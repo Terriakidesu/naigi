@@ -79,7 +79,8 @@ category metadata in the first active channel room.
 The existing conversation transport is used for both DMs/groups and server text channels:
 
 - `GET /v1/conversations/:conversationId/members`
-- `GET /v1/conversations/:conversationId/messages?limit=100&before=<sequence>`
+- `GET /v1/conversations/:conversationId/messages?limit=50&before=<sequence>`
+- `GET /v1/conversations/:conversationId/messages?limit=50&after=<sequence>`
 - `POST /v1/conversations/:conversationId/messages`
 - `POST /v1/conversations/:conversationId/attachments`
 - `PUT /v1/attachments/:attachmentId`
@@ -88,7 +89,8 @@ The existing conversation transport is used for both DMs/groups and server text 
 Message requests contain a sender device ID, client UUID, protocol identifier, ciphertext,
 and optional protocol metadata. URLs, embed data, text, photo keys, and message metadata
 must already be encrypted by the client. History is cursor-paginated by `serverSequence`;
-PostgreSQL is authoritative after realtime reconnects.
+`before` returns older messages and `after` returns newer messages; only one cursor may be
+provided per request. PostgreSQL is authoritative after realtime reconnects.
 
 New server members are added to current channels but are not granted prior cryptographic
 history by this API. Removing a member stops future authorization and marks their channel

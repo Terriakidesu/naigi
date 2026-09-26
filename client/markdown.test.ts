@@ -21,6 +21,14 @@ test("markdown parser does not allow unsafe links", () => {
   ]);
 });
 
+test("markdown parser recognizes spoilers without exposing their contents as formatting", () => {
+  expect(parseInlineMarkdown("before ||secret text|| after")).toEqual([
+    { kind: "text", value: "before " },
+    { kind: "spoiler", value: "secret text" },
+    { kind: "text", value: " after" },
+  ]);
+});
+
 test("markdown parser supports code, quotes, lists, and paragraphs", () => {
   expect(parseMarkdown("> quote\n\n- one\n- two\n\n```ts\nconst x = 1;\n```")).toEqual([
     { kind: "quote", value: ["quote"] },

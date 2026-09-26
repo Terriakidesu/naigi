@@ -125,6 +125,12 @@ export type DecryptedMessage = {
   content: Record<string, unknown>;
 };
 
+export type ReplyReference = {
+  messageId: string;
+  sender: string;
+  body: string;
+};
+
 export class CryptoClient {
   private readonly api: ApiClient;
   private readonly accountUserId: string;
@@ -357,11 +363,18 @@ export class CryptoClient {
     });
   }
 
-  async sendText(conversationId: string, members: ConversationMember[], body: string, embeds: unknown[]) {
+  async sendText(conversationId: string, members: ConversationMember[], body: string, embeds: unknown[], replyTo?: ReplyReference) {
     return this.sendContent(conversationId, members, {
       msgtype: "m.text",
       body,
       embeds,
+      ...(replyTo ? {
+        replyTo: {
+          messageId: replyTo.messageId,
+          sender: replyTo.sender.slice(0, 120),
+          body: replyTo.body.slice(0, 1_000),
+        },
+      } : {}),
     });
   }
 

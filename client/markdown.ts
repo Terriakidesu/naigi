@@ -1,6 +1,6 @@
 export type MarkdownInline =
   | { kind: "text"; value: string }
-  | { kind: "strong" | "emphasis" | "strike" | "code"; value: string }
+  | { kind: "strong" | "emphasis" | "strike" | "code" | "spoiler"; value: string }
   | { kind: "link"; label: string; url: string };
 
 export type MarkdownBlock =
@@ -26,7 +26,7 @@ function pushText(tokens: MarkdownInline[], value: string) {
 
 export function parseInlineMarkdown(value: string): MarkdownInline[] {
   const tokens: MarkdownInline[] = [];
-  const pattern = /(\*\*|__)(.+?)\1|(\*|_)([^*_\n]+?)\3|~~([^~\n]+?)~~|`([^`\n]+)`|\[([^\]\n]+)\]\((\S+?)\)|((?:https?:\/\/)[^\s<]+)/gi;
+  const pattern = /(\*\*|__)(.+?)\1|(\*|_)([^*_\n]+?)\3|~~([^~\n]+?)~~|\|\|([^|\n]+?)\|\||`([^`\n]+)`|\[([^\]\n]+)\]\((\S+?)\)|((?:https?:\/\/)[^\s<]+)/gi;
   let offset = 0;
   for (const match of value.matchAll(pattern)) {
     const index = match.index ?? offset;
@@ -34,17 +34,18 @@ export function parseInlineMarkdown(value: string): MarkdownInline[] {
     if (match[2] !== undefined) tokens.push({ kind: "strong", value: match[2] });
     else if (match[4] !== undefined) tokens.push({ kind: "emphasis", value: match[4] });
     else if (match[5] !== undefined) tokens.push({ kind: "strike", value: match[5] });
-    else if (match[6] !== undefined) tokens.push({ kind: "code", value: match[6] });
-    else if (match[7] !== undefined && match[8] !== undefined) {
-      const url = safeLinkUrl(match[8].replace(/[),.!?:;]+$/g, ""));
-      if (url) tokens.push({ kind: "link", label: match[7], url });
+    else if (match[6] !== undefined) tokens.push({ kind: "spoiler", value: match[6] });
+    else if (match[7] !== undefined) tokens.push({ kind: "code", value: match[7] });
+    else if (match[8] !== undefined && match[9] !== undefined) {
+      const url = safeLinkUrl(match[9].replace(/[),.!?:;]+$/g, ""));
+      if (url) tokens.push({ kind: "link", label: match[8], url });
       else pushText(tokens, match[0]);
-    } else if (match[9] !== undefined) {
-      const raw = match[9].replace(/[),.!?:;]+$/g, "");
+    } else if (match[10] !== undefined) {
+      const raw = match[10].replace(/[),.!?:;]+$/g, "");
       const url = safeLinkUrl(raw);
       if (url) {
         tokens.push({ kind: "link", label: raw, url });
-        pushText(tokens, match[9].slice(raw.length));
+        pushText(tokens, match[10].slice(raw.length));
       }
       else pushText(tokens, match[0]);
     } else {
@@ -144,6 +145,27 @@ function appendInline(parent: HTMLElement, value: string) {
       link.rel = "noreferrer noopener nofollow";
       link.textContent = token.label;
       parent.append(link);
+      continue;
+    }
+    if (token.kind === "spoiler") {
+      const spoiler = document.createElement("span");
+      spoiler.className = "spoiler";
+      spoiler.tabIndex = 0;
+      spoiler.setAttribute("role", "button");
+      spoiler.setAttribute("aria-label", "Reveal spoiler");
+      spoiler.textContent = token.value;
+      const reveal = () => {
+        spoiler.classList.toggle("revealed");
+        spoiler.setAttribute("aria-label", spoiler.classList.contains("revealed") ? "Hide spoiler" : "Reveal spoiler");
+      };
+      spoiler.addEventListener("click", reveal);
+      spoiler.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          reveal();
+        }
+      });
+      parent.append(spoiler);
       continue;
     }
     const element = document.createElement(token.kind === "strong" ? "strong" : token.kind === "emphasis" ? "em" : token.kind === "strike" ? "del" : "code");

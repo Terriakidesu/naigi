@@ -2080,8 +2080,32 @@ export function createApp() {
 
       const limit = Math.min(Math.max(Number(query.limit ?? 50), 1), 100);
       const before = query.before ? BigInt(query.before) : undefined;
-      const rows = before === undefined
-        ? await db<MessageRow[]>`
+      const after = query.after ? BigInt(query.after) : undefined;
+      if (before !== undefined && after !== undefined) return respondError(set, 400, "one_message_cursor_only");
+
+      if (after !== undefined) {
+        const rows = await db<MessageRow[]>`
+             select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
+               m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
+               u.id as sender_user_id
+             from messages m
+             join devices d on d.id = m.sender_device_id
+             join users u on u.id = d.user_id
+             where m.conversation_id = ${params.conversationId} and m.server_sequence > ${after}
+             order by m.server_sequence asc
+             limit ${limit + 1}
+          `;
+        const hasMore = rows.length > limit;
+        const page = rows.slice(0, limit);
+        return {
+          messages: page.map(toMessage),
+          nextBefore: null,
+          nextAfter: hasMore ? String(page[page.length - 1]?.server_sequence) : null,
+        };
+      }
+
+       const rows = before === undefined
+         ? await db<MessageRow[]>`
             select m.id, m.conversation_id, m.sender_device_id, m.client_message_id,
               m.server_sequence, m.protocol, m.ciphertext, m.protocol_metadata, m.created_at,
               u.id as sender_user_id
@@ -2109,11 +2133,13 @@ export function createApp() {
       return {
         messages: page.map(toMessage),
         nextBefore: hasMore ? String(page[0]?.server_sequence) : null,
+        nextAfter: null,
       };
     }, {
       params: t.Object({ conversationId: t.String({ format: "uuid" }) }),
       query: t.Object({
         before: t.Optional(t.String({ pattern: "^[0-9]+$" })),
+        after: t.Optional(t.String({ pattern: "^[0-9]+$" })),
         limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })),
       }),
     })

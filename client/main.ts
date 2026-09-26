@@ -9,7 +9,7 @@ import {
   type ServerChannel,
   type User,
 } from "./api";
-import { CryptoClient } from "./crypto";
+import { CryptoClient, type ReplyReference } from "./crypto";
 import { appendSafeEmbed, extractEmbeds } from "./embeds";
 import { appendMarkdown } from "./markdown";
 import { clearSessionPassphrase, takeSessionPassphrase } from "./unlock-vault";
@@ -35,9 +35,16 @@ let olderMessagesLoading = false;
 let lastMessagesKey = "__not-rendered__";
 let loadedMessages: MessageEnvelope[] = [];
 let nextBefore: string | null = null;
+let nextAfter: string | null = null;
+let latestObservedSequence: bigint | null = null;
 let conversationSearchQuery = "";
 let messageSearchQuery = "";
 const drafts = new Map<string, string>();
+let replyTarget: ReplyReference | undefined;
+let unreadCount = 0;
+const MESSAGE_PAGE_SIZE = 50;
+const MAX_RENDERED_MESSAGES = 300;
+const MAX_CATCH_UP_PAGES = 100;
 let selectionToken = 0;
 let serverSelectionToken = 0;
 
@@ -74,6 +81,9 @@ const sendButton = byId<HTMLButtonElement>("send-button");
 const attachmentPreview = byId<HTMLElement>("attachment-preview");
 const attachmentLabel = byId<HTMLElement>("attachment-label");
 const clearAttachment = byId<HTMLButtonElement>("clear-attachment");
+const replyPreview = byId<HTMLElement>("reply-preview");
+const replyPreviewText = byId<HTMLElement>("reply-preview-text");
+const cancelReply = byId<HTMLButtonElement>("cancel-reply");
 const lockButton = byId<HTMLButtonElement>("lock-button");
 const mobileSidebarToggle = byId<HTMLButtonElement>("mobile-sidebar-toggle");
 const mobileSidebarBackdrop = byId<HTMLButtonElement>("mobile-sidebar-backdrop");
@@ -90,6 +100,104 @@ const jumpLatestButton = byId<HTMLButtonElement>("jump-latest-button");
 function setStatus(message: string, error = false) {
   statusLine.textContent = message;
   statusLine.classList.toggle("error", error);
+}
+
+function clearReplyTarget() {
+  replyTarget = undefined;
+  replyPreview.hidden = true;
+  replyPreviewText.textContent = "";
+}
+
+function setReplyTarget(target: ReplyReference) {
+  replyTarget = target;
+  const preview = target.body.replace(/\s+/g, " ").trim() || "Encrypted message";
+  replyPreviewText.textContent = `Replying to ${target.sender}: ${preview.slice(0, 180)}`;
+  replyPreview.hidden = false;
+  messageInput.focus();
+}
+
+function renderUnreadButton() {
+  const distanceFromBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight;
+  jumpLatestButton.textContent = unreadCount > 0
+    ? `↓ ${unreadCount} new message${unreadCount === 1 ? "" : "s"}`
+    : "↓ Jump to latest";
+  jumpLatestButton.hidden = unreadCount === 0 && distanceFromBottom < 100;
+}
+
+function clearUnread() {
+  unreadCount = 0;
+  renderUnreadButton();
+}
+
+type ScrollAnchor = {
+  messageId: string;
+  offset: number;
+};
+
+function messageSequence(message: MessageEnvelope) {
+  return BigInt(message.serverSequence);
+}
+
+function sortMessages(messages: MessageEnvelope[]) {
+  return [...messages].sort((left, right) => {
+    const leftSequence = messageSequence(left);
+    const rightSequence = messageSequence(right);
+    return leftSequence < rightSequence ? -1 : leftSequence > rightSequence ? 1 : 0;
+  });
+}
+
+function messagesKey(messages = loadedMessages) {
+  return messages.map((message) => `${message.id}:${message.createdAt}`).join("|");
+}
+
+function observeLatestMessages(messages: MessageEnvelope[]) {
+  for (const message of messages) {
+    const sequence = messageSequence(message);
+    if (latestObservedSequence === null || sequence > latestObservedSequence) latestObservedSequence = sequence;
+  }
+}
+
+function countUnseenMessages(messages: MessageEnvelope[]) {
+  const unseen = messages.filter((message) => latestObservedSequence === null || messageSequence(message) > latestObservedSequence).length;
+  observeLatestMessages(messages);
+  return unseen;
+}
+
+function mergeMessageWindow(messages: MessageEnvelope[], direction: "older" | "newer" | "latest") {
+  const byId = new Map(loadedMessages.map((message) => [message.id, message]));
+  for (const message of messages) byId.set(message.id, message);
+  const merged = sortMessages([...byId.values()]);
+  const trimmed = Math.max(0, merged.length - MAX_RENDERED_MESSAGES);
+  loadedMessages = direction === "older"
+    ? merged.slice(0, MAX_RENDERED_MESSAGES)
+    : merged.slice(-MAX_RENDERED_MESSAGES);
+  if (trimmed > 0 && loadedMessages.length > 0) {
+    if (direction === "older") nextAfter = loadedMessages[loadedMessages.length - 1].serverSequence;
+    else nextBefore = loadedMessages[0].serverSequence;
+  }
+  return { trimmed };
+}
+
+function captureScrollAnchor(): ScrollAnchor | null {
+  const panelRect = messagesPanel.getBoundingClientRect();
+  const anchor = [...messagesPanel.querySelectorAll<HTMLElement>(".message")].find((candidate) => {
+    const rect = candidate.getBoundingClientRect();
+    return rect.bottom > panelRect.top && rect.top < panelRect.bottom;
+  });
+  if (!anchor?.dataset.messageId) return null;
+  return {
+    messageId: anchor.dataset.messageId,
+    offset: anchor.getBoundingClientRect().top - panelRect.top,
+  };
+}
+
+function restoreScrollAnchor(anchor: ScrollAnchor | undefined) {
+  if (!anchor) return;
+  const target = [...messagesPanel.querySelectorAll<HTMLElement>(".message")]
+    .find((candidate) => candidate.dataset.messageId === anchor.messageId);
+  if (!target) return;
+  const panelRect = messagesPanel.getBoundingClientRect();
+  messagesPanel.scrollTop += target.getBoundingClientRect().top - panelRect.top - anchor.offset;
 }
 
 function readableError(error: unknown) {
@@ -140,7 +248,7 @@ function connectRealtime() {
     try {
       const payload = JSON.parse(event.data) as { type?: string; conversationId?: string };
       if (payload.type === "message.created" && payload.conversationId === selectedConversationId) {
-        void refreshMessages();
+        void refreshMessages().catch((error) => setStatus(readableError(error), true));
       }
     } catch {
       // Ignore malformed realtime notifications; history remains authoritative.
@@ -633,7 +741,10 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   lastMessagesKey = "__not-rendered__";
   loadedMessages = [];
   nextBefore = null;
-  jumpLatestButton.hidden = true;
+  nextAfter = null;
+  latestObservedSequence = null;
+  clearUnread();
+  clearReplyTarget();
   messageInput.value = drafts.get(conversationId) ?? "";
   resizeMessageInput();
   const conversation = conversations.find((item) => item.id === conversationId);
@@ -718,6 +829,62 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   await refreshMessages();
 }
 
+function replyReferenceFromContent(content: Record<string, unknown>) {
+  const value = content.replyTo;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const reply = value as Record<string, unknown>;
+  if (typeof reply.messageId !== "string" || typeof reply.sender !== "string" || typeof reply.body !== "string") return null;
+  return {
+    messageId: reply.messageId,
+    sender: reply.sender,
+    body: reply.body,
+  } satisfies ReplyReference;
+}
+
+function scrollToMessage(messageId: string) {
+  const article = [...messagesPanel.querySelectorAll<HTMLElement>(".message")]
+    .find((candidate) => candidate.dataset.messageId === messageId);
+  if (!article) {
+    setStatus("The replied-to message is not loaded in this view.", true);
+    return;
+  }
+  article.scrollIntoView({ behavior: "smooth", block: "center" });
+  article.classList.add("message-highlight");
+  window.setTimeout(() => article.classList.remove("message-highlight"), 1_200);
+}
+
+function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sender: string, body: string) {
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  const reply = document.createElement("button");
+  reply.className = "message-action";
+  reply.type = "button";
+  reply.textContent = "Reply";
+  reply.addEventListener("click", () => setReplyTarget({
+    messageId: message.id,
+    sender,
+    body: body || "Encrypted message",
+  }));
+  actions.append(reply);
+  if (body) {
+    const copy = document.createElement("button");
+    copy.className = "message-action";
+    copy.type = "button";
+    copy.textContent = "Copy";
+    copy.addEventListener("click", async () => {
+      try {
+        if (!navigator.clipboard) throw new Error("clipboard_unavailable");
+        await navigator.clipboard.writeText(body);
+        setStatus("Message copied.");
+      } catch {
+        setStatus("Unable to copy this message.", true);
+      }
+    });
+    actions.append(copy);
+  }
+  parent.append(actions);
+}
+
 function renderMessage(
   message: MessageEnvelope,
   decrypted: { sender: string; content: Record<string, unknown> } | null,
@@ -792,10 +959,22 @@ function renderMessage(
     messageContent.append(photoButton);
   }
 
+  const reply = replyReferenceFromContent(content);
+  if (reply) {
+    const replyContext = document.createElement("button");
+    replyContext.className = "reply-context";
+    replyContext.type = "button";
+    replyContext.title = "Jump to replied message";
+    replyContext.textContent = `↪ ${reply.sender}: ${(reply.body || "Encrypted message").replace(/\s+/g, " ").slice(0, 180)}`;
+    replyContext.addEventListener("click", () => scrollToMessage(reply.messageId));
+    messageContent.insertBefore(replyContext, messageContent.children[1] ?? null);
+  }
+  appendMessageActions(messageContent, message, senderIdentity, body);
+
   messagesPanel.append(article);
 }
 
-async function renderMessageHistory(options: { previousScrollTop?: number; preserveScroll?: boolean } = {}) {
+async function renderMessageHistory(options: { scrollAnchor?: ScrollAnchor; scrollToBottom?: boolean } = {}) {
   if (!selectedConversationId || !cryptoClient) return;
   const conversationId = selectedConversationId;
   const activeCryptoClient = cryptoClient;
@@ -835,9 +1014,9 @@ async function renderMessageHistory(options: { previousScrollTop?: number; prese
     previousTimestamp = currentTimestamp;
   }
   applyMessageSearch();
-  if (options.preserveScroll && options.previousScrollTop !== undefined) {
-    messagesPanel.scrollTop = options.previousScrollTop;
-  } else {
+  if (options.scrollAnchor) {
+    restoreScrollAnchor(options.scrollAnchor);
+  } else if (options.scrollToBottom !== false) {
     messagesPanel.scrollTop = messagesPanel.scrollHeight;
   }
 }
@@ -874,79 +1053,114 @@ async function appendNewMessages(messages: MessageEnvelope[], conversationId: st
   applyMessageSearch();
 }
 
+async function fetchNewerMessages(conversationId: string, activeCryptoClient: CryptoClient, selection: number, after: string) {
+  const messages: MessageEnvelope[] = [];
+  let cursor = after;
+  let nextCursor: string | null = null;
+  for (let page = 0; page < MAX_CATCH_UP_PAGES; page += 1) {
+    const result = await api.messages(conversationId, { after: cursor, limit: MESSAGE_PAGE_SIZE });
+    if (selection !== selectionToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return null;
+    messages.push(...result.messages);
+    nextCursor = result.nextAfter;
+    if (!result.nextAfter || result.nextAfter === cursor || result.messages.length === 0) break;
+    cursor = result.nextAfter;
+  }
+  return { messages, nextAfter: nextCursor };
+}
+
 async function refreshMessages(options: { forceScrollToBottom?: boolean } = {}) {
-  if (!selectedConversationId || !cryptoClient || messagesLoading) return;
+  if (!selectedConversationId || !cryptoClient || messagesLoading || olderMessagesLoading) return;
   const conversationId = selectedConversationId;
   const activeCryptoClient = cryptoClient;
+  const selection = selectionToken;
   messagesLoading = true;
   try {
     await activeCryptoClient.syncToDevice();
-    if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
-    const result = await api.messages(conversationId);
-    if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
-    const previousMessages = loadedMessages;
-    const previousIds = new Set(previousMessages.map((message) => message.id));
-    const newMessages = result.messages.filter((message) => !previousIds.has(message.id));
-    const previousLastSequence = previousMessages[previousMessages.length - 1]?.serverSequence;
-    const appendOnly = Boolean(previousLastSequence && newMessages.length > 0 && newMessages.every((message) => BigInt(message.serverSequence) > BigInt(previousLastSequence)));
-    const wasNearBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight < 100;
-    const followLatest = options.forceScrollToBottom || wasNearBottom;
-    const previousScrollTop = messagesPanel.scrollTop;
-    const byId = new Map(previousMessages.map((message) => [message.id, message]));
-    for (const message of result.messages) byId.set(message.id, message);
-    loadedMessages = [...byId.values()].sort((left, right) => Number(BigInt(left.serverSequence) - BigInt(right.serverSequence)));
-    if (previousMessages.length === 0) nextBefore = result.nextBefore;
-    else if (nextBefore === null) nextBefore = result.nextBefore;
-    const messageKey = loadedMessages.map((message) => `${message.id}:${message.createdAt}`).join("|");
-    if (messageKey === lastMessagesKey) {
-      applyMessageSearch();
-      loadOlderButton.hidden = !nextBefore;
-      if (followLatest) {
-        messagesPanel.scrollTop = messagesPanel.scrollHeight;
-        jumpLatestButton.hidden = true;
-      }
+    if (selection !== selectionToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+
+    if (options.forceScrollToBottom || loadedMessages.length === 0) {
+      const result = await api.messages(conversationId, { limit: MESSAGE_PAGE_SIZE });
+      if (selection !== selectionToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+      loadedMessages = sortMessages(result.messages).slice(-MAX_RENDERED_MESSAGES);
+      nextBefore = result.nextBefore;
+      nextAfter = null;
+      observeLatestMessages(loadedMessages);
+      lastMessagesKey = messagesKey();
+      await renderMessageHistory({ scrollToBottom: true });
+      clearUnread();
       return;
     }
-    lastMessagesKey = messageKey;
-    if (appendOnly) {
-      await appendNewMessages(newMessages, conversationId, activeCryptoClient);
-      if (followLatest) {
-        messagesPanel.scrollTop = messagesPanel.scrollHeight;
-        jumpLatestButton.hidden = true;
-      } else {
-        jumpLatestButton.hidden = false;
+
+    const previousMessages = loadedMessages;
+    const previousIds = new Set(previousMessages.map((message) => message.id));
+    const wasNearBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight < 100;
+    const followLatest = options.forceScrollToBottom || wasNearBottom;
+    const previousLast = previousMessages[previousMessages.length - 1];
+    if (!previousLast) return;
+    const catchUpCursor = followLatest || latestObservedSequence === null
+      ? previousLast.serverSequence
+      : latestObservedSequence.toString();
+    const caughtUp = await fetchNewerMessages(conversationId, activeCryptoClient, selection, catchUpCursor);
+    if (!caughtUp || selection !== selectionToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    const unseen = countUnseenMessages(caughtUp.messages);
+    const newMessages = caughtUp.messages.filter((message) => !previousIds.has(message.id));
+
+    if (!followLatest) {
+      if (unseen > 0) {
+        unreadCount += unseen;
       }
-    } else {
-      await renderMessageHistory({
-        previousScrollTop,
-        preserveScroll: !followLatest && previousMessages.length > 0,
-      });
-      jumpLatestButton.hidden = followLatest || previousMessages.length === 0;
+      nextAfter = caughtUp.messages.length > 0 ? previousLast.serverSequence : caughtUp.nextAfter;
+      renderUnreadButton();
+      return;
     }
+
+    if (newMessages.length === 0) {
+      nextAfter = caughtUp.nextAfter;
+      messagesPanel.scrollTop = messagesPanel.scrollHeight;
+      clearUnread();
+      return;
+    }
+
+    const merged = mergeMessageWindow(newMessages, "newer");
+    nextAfter = caughtUp.nextAfter;
+    lastMessagesKey = messagesKey();
+    const appendOnly = merged.trimmed === 0 && previousMessages.length > 0;
+    if (appendOnly) await appendNewMessages(newMessages, conversationId, activeCryptoClient);
+    else await renderMessageHistory({ scrollToBottom: true });
+    messagesPanel.scrollTop = messagesPanel.scrollHeight;
+    clearUnread();
   } finally {
     messagesLoading = false;
   }
 }
 
 async function loadOlderMessages() {
-  if (!selectedConversationId || !nextBefore || olderMessagesLoading) return;
+  if (!selectedConversationId || !cryptoClient || !nextBefore || olderMessagesLoading || messagesLoading) return;
+  const conversationId = selectedConversationId;
+  const activeCryptoClient = cryptoClient;
+  const selection = selectionToken;
+  const cursor = nextBefore;
   olderMessagesLoading = true;
   loadOlderButton.disabled = true;
+  loadOlderButton.textContent = "Loading older messages…";
   const beforeHeight = messagesPanel.scrollHeight;
   const beforeTop = messagesPanel.scrollTop;
+  const scrollAnchor = captureScrollAnchor();
   try {
-    const result = await api.messages(selectedConversationId, nextBefore);
-    const byId = new Map(result.messages.concat(loadedMessages).map((message) => [message.id, message]));
-    loadedMessages = [...byId.values()].sort((left, right) => Number(BigInt(left.serverSequence) - BigInt(right.serverSequence)));
+    const result = await api.messages(conversationId, { before: cursor, limit: MESSAGE_PAGE_SIZE });
+    if (selection !== selectionToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    const merged = mergeMessageWindow(result.messages, "older");
     nextBefore = result.nextBefore;
-    lastMessagesKey = loadedMessages.map((message) => `${message.id}:${message.createdAt}`).join("|");
-    await renderMessageHistory();
-    messagesPanel.scrollTop = beforeTop + (messagesPanel.scrollHeight - beforeHeight);
+    lastMessagesKey = messagesKey();
+    await renderMessageHistory({ scrollAnchor: scrollAnchor ?? undefined, scrollToBottom: false });
+    if (!scrollAnchor) messagesPanel.scrollTop = beforeTop + (messagesPanel.scrollHeight - beforeHeight);
+    if (merged.trimmed > 0 && loadedMessages.length > 0) nextAfter = loadedMessages[loadedMessages.length - 1].serverSequence;
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
     olderMessagesLoading = false;
     loadOlderButton.disabled = false;
+    loadOlderButton.textContent = "Load older messages";
     loadOlderButton.hidden = !nextBefore;
   }
 }
@@ -1064,10 +1278,11 @@ composer.addEventListener("submit", async (event) => {
   if (!text && !file) return;
   sendButton.disabled = true;
   try {
-    if (text) await cryptoClient.sendText(selectedConversationId, selectedMembers, text, extractEmbeds(text));
+    if (text) await cryptoClient.sendText(selectedConversationId, selectedMembers, text, extractEmbeds(text), replyTarget);
     if (file) await cryptoClient.sendPhoto(selectedConversationId, selectedMembers, file);
     messageInput.value = "";
     if (selectedConversationId) drafts.delete(selectedConversationId);
+    clearReplyTarget();
     photoInput.value = "";
     attachmentPreview.hidden = true;
     resizeMessageInput();
@@ -1099,6 +1314,8 @@ clearAttachment.addEventListener("click", () => {
   photoInput.value = "";
   attachmentPreview.hidden = true;
 });
+
+cancelReply.addEventListener("click", clearReplyTarget);
 
 conversationSearch.addEventListener("input", () => {
   conversationSearchQuery = conversationSearch.value;
@@ -1157,11 +1374,15 @@ detailsClose.addEventListener("click", () => {
 
 loadOlderButton.addEventListener("click", () => void loadOlderMessages());
 jumpLatestButton.addEventListener("click", () => {
-  messagesPanel.scrollTo({ top: messagesPanel.scrollHeight, behavior: "smooth" });
-  jumpLatestButton.hidden = true;
+  void refreshMessages({ forceScrollToBottom: true }).catch((error) => setStatus(readableError(error), true));
 });
 messagesPanel.addEventListener("scroll", () => {
-  if (messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight < 100) jumpLatestButton.hidden = true;
+  const distanceFromBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight;
+  if (distanceFromBottom < 100) {
+    clearUnread();
+    if (nextAfter) void refreshMessages();
+  } else renderUnreadButton();
+  if (messagesPanel.scrollTop < 240 && nextBefore) void loadOlderMessages();
 });
 lockButton.addEventListener("click", () => {
   clearSessionPassphrase();

@@ -71,6 +71,18 @@ export type MessageEnvelope = {
   createdAt: string;
 };
 
+export type MessagePage = {
+  messages: MessageEnvelope[];
+  nextBefore: string | null;
+  nextAfter: string | null;
+};
+
+export type MessagePageOptions = {
+  before?: string;
+  after?: string;
+  limit?: number;
+};
+
 export type AttachmentInfo = {
   id: string;
   extension: string;
@@ -340,10 +352,11 @@ export class ApiClient {
     });
   }
 
-  messages(conversationId: string, before?: string) {
-    const params = new URLSearchParams({ limit: "100" });
-    if (before) params.set("before", before);
-    return this.get<{ messages: MessageEnvelope[]; nextBefore: string | null }>(
+  messages(conversationId: string, options: MessagePageOptions = {}) {
+    const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
+    if (options.before) params.set("before", options.before);
+    if (options.after) params.set("after", options.after);
+    return this.get<MessagePage>(
       `/v1/conversations/${conversationId}/messages?${params.toString()}`,
     );
   }
