@@ -90,6 +90,32 @@ function attachmentMetadata(extension: string, mimeType: string) {
   return { extension: normalizedExtension, mimeType: normalizedMimeType };
 }
 
+function objectValue(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function matrixUserId(userId: string) {
+  return `@${userId}:priv-chat`;
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function parseCryptoUpload(value: unknown) {
+  const body = objectValue(value);
+  const deviceKeys = objectValue(body?.device_keys);
+  const keys = objectValue(deviceKeys?.keys);
+  const oneTimeKeys = objectValue(body?.one_time_keys) ?? {};
+  const fallbackKeys = objectValue(body?.fallback_keys) ?? {};
+  if (!deviceKeys || !keys || typeof deviceKeys.user_id !== "string" || !isUuid(deviceKeys.device_id)) return null;
+  if (Object.keys(oneTimeKeys).length > 100 || Object.keys(fallbackKeys).length > 10) return null;
+  if (!Object.values(keys).every((key) => typeof key === "string")) return null;
+  return { deviceKeys, oneTimeKeys, fallbackKeys };
+}
+
 const userBody = t.Object({
   username: t.String({ minLength: 3, maxLength: 32, pattern: "^[A-Za-z0-9_.-]+$" }),
   password: t.String({ minLength: 12, maxLength: 128 }),
@@ -118,7 +144,7 @@ export function createApp() {
       console.error("Unhandled request error");
       return respondError(set, 500, "internal_error");
     })
-    .get("/", () => ({ name: "priv-chat", version: "1.4.0" }))
+    .get("/", () => ({ name: "priv-chat", version: "1.5.0" }))
     .get("/health/live", () => ({ status: "ok" }))
     .get("/health/ready", async ({ set }) => {
       const [database, redis] = await Promise.allSettled([pingDatabase(), pingRedis()]);
@@ -369,6 +395,234 @@ export function createApp() {
       };
     }, {
       params: t.Object({ userId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/crypto/keys/upload", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const upload = parseCryptoUpload(body);
+      if (!upload || upload.deviceKeys.user_id !== matrixUserId(user.id)) {
+        return respondError(set, 400, "invalid_crypto_key_upload");
+      }
+
+      const deviceId = upload.deviceKeys.device_id as string;
+      const publicKeyBytes = Buffer.from(JSON.stringify(upload.deviceKeys));
+      await db.begin(async (transaction) => {
+        const [existingDevice] = await transaction<{ user_id: string }[]>`
+          select user_id from devices where id = ${deviceId}
+        `;
+        if (existingDevice && existingDevice.user_id !== user.id) {
+          throw new Error("crypto device belongs to another user");
+        }
+
+        if (!existingDevice) {
+          await transaction`
+            insert into devices (id, user_id, name, identity_key, signed_prekey)
+            values (
+              ${deviceId}, ${user.id}, 'web', ${publicKeyBytes}, ${publicKeyBytes}
+            )
+          `;
+        }
+
+        await transaction`
+          insert into crypto_devices (device_id, user_id, matrix_user_id, device_keys, fallback_keys)
+          values (
+            ${deviceId}, ${user.id}, ${upload.deviceKeys.user_id},
+            ${JSON.stringify(upload.deviceKeys)}::jsonb, ${JSON.stringify(upload.fallbackKeys)}::jsonb
+          )
+          on conflict (device_id) do update set
+            device_keys = excluded.device_keys,
+            fallback_keys = excluded.fallback_keys,
+            updated_at = now(),
+            revoked_at = null
+        `;
+
+        for (const [keyId, key] of Object.entries(upload.oneTimeKeys)) {
+          await transaction`
+            insert into crypto_one_time_keys (device_id, key_id, key_json)
+            values (${deviceId}, ${keyId}, ${JSON.stringify(key)}::jsonb)
+            on conflict (device_id, key_id) do update set
+              key_json = excluded.key_json,
+              claimed_at = null
+          `;
+        }
+      });
+
+      const [count] = await db<{ count: string }[]>`
+        select count(*)::text as count from crypto_one_time_keys
+        where device_id = ${deviceId} and claimed_at is null
+      `;
+      return {
+        one_time_key_counts: { signed_curve25519: Number(count.count) },
+        unused_fallback_key_types: Object.keys(upload.fallbackKeys).map((key) => key.split(":", 1)[0]),
+      };
+    }, { body: t.Any() })
+    .post("/v1/crypto/keys/query", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const request = objectValue(body);
+      const requested = objectValue(request?.device_keys);
+      if (!requested || Object.keys(requested).length > 100) return respondError(set, 400, "invalid_crypto_key_query");
+
+      const deviceKeys: Record<string, Record<string, unknown>> = {};
+      for (const [requestedUserId, requestedDevices] of Object.entries(requested)) {
+        if (!Array.isArray(requestedDevices) || requestedDevices.length > 100) {
+          return respondError(set, 400, "invalid_crypto_key_query");
+        }
+
+        const rows = await db<{ device_id: string; device_keys: unknown }[]>`
+          select device_id, device_keys
+          from crypto_devices
+          where matrix_user_id = ${requestedUserId} and revoked_at is null
+        `;
+        const allowed = new Set(requestedDevices.filter((deviceId): deviceId is string => typeof deviceId === "string"));
+        const selected: Record<string, unknown> = {};
+        for (const row of rows) {
+          if (allowed.size > 0 && !allowed.has(row.device_id)) continue;
+          selected[row.device_id] = row.device_keys;
+        }
+        if (Object.keys(selected).length > 0) deviceKeys[requestedUserId] = selected;
+      }
+
+      return { device_keys: deviceKeys, failures: {} };
+    }, { body: t.Any() })
+    .post("/v1/crypto/keys/claim", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const request = objectValue(body);
+      const requested = objectValue(request?.one_time_keys);
+      if (!requested || Object.keys(requested).length > 100) return respondError(set, 400, "invalid_crypto_key_claim");
+
+      const result: Record<string, Record<string, Record<string, unknown>>> = {};
+      await db.begin(async (transaction) => {
+        for (const [requestedUserId, requestedDevicesValue] of Object.entries(requested)) {
+          const requestedDevices = objectValue(requestedDevicesValue);
+          if (!requestedDevices) continue;
+
+          for (const [deviceId, algorithmValue] of Object.entries(requestedDevices)) {
+            if (typeof algorithmValue !== "string") continue;
+            const [key] = await transaction<{
+              key_id: string;
+              key_json: unknown;
+            }[]>`
+              select k.key_id, k.key_json
+              from crypto_one_time_keys k
+              join crypto_devices d on d.device_id = k.device_id
+              where d.matrix_user_id = ${requestedUserId}
+                and d.device_id = ${deviceId}
+                and d.revoked_at is null
+                and k.claimed_at is null
+                and k.key_id like ${`${algorithmValue}:%`}
+              order by k.created_at asc
+              limit 1
+              for update skip locked
+            `;
+            if (!key) continue;
+
+            await transaction`
+              update crypto_one_time_keys
+              set claimed_at = now()
+              where device_id = ${deviceId} and key_id = ${key.key_id}
+            `;
+            result[requestedUserId] ??= {};
+            result[requestedUserId][deviceId] = { [key.key_id]: key.key_json };
+          }
+        }
+      });
+
+      return { one_time_keys: result, failures: {} };
+    }, { body: t.Any() })
+    .post("/v1/crypto/send-to-device/:eventType/:transactionId", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const request = objectValue(body);
+      const messages = objectValue(request?.messages);
+      if (!messages || Object.keys(messages).length > 100) return respondError(set, 400, "invalid_to_device_message");
+
+      await db.begin(async (transaction) => {
+        for (const [requestedUserId, requestedDevicesValue] of Object.entries(messages)) {
+          const requestedDevices = objectValue(requestedDevicesValue);
+          if (!requestedDevices) continue;
+
+          for (const [deviceId, content] of Object.entries(requestedDevices)) {
+            if (!objectValue(content)) continue;
+            const [target] = await transaction<{ device_id: string }[]>`
+              select device_id from crypto_devices
+              where device_id = ${deviceId}
+                and matrix_user_id = ${requestedUserId}
+                and revoked_at is null
+            `;
+            if (!target) continue;
+
+            await transaction`
+              insert into crypto_to_device_events (
+                event_type, transaction_id, sender_user_id, recipient_device_id, content
+              )
+              values (
+                ${params.eventType}, ${params.transactionId}, ${matrixUserId(user.id)},
+                ${deviceId}, ${JSON.stringify(content)}::jsonb
+              )
+              on conflict (event_type, transaction_id, sender_user_id, recipient_device_id) do nothing
+            `;
+          }
+        }
+      });
+
+      return {};
+    }, {
+      params: t.Object({
+        eventType: t.String({ minLength: 1, maxLength: 128 }),
+        transactionId: t.String({ minLength: 1, maxLength: 255 }),
+      }),
+      body: t.Any(),
+    })
+    .get("/v1/crypto/to-device", async ({ headers, query, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const [device] = await db<{ device_id: string }[]>`
+        select device_id from crypto_devices
+        where device_id = ${query.deviceId} and user_id = ${user.id} and revoked_at is null
+      `;
+      if (!device) return respondError(set, 404, "crypto_device_not_found");
+
+      const events = await db.begin(async (transaction) => {
+        const pending = await transaction<{
+          id: bigint | number | string;
+          event_type: string;
+          sender_user_id: string;
+          content: unknown;
+        }[]>`
+          select id, event_type, sender_user_id, content
+          from crypto_to_device_events
+          where recipient_device_id = ${query.deviceId} and delivered_at is null
+          order by id asc
+          limit 500
+          for update skip locked
+        `;
+
+        for (const event of pending) {
+          await transaction`
+            update crypto_to_device_events set delivered_at = now() where id = ${event.id}
+          `;
+        }
+        return pending;
+      });
+
+      return {
+        events: events.map((event) => ({
+          type: event.event_type,
+          sender: event.sender_user_id,
+          content: event.content,
+        })),
+        device_lists: { changed: [], left: [] },
+        one_time_keys_count: {},
+      };
+    }, {
+      query: t.Object({ deviceId: t.String({ minLength: 1, maxLength: 255 }) }),
     })
     .post("/v1/conversations", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);

@@ -64,6 +64,21 @@ Create an attachment with `POST /v1/conversations/:conversationId/attachments`, 
 encrypted bytes with `PUT /v1/attachments/:attachmentId`, and download them with `GET
 /v1/attachments/:attachmentId`.
 
+## Matrix crypto transport
+
+The browser crypto adapter can use the Matrix SDK WASM state machine through these
+transport endpoints:
+
+- `POST /v1/crypto/keys/upload`
+- `POST /v1/crypto/keys/query`
+- `POST /v1/crypto/keys/claim`
+- `POST /v1/crypto/send-to-device/:eventType/:transactionId`
+- `GET /v1/crypto/to-device?deviceId=...`
+
+These endpoints store public device keys and encrypted to-device payloads. They do not
+decrypt, validate, or log message content. The WASM package is Apache-2.0 licensed and is
+initialized in the browser, with private state kept in its encrypted IndexedDB store.
+
 ## Getting Started
 To get started with this template, simply paste this command into your terminal:
 ```bash

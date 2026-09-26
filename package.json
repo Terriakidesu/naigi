@@ -1,6 +1,6 @@
 {
   "name": "priv-chat",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "scripts": {
     "test": "bun test",
     "typecheck": "bunx --bun tsc --noEmit",
@@ -9,6 +9,7 @@
     "db:migrate": "bun run src/db/migrate.ts"
   },
   "dependencies": {
+    "@matrix-org/matrix-sdk-crypto-wasm": "^18.9.0",
     "elysia": "latest"
   },
   "devDependencies": {
