@@ -1,4 +1,5 @@
 import { ApiClient, ApiError } from "./api";
+import { renderIcons } from "./icons";
 import {
   clearSessionPassphrase,
   forgetRememberedPassphrase,
@@ -46,6 +47,13 @@ function setStatus(message: string, error = false) {
   status.classList.toggle("error", error);
 }
 
+function unlockFailureMessage(reason: string | null) {
+  if (reason === "local_crypto_store_unlock_failed") {
+    return "Naigi could not open this browser’s encrypted key store. Check the local encryption passphrase, and make sure you are using the same browser profile.";
+  }
+  return "Naigi could not finish opening encrypted chat. Try again.";
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   submit.disabled = true;
@@ -69,7 +77,7 @@ logout.addEventListener("click", async () => {
 async function boot() {
   const reason = new URLSearchParams(window.location.search).get("error");
   const manualUnlock = new URLSearchParams(window.location.search).get("manual") === "1";
-  if (reason) setStatus("That passphrase did not unlock this browser. Try again.", true);
+  if (reason) setStatus(unlockFailureMessage(reason), true);
   try {
     const result = await api.me();
     currentUserId = result.user.id;
@@ -88,4 +96,5 @@ async function boot() {
   }
 }
 
+renderIcons();
 void boot();

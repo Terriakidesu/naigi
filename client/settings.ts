@@ -1,4 +1,5 @@
 import { ApiClient, ApiError, type User } from "./api";
+import { iconElement, renderIcons } from "./icons";
 import { clearSessionPassphrase, forgetRememberedPassphrase, lockLocalSession } from "./unlock-vault";
 
 type Device = {
@@ -51,8 +52,9 @@ function renderDevices(devices: Device[]) {
     const row = document.createElement("div");
     row.className = "device-row";
     const icon = document.createElement("span");
-    icon.className = "member-avatar";
-    icon.textContent = "⌁";
+    icon.className = "member-avatar device-icon";
+    icon.append(iconElement("monitor"));
+    renderIcons(icon);
     const copy = document.createElement("div");
     copy.className = "device-copy";
     const title = document.createElement("strong");
@@ -90,7 +92,10 @@ function renderDevices(devices: Device[]) {
 }
 
 function syncSettingsNav() {
-  const hash = window.location.hash || "#profile";
+  const requestedHash = window.location.hash || "#profile";
+  const views = [...document.querySelectorAll<HTMLElement>("[data-settings-view]")];
+  const hash = views.some((view) => `#${view.id}` === requestedHash) ? requestedHash : "#profile";
+  for (const view of views) view.hidden = `#${view.id}` !== hash;
   for (const link of document.querySelectorAll<HTMLAnchorElement>(".settings-nav-item")) {
     const active = link.hash === hash;
     link.classList.toggle("active", active);
@@ -101,6 +106,7 @@ function syncSettingsNav() {
 
 window.addEventListener("hashchange", syncSettingsNav);
 syncSettingsNav();
+renderIcons();
 
 async function loadDevices() {
   renderDevices((await api.devices()).devices as Device[]);

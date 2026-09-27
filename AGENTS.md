@@ -19,5 +19,5 @@
 ## Changelog and SemVer
 
 - Keep a `CHANGELOG.md` with an `## [Unreleased]` section and concise `Added`, `Changed`, `Fixed`, `Removed`, or `Security` entries for user-visible, API, schema, or crypto changes.
-- `package.json` is the authoritative application version (currently `1.7.0`) and must follow SemVer: patch for compatible fixes, minor for backward-compatible features, and major for breaking API/protocol/schema/crypto changes.
+- `package.json` is the authoritative application version (currently unreleased `0.9.0`) and must follow SemVer: patch for compatible fixes, minor for backward-compatible features, and major for breaking API/protocol/schema/crypto changes. Keep unreleased work grouped under one version instead of bumping for every individual change.
 - At release time, move the Unreleased entries under the bumped version and date; there is no automatic changelog or release script.

@@ -10,7 +10,8 @@ import {
   type ServerPermission,
   type ServerPermissionMap,
 } from "./api";
-import { CryptoClient } from "./crypto";
+import { CryptoClient, LocalCryptoStoreError } from "./crypto";
+import { renderIcons } from "./icons";
 import { showOneTimeToken } from "./ui-dialog";
 import {
   clearSessionPassphrase,
@@ -63,20 +64,44 @@ const channelNames = new Map<string, string>();
 const roleNames = new Map<string, string>();
 
 const permissionDefinitions: Array<{ id: ServerPermission; label: string; description: string }> = [
-  { id: "view_channels", label: "View channels", description: "See channels and read encrypted history." },
+  { id: "view_channels", label: "View rooms", description: "See rooms and read encrypted history." },
   { id: "send_messages", label: "Send messages", description: "Post encrypted messages in visible channels." },
-  { id: "upload_files", label: "Upload files", description: "Upload encrypted files in all unrestricted channels." },
-  { id: "mention_everyone", label: "Mention @everyone", description: "Use the @everyone broadcast mention." },
-  { id: "mention_here", label: "Mention @here", description: "Use the @here broadcast mention." },
+  { id: "upload_files", label: "Upload files", description: "Upload encrypted files in all unrestricted rooms." },
+  { id: "view_members", label: "View people", description: "See the space people directory." },
+  { id: "mention_everyone", label: "Broadcast to all", description: "Use the all-people broadcast mention." },
+  { id: "mention_here", label: "Mention active people", description: "Use the active-people broadcast mention." },
   { id: "mention_roles", label: "Mention roles", description: "Ping roles marked as mentionable." },
-  { id: "manage_server", label: "Manage server", description: "Edit server details and server-wide settings." },
-  { id: "manage_channels", label: "Manage channels", description: "Create, sort, edit, and archive channels." },
-  { id: "manage_invites", label: "Manage invites", description: "Create and revoke invite links." },
-  { id: "manage_roles", label: "Manage roles", description: "Create roles and assign them to members." },
-  { id: "manage_members", label: "Manage members", description: "Remove members and inspect moderation lists." },
+  { id: "manage_server", label: "Manage space", description: "Edit space details and space-wide settings." },
+  { id: "manage_channels", label: "Manage all rooms", description: "Legacy shortcut for every room management action." },
+  { id: "create_channels", label: "Create rooms", description: "Create new encrypted rooms." },
+  { id: "edit_channels", label: "Edit rooms", description: "Rename rooms and change their groups." },
+  { id: "reorder_channels", label: "Reorder rooms", description: "Change room ordering." },
+  { id: "archive_channels", label: "Archive rooms", description: "Archive rooms that are no longer needed." },
+  { id: "manage_categories", label: "Manage room groups", description: "Create, edit, reorder, and archive room groups." },
+  { id: "manage_channel_access", label: "Manage room access", description: "Set role-specific room visibility and uploads." },
+  { id: "manage_invites", label: "Manage all invites", description: "Legacy shortcut for every invite action." },
+  { id: "view_invites", label: "View invites", description: "See existing invite links and usage." },
+  { id: "create_invites", label: "Create invites", description: "Create new invite links." },
+  { id: "revoke_invites", label: "Revoke invites", description: "Disable existing invite links." },
+  { id: "manage_invite_limits", label: "Manage invite limits", description: "Set invite expiration and usage limits." },
+  { id: "manage_roles", label: "Manage all roles", description: "Legacy shortcut for every role action." },
+  { id: "create_roles", label: "Create roles", description: "Create new roles." },
+  { id: "edit_roles", label: "Edit roles", description: "Rename roles." },
+  { id: "delete_roles", label: "Delete roles", description: "Delete custom roles." },
+  { id: "assign_roles", label: "Assign roles", description: "Assign existing roles to members." },
+  { id: "reorder_roles", label: "Reorder roles", description: "Change role hierarchy positions." },
+  { id: "manage_role_permissions", label: "Manage role permissions", description: "Change role permissions and channel defaults." },
+  { id: "manage_role_appearance", label: "Manage role appearance", description: "Change role names and colors." },
+  { id: "manage_members", label: "Manage all people", description: "Legacy shortcut for people and moderation actions." },
+  { id: "kick_members", label: "Kick members", description: "Remove members without banning them." },
+  { id: "view_moderation_records", label: "View moderation records", description: "See active bans and timeouts." },
   { id: "ban_members", label: "Ban members", description: "Ban members and block future invites." },
+  { id: "unban_members", label: "Unban members", description: "Revoke active member bans." },
   { id: "timeout_members", label: "Timeout members", description: "Temporarily prevent messaging and uploads." },
-  { id: "delete_messages", label: "Delete messages", description: "Permanently remove encrypted messages for everyone." },
+  { id: "remove_timeouts", label: "Remove timeouts", description: "Restore members before their timeout expires." },
+  { id: "pin_messages", label: "Pin messages", description: "Pin and unpin encrypted messages." },
+  { id: "delete_others_messages", label: "Delete others' messages", description: "Permanently remove encrypted messages for everyone." },
+  { id: "delete_messages", label: "Delete messages (legacy)", description: "Legacy shortcut for moderator message deletion." },
 ];
 
 function normalizeRoleIds(value: unknown) {
@@ -90,6 +115,23 @@ function setStatus(message: string, error = false) {
   status.classList.toggle("error", error);
 }
 
+function syncSettingsNav() {
+  const requestedHash = window.location.hash || "#overview";
+  const views = [...document.querySelectorAll<HTMLElement>("[data-settings-view]")];
+  const hash = views.some((view) => `#${view.id}` === requestedHash) ? requestedHash : "#overview";
+  for (const view of views) view.hidden = `#${view.id}` !== hash;
+  for (const link of document.querySelectorAll<HTMLAnchorElement>(".server-settings-nav-item")) {
+    const active = link.hash === hash;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "location");
+    else link.removeAttribute("aria-current");
+  }
+}
+
+window.addEventListener("hashchange", syncSettingsNav);
+syncSettingsNav();
+renderIcons();
+
 function readableError(error: unknown) {
   if (error instanceof ApiError) {
     if (error.code === "current_password_incorrect") return "The current password is incorrect.";
@@ -97,12 +139,13 @@ function readableError(error: unknown) {
     if (error.code === "insufficient_channel_permissions") return "This role cannot use that channel.";
     if (error.code === "invalid_role_permissions") return "The role permissions were invalid.";
     if (error.code === "owner_role_is_not_customizable") return "The owner role cannot be pinged or restricted.";
+    if (error.code === "everyone_role_identity_is_not_customizable") return "The All members role identity cannot be changed.";
     if (error.code === "cannot_delete_system_role") return "System roles cannot be deleted.";
     if (error.code === "invalid_role_assignment") return "One or more selected roles are no longer available.";
     if (error.code === "cannot_assign_owner_role") return "The owner role cannot be assigned.";
     if (error.code === "role_hierarchy_violation") return "You can only manage roles below your highest role.";
     if (error.code === "server_banned") return "This account is banned from the server.";
-    if (error.code === "cannot_archive_last_channel") return "A server must keep one active text channel.";
+    if (error.code === "cannot_archive_last_channel") return "A space must keep one active encrypted room.";
     if (error.code === "cannot_archive_metadata_channel") return "The original channel anchors encrypted server metadata and cannot be archived.";
     return error.code;
   }
@@ -121,8 +164,14 @@ async function ensureCrypto() {
     window.location.assign(`/unlock?return=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
     return;
   }
-  cryptoClient = new CryptoClient(api, currentUserId, passphrase);
-  await cryptoClient.initialize();
+  const nextCryptoClient = new CryptoClient(api, currentUserId, passphrase);
+  try {
+    await nextCryptoClient.initialize();
+  } catch (error) {
+    await nextCryptoClient.close().catch(() => undefined);
+    throw error;
+  }
+  cryptoClient = nextCryptoClient;
   confirmLocalUnlock();
 }
 
@@ -149,8 +198,9 @@ async function encryptMetadata(conversationId: string, value: Record<string, unk
 }
 
 function roleName(role: CustomServerRole) {
-  if (roleNames.has(role.id)) return roleNames.get(role.id)!;
   if (role.systemKey === "owner") return "Owner";
+  if (role.systemKey === "everyone") return "All members";
+  if (roleNames.has(role.id)) return roleNames.get(role.id)!;
   if (role.systemKey === "admin") return "Administrator";
   if (role.systemKey === "member") return "Member";
   return "Unnamed role";
@@ -160,9 +210,41 @@ function defaultRolePermissions(): Partial<ServerPermissionMap> {
   return { view_channels: true };
 }
 
+function hasPermission(permission: ServerPermission) {
+  return Boolean(currentServer?.permissions[permission]);
+}
+
+function hasAnyPermission(...permissions: ServerPermission[]) {
+  return permissions.some((permission) => hasPermission(permission));
+}
+
+function canEditRoleAppearance() {
+  return hasAnyPermission("manage_roles", "manage_role_appearance");
+}
+
+function canEditRoleName() {
+  return hasAnyPermission("manage_roles", "edit_roles", "manage_role_appearance");
+}
+
+function canEditRolePermissions() {
+  return hasAnyPermission("manage_roles", "manage_role_permissions");
+}
+
+function canReorderRoles() {
+  return hasAnyPermission("manage_roles", "reorder_roles");
+}
+
+function canManageRoleAccess() {
+  return hasAnyPermission("manage_roles", "manage_channel_access");
+}
+
+function canAssignRoles() {
+  return hasAnyPermission("manage_roles", "assign_roles");
+}
+
 function roleOptions(selected: string[]) {
   const fragment = document.createDocumentFragment();
-  for (const role of roles.filter((candidate) => candidate.systemKey !== "owner")) {
+  for (const role of roles.filter((candidate) => candidate.systemKey !== "owner" && candidate.systemKey !== "everyone")) {
     const option = document.createElement("option");
     option.value = role.id;
     option.textContent = roleName(role);
@@ -225,9 +307,13 @@ function renderCategories() {
     position.value = String(category.position);
     position.className = "position-input";
     position.setAttribute("aria-label", "Category order");
+    const canEditCategories = hasAnyPermission("manage_channels", "manage_categories");
+    name.disabled = !canEditCategories;
+    position.disabled = !canEditCategories;
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = "Save";
+    save.disabled = !canEditCategories;
     save.addEventListener("click", async () => {
       save.disabled = true;
       try {
@@ -248,8 +334,9 @@ function renderCategories() {
     archive.className = "danger-button";
     archive.type = "button";
     archive.textContent = "Archive";
+    archive.disabled = !canEditCategories;
     archive.addEventListener("click", async () => {
-      if (!window.confirm(`Archive ${name.value || "this category"}? Channels will become uncategorized.`)) return;
+      if (!window.confirm(`Archive ${name.value || "this group"}? Rooms will become ungrouped.`)) return;
       archive.disabled = true;
       try {
         await api.deleteCategory(currentServer!.id, category.id);
@@ -271,13 +358,17 @@ async function saveChannel(channel: ServerChannel, name: HTMLInputElement, categ
   try {
     const normalized = name.value.trim();
     if (!normalized) throw new Error("Channel name is required.");
-    const channelMembers = await prepareConversation(channel.conversationId);
-    const encryptedMetadata = await cryptoClient!.encryptMetadata(channel.conversationId, channelMembers, { name: normalized, kind: "text" });
-    await api.updateChannel(currentServer!.id, channel.id, {
-      encryptedMetadata,
-      categoryId: category.value || null,
-      position: Math.max(0, Number(position.value) || 0),
-    });
+    const updates: Parameters<ApiClient["updateChannel"]>[2] = {};
+    if (hasAnyPermission("manage_channels", "edit_channels")) {
+      const channelMembers = await prepareConversation(channel.conversationId);
+      updates.encryptedMetadata = await cryptoClient!.encryptMetadata(channel.conversationId, channelMembers, { name: normalized, kind: "text" });
+      updates.categoryId = category.value || null;
+    }
+    if (hasAnyPermission("manage_channels", "reorder_channels")) {
+      updates.position = Math.max(0, Number(position.value) || 0);
+    }
+    if (Object.keys(updates).length === 0) return;
+    await api.updateChannel(currentServer!.id, channel.id, updates);
     channelNames.set(channel.id, normalized);
     setStatus("Channel saved.");
     await loadData();
@@ -306,14 +397,19 @@ function renderChannels() {
     position.value = String(channel.position);
     position.className = "position-input";
     position.setAttribute("aria-label", "Channel order");
+    name.disabled = !hasAnyPermission("manage_channels", "edit_channels");
+    category.disabled = !hasAnyPermission("manage_channels", "edit_channels");
+    position.disabled = !hasAnyPermission("manage_channels", "reorder_channels");
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = "Save";
+    save.disabled = !hasAnyPermission("manage_channels", "edit_channels", "reorder_channels");
     save.addEventListener("click", () => void saveChannel(channel, name, category, position, save));
     const archive = document.createElement("button");
     archive.className = "danger-button";
     archive.type = "button";
     archive.textContent = "Archive";
+    archive.disabled = !hasAnyPermission("manage_channels", "archive_channels");
     archive.addEventListener("click", async () => {
       if (!window.confirm(`Archive ${name.value || "this channel"}?`)) return;
       archive.disabled = true;
@@ -332,7 +428,7 @@ function renderChannels() {
   if (channels.length === 0) {
     const empty = document.createElement("p");
     empty.className = "muted small";
-    empty.textContent = "No active text channels.";
+    empty.textContent = "No active encrypted rooms.";
     channelList.append(empty);
   }
 }
@@ -346,8 +442,25 @@ function renderRoles() {
     roleList.append(empty);
     return;
   }
-  const canManageRoles = Boolean(currentServer && currentServer.permissions.manage_roles);
+  const canManageRoles = hasAnyPermission(
+    "manage_roles",
+    "delete_roles",
+    "edit_roles",
+    "reorder_roles",
+    "manage_role_permissions",
+    "manage_role_appearance",
+    "manage_channel_access",
+  );
   for (const role of roles) {
+    const ownerRole = role.systemKey === "owner";
+    const everyoneRole = role.systemKey === "everyone";
+    const editableSystemRole = currentServer?.role === "owner" && role.systemKey !== "owner";
+    const canEditThisRole = !role.isSystem || editableSystemRole;
+    const canEditName = canEditThisRole && canEditRoleName();
+    const canEditAppearance = canEditThisRole && canEditRoleAppearance();
+    const canEditPermissions = canEditThisRole && canEditRolePermissions();
+    const canEditRolePosition = canEditThisRole && canReorderRoles();
+    const canEditChannelAccess = canEditThisRole && canManageRoleAccess();
     const card = document.createElement("article");
     card.className = "role-settings-card";
     card.style.setProperty("--role-color", role.color);
@@ -373,7 +486,7 @@ function renderRoles() {
       const owner = members.find((member) => member.userId === currentServer?.ownerId);
       const ownerLabel = document.createElement("span");
       ownerLabel.className = "role-system-owner";
-      ownerLabel.textContent = owner ? `${owner.displayName} · cannot be pinged` : "Server owner · cannot be pinged";
+      ownerLabel.textContent = owner ? `${owner.displayName} · cannot be pinged` : "Space owner · cannot be pinged";
       heading.append(ownerLabel);
     }
     card.append(heading);
@@ -384,12 +497,12 @@ function renderRoles() {
     name.value = roleName(role);
     name.maxLength = 80;
     name.setAttribute("aria-label", `${roleName(role)} name`);
-    name.disabled = role.systemKey === "owner" || !canManageRoles;
+    name.disabled = ownerRole || everyoneRole || !canEditName;
     const color = document.createElement("input");
     color.type = "color";
     color.value = role.color;
     color.setAttribute("aria-label", `${roleName(role)} color`);
-    color.disabled = !canManageRoles || role.systemKey === "owner";
+    color.disabled = ownerRole || everyoneRole || !canEditAppearance;
     const position = document.createElement("input");
     position.type = "number";
     position.min = "0";
@@ -397,7 +510,7 @@ function renderRoles() {
     position.value = String(role.position);
     position.className = "position-input";
     position.setAttribute("aria-label", `${roleName(role)} position`);
-    position.disabled = !canManageRoles || role.systemKey === "owner";
+    position.disabled = ownerRole || everyoneRole || !canEditRolePosition;
     form.append(name, color, position);
     card.append(form);
 
@@ -408,7 +521,7 @@ function renderRoles() {
     const mentionable = document.createElement("input");
     mentionable.type = "checkbox";
     mentionable.checked = role.mentionable;
-    mentionable.disabled = !canManageRoles || role.systemKey === "owner";
+    mentionable.disabled = ownerRole || everyoneRole || !canEditAppearance;
     const mentionableText = document.createElement("span");
     mentionableText.textContent = "Mentionable role";
     mentionableLabel.append(mentionable, mentionableText);
@@ -417,9 +530,9 @@ function renderRoles() {
     const viewAll = document.createElement("input");
     viewAll.type = "checkbox";
     viewAll.checked = role.viewAllChannels;
-    viewAll.disabled = !canManageRoles || role.systemKey === "owner";
+    viewAll.disabled = ownerRole || !canEditChannelAccess;
     const viewAllText = document.createElement("span");
-    viewAllText.textContent = "View every channel";
+    viewAllText.textContent = "View every room";
     viewAllLabel.append(viewAll, viewAllText);
     controls.append(mentionableLabel, viewAllLabel);
     card.append(controls);
@@ -437,7 +550,7 @@ function renderRoles() {
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.checked = role.permissions[definition.id];
-      checkbox.disabled = !canManageRoles || role.systemKey === "owner";
+      checkbox.disabled = ownerRole || !canEditPermissions;
       permissionInputs.set(definition.id, checkbox);
       const copy = document.createElement("span");
       const title = document.createElement("strong");
@@ -452,7 +565,7 @@ function renderRoles() {
 
     const channelHeading = document.createElement("h3");
     channelHeading.className = "role-card-subheading";
-    channelHeading.textContent = "Channel access";
+    channelHeading.textContent = "Room access";
     card.append(channelHeading);
     const accessGrid = document.createElement("div");
     accessGrid.className = "role-channel-access-grid";
@@ -468,7 +581,7 @@ function renderRoles() {
       const view = document.createElement("input");
       view.type = "checkbox";
       view.checked = Boolean(access?.canView || access?.canUpload);
-      view.disabled = !canManageRoles || role.systemKey === "owner" || role.viewAllChannels;
+      view.disabled = ownerRole || !canEditChannelAccess || role.viewAllChannels;
       const viewText = document.createElement("span");
       viewText.textContent = "View";
       viewLabel.append(view, viewText);
@@ -477,7 +590,7 @@ function renderRoles() {
       const upload = document.createElement("input");
       upload.type = "checkbox";
       upload.checked = Boolean(access?.canUpload);
-      upload.disabled = !canManageRoles || role.systemKey === "owner" || role.viewAllChannels || !role.permissions.upload_files;
+      upload.disabled = ownerRole || !canEditChannelAccess || role.viewAllChannels || !role.permissions.upload_files;
       upload.addEventListener("change", () => {
         if (upload.checked) view.checked = true;
       });
@@ -491,7 +604,7 @@ function renderRoles() {
     if (channels.length === 0) {
       const empty = document.createElement("p");
       empty.className = "muted small";
-      empty.textContent = "Create a channel before restricting this role.";
+      empty.textContent = "Create a room before restricting this role.";
       accessGrid.append(empty);
     }
     card.append(accessGrid);
@@ -501,29 +614,34 @@ function renderRoles() {
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = "Save role";
-    save.disabled = !canManageRoles || role.systemKey === "owner";
+    save.disabled = ownerRole || !canManageRoles || !canEditThisRole;
     save.addEventListener("click", async () => {
       if (!currentServer || !metadataConversationId) return;
       save.disabled = true;
       try {
-        const permissions = Object.fromEntries(permissionDefinitions.map((definition) => [
-          definition.id,
-          permissionInputs.get(definition.id)!.checked,
-        ])) as Partial<ServerPermissionMap>;
-        const encryptedMetadata = role.systemKey === "owner"
-          ? undefined
-          : await encryptMetadata(metadataConversationId, { name: name.value.trim(), kind: "server-role" });
-        await api.updateServerRole(currentServer.id, role.id, {
-          ...(encryptedMetadata ? { encryptedMetadata } : {}),
-          color: color.value,
-          position: Math.max(0, Number(position.value) || 0),
-          permissions,
-          mentionable: mentionable.checked,
-          viewAllChannels: viewAll.checked,
-        });
+        const updates: Parameters<ApiClient["updateServerRole"]>[2] = {};
+        if (canEditName && !ownerRole && !everyoneRole) {
+          updates.encryptedMetadata = await encryptMetadata(metadataConversationId, { name: name.value.trim(), kind: "server-role" });
+        }
+        if (canEditAppearance && !ownerRole && !everyoneRole) {
+          updates.color = color.value;
+          updates.mentionable = mentionable.checked;
+        }
+        if (canEditRolePosition && !ownerRole && !everyoneRole) {
+          updates.position = Math.max(0, Number(position.value) || 0);
+        }
+        if (canEditPermissions && !ownerRole) {
+          updates.permissions = Object.fromEntries(permissionDefinitions.map((definition) => [
+            definition.id,
+            permissionInputs.get(definition.id)!.checked,
+          ])) as Partial<ServerPermissionMap>;
+        }
+        if (canEditChannelAccess && !ownerRole) updates.viewAllChannels = viewAll.checked;
+        if (Object.keys(updates).length === 0) return;
+        await api.updateServerRole(currentServer.id, role.id, updates);
         for (const channel of channels) {
           const inputs = channelInputs.get(channel.id);
-          if (!inputs || viewAll.checked || role.systemKey === "owner") continue;
+          if (!inputs || viewAll.checked || ownerRole || !canEditChannelAccess) continue;
           if (!inputs.view.checked && !inputs.upload.checked) {
             await api.removeServerRoleChannelAccess(currentServer.id, role.id, channel.id);
           } else {
@@ -543,9 +661,9 @@ function renderRoles() {
       remove.type = "button";
       remove.className = "danger-button";
       remove.textContent = "Delete role";
-      remove.disabled = !canManageRoles;
+      remove.disabled = !hasAnyPermission("manage_roles", "delete_roles") || !canEditThisRole;
       remove.addEventListener("click", async () => {
-        if (!currentServer || !window.confirm(`Delete ${roleName(role)}? Members will keep access only through their other roles.`)) return;
+          if (!currentServer || !window.confirm(`Delete ${roleName(role)}? People will keep access only through their other roles.`)) return;
         remove.disabled = true;
         try {
           await api.deleteServerRole(currentServer.id, role.id);
@@ -590,7 +708,7 @@ function renderMembers() {
       roleSummary.append(badge);
     }
     if (roleSummary.childElementCount > 0) copy.append(roleSummary);
-    const canManageRoles = Boolean(currentServer?.permissions.manage_roles);
+    const canManageRoles = canAssignRoles();
     if (member.userId !== currentUserId && member.role !== "owner" && canManageRoles) {
       const role = document.createElement("select");
       role.multiple = true;
@@ -611,13 +729,13 @@ function renderMembers() {
       row.append(role);
     }
     if (member.userId !== currentUserId && member.role !== "owner" &&
-      currentServer?.permissions.manage_members) {
+      hasAnyPermission("manage_members", "kick_members")) {
       const remove = document.createElement("button");
       remove.className = "danger-button";
       remove.type = "button";
       remove.textContent = "Remove";
       remove.addEventListener("click", async () => {
-        if (!window.confirm(`Remove ${member.displayName} from this server?`)) return;
+        if (!window.confirm(`Remove ${member.displayName} from this space?`)) return;
         remove.disabled = true;
         try {
           await api.removeServerMember(currentServer!.id, member.userId);
@@ -630,7 +748,7 @@ function renderMembers() {
       });
       row.append(remove);
     }
-    if (member.userId !== currentUserId && member.role !== "owner" && currentServer?.permissions.ban_members) {
+    if (member.userId !== currentUserId && member.role !== "owner" && hasAnyPermission("manage_members", "ban_members")) {
       const ban = document.createElement("button");
       ban.className = "danger-button";
       ban.type = "button";
@@ -649,7 +767,7 @@ function renderMembers() {
       });
       row.append(ban);
     }
-    if (member.userId !== currentUserId && member.role !== "owner" && currentServer?.permissions.timeout_members) {
+    if (member.userId !== currentUserId && member.role !== "owner" && hasAnyPermission("manage_members", "timeout_members")) {
       const timeout = document.createElement("button");
       timeout.type = "button";
       timeout.className = "secondary";
@@ -673,8 +791,8 @@ function renderMembers() {
 
 function renderModeration() {
   moderationList.replaceChildren();
-  const canBan = Boolean(currentServer?.permissions.ban_members);
-  const canTimeout = Boolean(currentServer?.permissions.timeout_members);
+  const canUnban = hasAnyPermission("manage_members", "unban_members");
+  const canRemoveTimeout = hasAnyPermission("manage_members", "remove_timeouts");
   if (moderation.bans.length === 0 && moderation.timeouts.length === 0) {
     const empty = document.createElement("p");
     empty.className = "muted small";
@@ -693,7 +811,7 @@ function renderModeration() {
     detail.textContent = ban.expiresAt ? `@${ban.username} · expires ${new Date(ban.expiresAt).toLocaleString()}` : `@${ban.username} · permanent`;
     copy.append(name, detail);
     row.append(copy);
-    if (canBan) {
+    if (canUnban) {
       const unban = document.createElement("button");
       unban.type = "button";
       unban.textContent = "Unban";
@@ -723,7 +841,7 @@ function renderModeration() {
     detail.textContent = `@${timeout.username} · until ${new Date(timeout.expiresAt).toLocaleString()}`;
     copy.append(name, detail);
     row.append(copy);
-    if (canTimeout) {
+    if (canRemoveTimeout) {
       const restore = document.createElement("button");
       restore.type = "button";
       restore.textContent = "Restore";
@@ -764,7 +882,7 @@ function renderInvites(invites: Awaited<ReturnType<ApiClient["serverInvites"]>>[
     details.textContent = `${invite.uses}${invite.maxUses ? `/${invite.maxUses}` : " uses"} · ${invite.expiresAt ? `expires ${new Date(invite.expiresAt).toLocaleString()}` : "never expires"}`;
     copy.append(name, details);
     row.append(copy);
-    if (!invite.revokedAt) {
+    if (!invite.revokedAt && hasAnyPermission("manage_invites", "revoke_invites")) {
       const revoke = document.createElement("button");
       revoke.className = "danger-button";
       revoke.type = "button";
@@ -810,14 +928,14 @@ async function loadData() {
   roles = roleResult.roles;
   roleAssignments = new Map(roleResult.assignments.map((assignment) => [assignment.userId, normalizeRoleIds(assignment.roleIds)]));
   moderation = moderationResult;
-  title.textContent = "Server settings";
-  roleLabel.textContent = `${currentServer.role} · ${channels.length} text channel${channels.length === 1 ? "" : "s"}`;
+  title.textContent = "Space settings";
+  roleLabel.textContent = `${currentServer.role} · ${channels.length} encrypted room${channels.length === 1 ? "" : "s"}`;
   saveServer.disabled = !currentServer.permissions.manage_server;
   deleteServer.hidden = currentServer.role !== "owner";
-  categoryForm.querySelector("button")!.toggleAttribute("disabled", !currentServer.permissions.manage_channels);
-  channelForm.querySelector("button")!.toggleAttribute("disabled", !currentServer.permissions.manage_channels);
-  roleForm.querySelector("button")!.toggleAttribute("disabled", !currentServer.permissions.manage_roles);
-  createInvite.disabled = !currentServer.permissions.manage_invites;
+  categoryForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_channels", "manage_categories"));
+  channelForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_channels", "create_channels"));
+  roleForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_roles", "create_roles"));
+  createInvite.disabled = !hasAnyPermission("manage_invites", "create_invites");
   backToServer.href = destination(channels[0]?.id);
 
   const metadataChannel = roleResult.metadataConversationId
@@ -865,7 +983,7 @@ serverForm.addEventListener("submit", async (event) => {
       kind: "server",
     });
     await api.updateServer(currentServer.id, encryptedMetadata);
-    setStatus("Server settings saved.");
+    setStatus("Space settings saved.");
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
@@ -876,7 +994,7 @@ serverForm.addEventListener("submit", async (event) => {
 deleteServer.addEventListener("click", async () => {
   if (!currentServer || currentServer.role !== "owner") return;
   const name = serverName.value.trim() || "this server";
-  if (!window.confirm(`Permanently delete ${name}? All channels and encrypted history will be removed for every member.`)) return;
+  if (!window.confirm(`Permanently delete ${name}? All rooms and encrypted history will be removed for every person.`)) return;
   deleteServer.disabled = true;
   try {
     await api.deleteServer(currentServer.id);
@@ -902,7 +1020,7 @@ categoryForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
-    if (button) button.disabled = !currentServer?.permissions.manage_channels;
+    if (button) button.disabled = !hasAnyPermission("manage_channels", "manage_categories");
   }
 });
 
@@ -925,7 +1043,7 @@ channelForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
-    if (button) button.disabled = !currentServer?.permissions.manage_channels;
+    if (button) button.disabled = !hasAnyPermission("manage_channels", "create_channels");
   }
 });
 
@@ -950,7 +1068,7 @@ roleForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
-    if (button) button.disabled = !currentServer?.permissions.manage_roles;
+    if (button) button.disabled = !hasAnyPermission("manage_roles", "create_roles");
   }
 });
 
@@ -965,7 +1083,7 @@ createInvite.addEventListener("click", async () => {
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
-    createInvite.disabled = !currentServer?.permissions.manage_invites;
+    createInvite.disabled = !hasAnyPermission("manage_invites", "create_invites");
   }
 });
 
@@ -988,6 +1106,9 @@ async function boot() {
     await loadData();
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) window.location.assign("/");
+    else if (error instanceof LocalCryptoStoreError) {
+      window.location.assign(`/unlock?error=${encodeURIComponent(error.message)}&return=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
+    }
     else setStatus(readableError(error), true);
   }
 }

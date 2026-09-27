@@ -4,80 +4,93 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="no-referrer">
-    <title>Server settings · Naigi</title>
+    <title>Space settings · Naigi</title>
     <link rel="stylesheet" href="/app.css">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   </head>
   <body class="settings-page server-settings-page">
     <header class="topbar">
-      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">✦</span><div><strong>Naigi</strong><span class="tag">private consultation · server settings</span></div></div>
-      <div class="topbar-links"><a id="back-to-server" class="text-link" href="/app">Back to server</a><button id="server-logout-button" class="text-link-button" type="button">Sign out</button></div>
+      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">N</span><div><strong>Naigi</strong><span class="tag">self-hosted · space settings</span></div></div>
+      <div class="topbar-links"><a id="back-to-server" class="text-link" href="/app">Back to space</a><button id="server-logout-button" class="text-link-button" type="button">Sign out</button></div>
     </header>
     <main class="server-settings-layout">
-      <section class="settings-section panel">
-        <p class="eyebrow">SERVER</p>
-        <h1 id="server-settings-title">Loading server…</h1>
-        <p id="server-settings-role" class="muted"></p>
-        <form id="server-form" class="settings-form">
-          <label for="server-name">Server name<input id="server-name" maxlength="80" required></label>
-          <label for="server-description">Description<textarea id="server-description" rows="3" maxlength="240"></textarea></label>
-          <button id="save-server-button" type="submit">Save server</button>
-        </form>
+      <nav class="settings-nav server-settings-nav panel" aria-label="Space settings navigation">
+        <p class="eyebrow">PRIVATE SPACE</p>
+        <a class="settings-nav-item server-settings-nav-item active" data-settings-tab href="#overview"><i data-lucide="sliders-horizontal"></i><span>Overview</span></a>
+        <a class="settings-nav-item server-settings-nav-item" data-settings-tab href="#rooms"><i data-lucide="message-square"></i><span>Rooms</span></a>
+        <a class="settings-nav-item server-settings-nav-item" data-settings-tab href="#access"><i data-lucide="shield"></i><span>Access</span></a>
+        <a class="settings-nav-item server-settings-nav-item" data-settings-tab href="#moderation"><i data-lucide="gavel"></i><span>Moderation</span></a>
+        <a class="settings-nav-item server-settings-nav-item" data-settings-tab href="#invites"><i data-lucide="link"></i><span>Invites</span></a>
+      </nav>
+      <section class="server-settings-content">
+        <div id="overview" class="settings-view" data-settings-view>
+          <section class="settings-section panel">
+            <p class="eyebrow">PRIVATE SPACE</p>
+            <h1 id="server-settings-title">Loading space…</h1>
+            <p id="server-settings-role" class="muted"></p>
+            <form id="server-form" class="settings-form">
+              <label for="server-name">Space name<input id="server-name" maxlength="80" required></label>
+              <label for="server-description">Description<textarea id="server-description" rows="3" maxlength="240"></textarea></label>
+              <button id="save-server-button" type="submit">Save space</button>
+            </form>
+          </section>
+          <section id="danger-zone" class="settings-section panel danger-zone">
+            <p class="eyebrow">DANGER ZONE</p>
+            <h2>Delete this space</h2>
+            <p class="muted">Permanently removes the space, its rooms, encrypted history, and invite links for every person.</p>
+            <button id="delete-server-button" class="danger-button" type="button" hidden>Delete space</button>
+          </section>
+        </div>
+        <div id="rooms" class="settings-view" data-settings-view hidden>
+          <section class="settings-section panel">
+            <div class="settings-section-heading"><div><p class="eyebrow">ROOM ORGANIZATION</p><h2>Groups</h2></div><span class="muted small">Names are encrypted</span></div>
+            <form id="category-form" class="inline-settings-form">
+              <input id="new-category-name" maxlength="80" placeholder="New room group name" required>
+              <button type="submit">Add group</button>
+            </form>
+            <div id="category-settings-list" class="settings-list"></div>
+          </section>
+          <section class="settings-section panel">
+            <div class="settings-section-heading"><div><p class="eyebrow">ENCRYPTED ROOMS</p><h2>Rooms</h2></div><span class="muted small">Each room has its own encrypted conversation key</span></div>
+            <form id="channel-form" class="inline-settings-form channel-create-form">
+              <input id="new-channel-name" maxlength="80" placeholder="New room name" required>
+              <select id="new-channel-category" aria-label="New channel category"><option value="">No category</option></select>
+              <button type="submit">Add room</button>
+            </form>
+            <div id="channel-settings-list" class="settings-list"></div>
+          </section>
+        </div>
+        <div id="access" class="settings-view" data-settings-view hidden>
+          <section class="settings-section panel roles-settings-section">
+            <div class="settings-section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>Roles</h2></div><span class="muted small">Higher roles appear first</span></div>
+            <p class="settings-section-description">Give each role exactly the access it needs. Role names stay end-to-end encrypted; permissions and room gates are enforced by the server.</p>
+            <form id="role-form" class="inline-settings-form role-create-form">
+              <input id="new-role-name" maxlength="80" placeholder="New role name" aria-label="New role name" required>
+              <label class="role-color-input" title="New role color"><span class="sr-only">New role color</span><input id="new-role-color" type="color" value="#92aaa5"></label>
+              <button type="submit">Create role</button>
+            </form>
+            <div id="role-settings-list" class="role-settings-list"></div>
+          </section>
+          <section class="settings-section panel">
+            <div class="settings-section-heading"><div><p class="eyebrow">PEOPLE</p><h2>Members</h2></div><span class="muted small">Membership is visible for authorization</span></div>
+            <p class="settings-section-description">Assign multiple roles per member. The role with the highest position is shown first.</p>
+            <div id="member-settings-list" class="settings-list"></div>
+          </section>
+        </div>
+        <div id="moderation" class="settings-view" data-settings-view hidden>
+          <section class="settings-section panel">
+            <div class="settings-section-heading"><div><p class="eyebrow">MODERATION</p><h2>Active actions</h2></div><span class="muted small">Bans block future invites; timeouts block sending</span></div>
+            <div id="moderation-settings-list" class="settings-list"></div>
+          </section>
+        </div>
+        <div id="invites" class="settings-view" data-settings-view hidden>
+          <section class="settings-section panel">
+            <div class="settings-section-heading"><div><p class="eyebrow">INVITES</p><h2>Invite links</h2></div><button id="create-invite-settings" class="secondary" type="button">Create invite</button></div>
+            <div id="invite-settings-list" class="settings-list"></div>
+          </section>
+        </div>
+        <p id="server-settings-status" class="form-status" role="status"></p>
       </section>
-
-      <section id="danger-zone" class="settings-section panel danger-zone">
-        <p class="eyebrow">DANGER ZONE</p>
-        <h2>Delete this server</h2>
-        <p class="muted">Permanently removes the server, its channels, encrypted history, and invite links for every member.</p>
-        <button id="delete-server-button" class="danger-button" type="button" hidden>Delete server</button>
-      </section>
-
-      <section class="settings-section panel">
-        <div class="settings-section-heading"><div><p class="eyebrow">CHANNEL ORGANIZATION</p><h2>Categories</h2></div><span class="muted small">Names are encrypted</span></div>
-        <form id="category-form" class="inline-settings-form">
-          <input id="new-category-name" maxlength="80" placeholder="New category name" required>
-          <button type="submit">Add category</button>
-        </form>
-        <div id="category-settings-list" class="settings-list"></div>
-      </section>
-
-      <section class="settings-section panel">
-        <div class="settings-section-heading"><div><p class="eyebrow">TEXT CHANNELS</p><h2>Channels</h2></div><span class="muted small">Each channel has its own encrypted room</span></div>
-        <form id="channel-form" class="inline-settings-form channel-create-form">
-          <input id="new-channel-name" maxlength="80" placeholder="New channel name" required>
-          <select id="new-channel-category" aria-label="New channel category"><option value="">No category</option></select>
-          <button type="submit">Add channel</button>
-        </form>
-        <div id="channel-settings-list" class="settings-list"></div>
-      </section>
-
-      <section class="settings-section panel roles-settings-section">
-        <div class="settings-section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>Roles</h2></div><span class="muted small">Higher roles appear first</span></div>
-        <p class="settings-section-description">Give each role exactly the access it needs. Role names stay end-to-end encrypted; permissions and channel gates are enforced by the server.</p>
-        <form id="role-form" class="inline-settings-form role-create-form">
-          <input id="new-role-name" maxlength="80" placeholder="New role name" aria-label="New role name" required>
-          <label class="role-color-input" title="New role color"><span class="sr-only">New role color</span><input id="new-role-color" type="color" value="#5865f2"></label>
-          <button type="submit">Create role</button>
-        </form>
-        <div id="role-settings-list" class="role-settings-list"></div>
-      </section>
-
-      <section class="settings-section panel">
-        <div class="settings-section-heading"><div><p class="eyebrow">PEOPLE</p><h2>Members</h2></div><span class="muted small">Membership is visible for authorization</span></div>
-        <p class="settings-section-description">Assign multiple roles per member. The role with the highest position is shown first.</p>
-        <div id="member-settings-list" class="settings-list"></div>
-      </section>
-
-      <section class="settings-section panel">
-        <div class="settings-section-heading"><div><p class="eyebrow">MODERATION</p><h2>Active actions</h2></div><span class="muted small">Bans block future invites; timeouts block sending</span></div>
-        <div id="moderation-settings-list" class="settings-list"></div>
-      </section>
-
-      <section class="settings-section panel">
-        <div class="settings-section-heading"><div><p class="eyebrow">INVITES</p><h2>Invite links</h2></div><button id="create-invite-settings" class="secondary" type="button">Create invite</button></div>
-        <div id="invite-settings-list" class="settings-list"></div>
-      </section>
-      <p id="server-settings-status" class="form-status" role="status"></p>
     </main>
     <script type="module" src="/server-settings.js"></script>
   </body>

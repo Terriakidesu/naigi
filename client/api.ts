@@ -19,16 +19,40 @@ export type ServerPermission =
   | "view_channels"
   | "send_messages"
   | "upload_files"
+  | "view_members"
   | "mention_everyone"
   | "mention_here"
   | "mention_roles"
   | "manage_server"
   | "manage_channels"
+  | "create_channels"
+  | "edit_channels"
+  | "reorder_channels"
+  | "archive_channels"
+  | "manage_categories"
+  | "manage_channel_access"
   | "manage_invites"
+  | "view_invites"
+  | "create_invites"
+  | "revoke_invites"
+  | "manage_invite_limits"
   | "manage_roles"
+  | "create_roles"
+  | "edit_roles"
+  | "delete_roles"
+  | "assign_roles"
+  | "reorder_roles"
+  | "manage_role_permissions"
+  | "manage_role_appearance"
   | "manage_members"
+  | "kick_members"
+  | "view_moderation_records"
   | "ban_members"
+  | "unban_members"
   | "timeout_members"
+  | "remove_timeouts"
+  | "pin_messages"
+  | "delete_others_messages"
   | "delete_messages";
 
 export type ServerPermissionMap = Record<ServerPermission, boolean>;
@@ -98,7 +122,7 @@ export type CustomServerRole = {
   mentionable: boolean;
   viewAllChannels: boolean;
   isSystem: boolean;
-  systemKey: "owner" | "admin" | "member" | null;
+  systemKey: "owner" | "admin" | "everyone" | "member" | null;
   channelAccess: ServerRoleChannelAccess[];
   createdAt: string;
   updatedAt: string;

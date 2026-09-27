@@ -39,7 +39,7 @@ try {
       return { status: response.status, body: await response.json() };
     }, { path, data: { method, body: data } });
   }
-  const users = [];
+  const users: Array<{ id: string; username: string }> = [];
   for (const [page, name] of [[a, "alice"], [b, "bob"]] as const) {
     await page.goto(origin);
     const response = await request(page, "/v1/auth/register", {
@@ -68,6 +68,7 @@ try {
 
   await unlock(a, "/app");
   await unlock(b, "/app");
+  await recoverAfterDeviceIdLoss(a, users[0].id);
   await b.locator("#home-rail-button").click();
 
   const created = await request(a, "/v1/conversations", {
@@ -80,6 +81,8 @@ try {
   });
   assert.equal(duplicate.status, 200, JSON.stringify(duplicate.body));
   assert.equal(duplicate.body.conversation.id, room);
+  await a.goto(`${origin}/channels/@me/${room}`);
+  await a.locator("#status-line").filter({ hasText: "Connected" }).waitFor({ timeout: 20_000 });
 
   async function unlock(page: Page, path: string) {
     page.on("pageerror", (error) => errors.push(error.message));
@@ -98,6 +101,19 @@ try {
         : page.locator("#message-input:enabled").waitFor({ timeout: 20_000 }));
     } catch (error) {
       throw new Error(`Unlock failed at ${page.url()}: ${await page.locator("body").innerText()}; ${errors.join(", ")}`, { cause: error });
+    }
+  }
+
+  async function recoverAfterDeviceIdLoss(page: Page, userId: string) {
+    await page.locator("#lock-button").click();
+    await page.locator("#local-passphrase").waitFor({ timeout: 20_000 });
+    await page.evaluate((id) => localStorage.removeItem(`priv-chat.device.${id}`), userId);
+    await page.locator("#local-passphrase").fill("Independent-local-vault-passphrase!");
+    await page.locator("#unlock-submit").click();
+    try {
+      await page.locator("#status-line").filter({ hasText: "Connected" }).waitFor({ timeout: 20_000 });
+    } catch (error) {
+      throw new Error(`Device ID recovery failed at ${page.url()}: ${await page.locator("body").innerText()}; ${errors.join(", ")}`, { cause: error });
     }
   }
 
@@ -173,6 +189,20 @@ try {
   const initialRoles = await request(a, `/v1/servers/${serverId}/roles`);
   assert.equal(initialRoles.status, 200, JSON.stringify(initialRoles.body));
   assert.equal(initialRoles.body.roles.some((role: { systemKey: string; mentionable: boolean }) => role.systemKey === "owner" && role.mentionable), false);
+  const everyoneRole = initialRoles.body.roles.find((role: { id: string; systemKey: string; permissions: Record<string, boolean> }) => role.systemKey === "everyone");
+  assert.ok(everyoneRole, "new servers include the Everyone role");
+  assert.ok(initialRoles.body.assignments.find((assignment: { userId: string; roleIds: string[] }) => assignment.userId === users[0].id)?.roleIds.includes(everyoneRole.id));
+  assert.ok(initialRoles.body.assignments.find((assignment: { userId: string; roleIds: string[] }) => assignment.userId === users[1].id)?.roleIds.includes(everyoneRole.id));
+  const hiddenMemberPermission = await request(a, `/v1/servers/${serverId}/roles/${everyoneRole.id}`, {
+    permissions: { ...everyoneRole.permissions, view_members: false },
+  }, "PATCH");
+  assert.equal(hiddenMemberPermission.status, 200, JSON.stringify(hiddenMemberPermission.body));
+  const hiddenMembers = await request(b, `/v1/servers/${serverId}/members`);
+  assert.equal(hiddenMembers.status, 403, JSON.stringify(hiddenMembers.body));
+  const restoredMemberPermission = await request(a, `/v1/servers/${serverId}/roles/${everyoneRole.id}`, {
+    permissions: everyoneRole.permissions,
+  }, "PATCH");
+  assert.equal(restoredMemberPermission.status, 200, JSON.stringify(restoredMemberPermission.body));
   const restrictedRole = await request(a, `/v1/servers/${serverId}/roles`, {
     encryptedMetadata: "",
     color: "#e05a7a",

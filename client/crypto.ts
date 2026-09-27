@@ -85,6 +85,15 @@ function localDeviceId(userId: string) {
   return created;
 }
 
+function rememberLocalDeviceId(userId: string, deviceId: string) {
+  localStorage.setItem(`priv-chat.device.${userId}`, deviceId);
+}
+
+function isStoreDeviceMismatch(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("account in the store doesn't match the account in the constructor");
+}
+
 function randomUuid() {
   if (typeof globalThis.crypto.randomUUID === "function") return globalThis.crypto.randomUUID();
   const bytes = new Uint8Array(16);
@@ -149,6 +158,13 @@ export type SendContentResult = {
   decrypted?: DecryptedMessage;
 };
 
+export class LocalCryptoStoreError extends Error {
+  constructor() {
+    super("local_crypto_store_unlock_failed");
+    this.name = "LocalCryptoStoreError";
+  }
+}
+
 function canRetryMessage(error: unknown) {
   return !(error instanceof ApiError) || error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
 }
@@ -157,7 +173,7 @@ export class CryptoClient {
   private readonly api: ApiClient;
   private readonly accountUserId: string;
   private readonly storePassphrase: string;
-  private readonly requestedDeviceId: string;
+  private requestedDeviceId: string;
   private machine?: OlmMachine;
   private initialized = false;
   private readonly preparingRooms = new Map<string, Promise<void>>();
@@ -181,18 +197,44 @@ export class CryptoClient {
     if (!this.storePassphrase) throw new Error("local_crypto_passphrase_required");
 
     await initAsync(`${window.location.origin}/assets/matrix_sdk_crypto_wasm_bg.wasm`);
-    this.machine = await OlmMachine.initialize(
-      new UserId(matrixUserId(this.accountUserId)),
-      new DeviceId(this.requestedDeviceId),
-      cryptoStoreName(this.accountUserId),
-      this.storePassphrase,
-    );
+
+    const candidateDeviceIds = [this.requestedDeviceId];
+    for (let index = 0; index < candidateDeviceIds.length; index += 1) {
+      const candidateDeviceId = candidateDeviceIds[index];
+      try {
+        this.machine = await OlmMachine.initialize(
+          new UserId(matrixUserId(this.accountUserId)),
+          new DeviceId(candidateDeviceId),
+          cryptoStoreName(this.accountUserId),
+          this.storePassphrase,
+        );
+        this.requestedDeviceId = candidateDeviceId;
+        rememberLocalDeviceId(this.accountUserId, candidateDeviceId);
+        break;
+      } catch (error) {
+        if (!isStoreDeviceMismatch(error)) throw new LocalCryptoStoreError();
+        if (index === 0) {
+          const knownDevices = await this.api.devices().catch(() => ({ devices: [] }));
+          for (const device of knownDevices.devices) {
+            if (uuidPattern.test(device.id) && !candidateDeviceIds.includes(device.id)) candidateDeviceIds.push(device.id);
+          }
+        }
+      }
+    }
+    if (!this.machine) {
+      throw new LocalCryptoStoreError();
+    }
     this.initialized = true;
-    // Ask the SDK to request room keys when a device misses an original share.
-    // Forwarding remains controlled by the SDK's device-trust rules.
-    this.state.roomKeyRequestsEnabled = true;
-    await this.processOutgoingRequests();
-    await this.syncToDevice();
+    try {
+      // Ask the SDK to request room keys when a device misses an original share.
+      // Forwarding remains controlled by the SDK's device-trust rules.
+      this.state.roomKeyRequestsEnabled = true;
+      await this.processOutgoingRequests();
+      await this.syncToDevice();
+    } catch (error) {
+      await this.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   private get state() {

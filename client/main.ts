@@ -11,7 +11,7 @@ import {
   type ServerPermission,
   type User,
 } from "./api";
-import { CryptoClient, type DecryptedMessage, type ReplyReference } from "./crypto";
+import { CryptoClient, LocalCryptoStoreError, type DecryptedMessage, type ReplyReference } from "./crypto";
 import { roomKeyUnavailable } from "./decryption";
 import { appendSafeEmbed, extractEmbeds, type SafeEmbed } from "./embeds";
 import {
@@ -27,6 +27,7 @@ import { appendMarkdown } from "./markdown";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
 import { confirmLocalUnlock, lockLocalSession, resolveLocalPassphrase } from "./unlock-vault";
+import { iconElement, renderIcons } from "./icons";
 import { askText, showOneTimeToken } from "./ui-dialog";
 
 const api = new ApiClient();
@@ -49,6 +50,7 @@ const categoryLabels = new Map<string, string>();
 const collapsedCategories = new Set<string>();
 let realtime: WebSocket | undefined;
 let realtimeReadySocket: WebSocket | undefined;
+let realtimeHandshakeTimer: number | undefined;
 const seenRealtimeMessageIds = new Set<string>();
 const pendingMentionNotifications = new Set<string>();
 const mentionHighlightMessageIds = new Set<string>();
@@ -247,6 +249,11 @@ let profileRequest = 0;
 let modalReturnFocus: HTMLElement | null = null;
 let activeSuggestionIndex = -1;
 
+function setChannelIcon(name: string) {
+  channelIcon.replaceChildren(iconElement(name));
+  renderIcons(channelIcon);
+}
+
 function setStatus(message: string, error = false) {
   if (error) console.error(`[Naigi] ${message}`);
 }
@@ -273,7 +280,6 @@ function updateNotificationToggle() {
   const active = supported && notificationsEnabled && Notification.permission === "granted";
   notificationToggle.disabled = !supported;
   notificationToggle.setAttribute("aria-pressed", String(active));
-  notificationToggle.textContent = "♢";
   notificationToggle.title = !supported
     ? "Desktop notifications are unavailable"
     : active
@@ -476,13 +482,7 @@ function contextMenuAction(label: string, action: () => void | Promise<void>, op
   button.type = "button";
   button.className = `message-context-action${options.danger ? " danger" : ""}`;
   button.setAttribute("role", "menuitem");
-  if (options.icon) {
-    const icon = document.createElement("span");
-    icon.className = "message-context-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.textContent = options.icon;
-    button.append(icon);
-  }
+  if (options.icon) button.append(iconElement(options.icon, "message-context-icon"));
   const text = document.createElement("span");
   text.className = "message-context-label";
   text.textContent = label;
@@ -692,7 +692,7 @@ async function toggleReaction(messageId: string, key: string) {
 }
 
 async function togglePin(messageId: string) {
-  if (!cryptoClient || !selectedConversationId) return;
+  if (!cryptoClient || !selectedConversationId || (selectedServerId && !hasActiveServerPermission("pin_messages"))) return;
   const action = pinnedMessageIds.has(messageId) ? "remove" : "add";
   try {
     const result = await cryptoClient.sendPin(selectedConversationId, selectedMembers, messageId, action);
@@ -718,7 +718,8 @@ async function deleteMessage(message: MessageEnvelope) {
 }
 
 async function moderateDeleteMessage(message: MessageEnvelope) {
-  if (!selectedConversationId || !selectedServerId || !hasActiveServerPermission("delete_messages")
+  if (!selectedConversationId || !selectedServerId
+    || (!hasActiveServerPermission("delete_messages") && !hasActiveServerPermission("delete_others_messages"))
     || !window.confirm("Permanently delete this encrypted message for everyone?")) return;
   try {
     await api.deleteMessage(selectedConversationId, message.id);
@@ -756,9 +757,9 @@ function openMessageContextMenu(target: ContextMessage, x: number, y: number) {
   }
   messageContextMenu.append(reactions);
 
-  contextMenuAction("Reply", () => setReplyTarget(replyReferenceForMessage(target.message, target.sender, target.body || "Encrypted message")), { shortcut: "R", icon: "↩" });
-  if (target.editable) contextMenuAction("Edit message", () => setEditTarget({ messageId: target.message.id, sender: target.sender, body: target.body }), { shortcut: "E", icon: "✎" });
-  if (target.body) contextMenuAction("Copy text", () => copyMessageBody(target.body), { shortcut: "C", icon: "⧉" });
+  contextMenuAction("Reply", () => setReplyTarget(replyReferenceForMessage(target.message, target.sender, target.body || "Encrypted message")), { shortcut: "R", icon: "corner-up-left" });
+  if (target.editable) contextMenuAction("Edit message", () => setEditTarget({ messageId: target.message.id, sender: target.sender, body: target.body }), { shortcut: "E", icon: "pencil" });
+  if (target.body) contextMenuAction("Copy text", () => copyMessageBody(target.body), { shortcut: "C", icon: "copy" });
   contextMenuAction("Copy message link", async () => {
     try {
       if (!navigator.clipboard) throw new Error("clipboard_unavailable");
@@ -767,18 +768,21 @@ function openMessageContextMenu(target: ContextMessage, x: number, y: number) {
     } catch {
       setStatus("Unable to copy the message link.", true);
     }
-  }, { icon: "↗" });
-  contextMenuAction("Mark unread from here", () => markUnreadFromMessage(target.message), { icon: "◷" });
-  contextMenuAction(pinnedMessageIds.has(target.message.id) ? "Unpin message" : "Pin message", () => togglePin(target.message.id), { icon: "⚑" });
+  }, { icon: "link" });
+  contextMenuAction("Mark unread from here", () => markUnreadFromMessage(target.message), { icon: "clock" });
+  if (!selectedServerId || hasActiveServerPermission("pin_messages")) {
+    contextMenuAction(pinnedMessageIds.has(target.message.id) ? "Unpin message" : "Pin message", () => togglePin(target.message.id), { icon: "pin" });
+  }
   if (isOwnMessage(target.message)) {
     const divider = document.createElement("div");
     divider.className = "message-context-divider";
     messageContextMenu.append(divider);
-    contextMenuAction("Delete message", () => deleteMessage(target.message), { danger: true, icon: "⌫" });
-  } else if (selectedServerId && hasActiveServerPermission("delete_messages")) {
-    contextMenuAction("Delete for everyone", () => moderateDeleteMessage(target.message), { danger: true, icon: "⌫" });
+    contextMenuAction("Delete message", () => deleteMessage(target.message), { danger: true, icon: "trash-2" });
+  } else if (selectedServerId && (hasActiveServerPermission("delete_messages") || hasActiveServerPermission("delete_others_messages"))) {
+    contextMenuAction("Delete for everyone", () => moderateDeleteMessage(target.message), { danger: true, icon: "trash-2" });
   }
 
+  renderIcons(messageContextMenu);
   messageContextMenu.hidden = false;
   const margin = 8;
   const rect = messageContextMenu.getBoundingClientRect();
@@ -1322,14 +1326,30 @@ function renderInputSuggestions() {
 
 function renderUnreadButton() {
   const distanceFromBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight;
-  jumpLatestButton.textContent = unreadCount > 0
-    ? `↓ ${unreadCount} new message${unreadCount === 1 ? "" : "s"}`
-    : "↓ Jump to latest";
+  const label = document.createElement("span");
+  label.textContent = unreadCount > 0
+    ? `${unreadCount} new message${unreadCount === 1 ? "" : "s"}`
+    : "Jump to latest";
+  jumpLatestButton.replaceChildren(iconElement("arrow-down"), label);
+  renderIcons(jumpLatestButton);
   jumpLatestButton.hidden = unreadCount === 0 && distanceFromBottom < 100;
 }
 
 function isAtLatestMessage() {
   return messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight < 100;
+}
+
+function scrollToLatest() {
+  const setLatestScrollPosition = () => {
+    messagesPanel.scrollTop = messagesPanel.scrollHeight;
+  };
+  setLatestScrollPosition();
+  // Decrypted media and late layout changes can increase scrollHeight after
+  // the initial render. Re-apply the position after the browser has painted.
+  window.requestAnimationFrame(() => {
+    setLatestScrollPosition();
+    window.requestAnimationFrame(setLatestScrollPosition);
+  });
 }
 
 function hasUnreadConversation() {
@@ -1494,7 +1514,7 @@ function readableError(error: unknown) {
     if (error.code === "cannot_delete_server_channel") return "Server channels are deleted with the server.";
     if (error.code === "category_not_found") return "That category no longer exists.";
     if (error.code === "channel_not_found") return "That channel no longer exists.";
-    if (error.code === "cannot_archive_last_channel") return "A server must keep one active text channel.";
+    if (error.code === "cannot_archive_last_channel") return "A space must keep one active encrypted room.";
     if (error.code === "cannot_archive_metadata_channel") return "The original channel anchors encrypted server metadata and cannot be archived.";
     if (error.code === "channel_not_visible") return "You no longer have access to that channel.";
     if (error.code === "insufficient_channel_permissions") return "Your role cannot send messages or upload files here.";
@@ -1550,16 +1570,22 @@ async function startCrypto() {
   loadUnreadMarkers();
   loadNotificationPreference();
   await cryptoClient?.close();
-  cryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
-  await cryptoClient.initialize();
+  const nextCryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
+  try {
+    await nextCryptoClient.initialize();
+  } catch (error) {
+    await nextCryptoClient.close().catch(() => undefined);
+    throw error;
+  }
+  cryptoClient = nextCryptoClient;
   confirmLocalUnlock();
+  connectRealtime();
   const outbox = await cryptoClient.flushPendingMessages().catch(() => ({ sent: 0, pending: 0, failed: 0 }));
   userLabel.textContent = `${currentUser.displayName} (@${currentUser.username})`;
   selfAvatar.textContent = currentUser.displayName.slice(0, 1).toUpperCase();
   setAvatarStyle(selfAvatar, currentUser.id);
   await refreshServers();
   await refreshConversations();
-  connectRealtime();
   await refreshOutboxNotice().catch(() => undefined);
   if (outbox.sent > 0) setStatus(`${outbox.sent} queued message${outbox.sent === 1 ? "" : "s"} delivered.`);
 }
@@ -1585,6 +1611,8 @@ async function refreshSelectedRoomKeys() {
 }
 
 function connectRealtime() {
+  window.clearTimeout(realtimeHandshakeTimer);
+  realtimeHandshakeTimer = undefined;
   realtime?.close();
   realtimeReadySocket = undefined;
   const url = new URL("/v1/realtime", window.location.href);
@@ -1592,6 +1620,11 @@ function connectRealtime() {
   setConnectionStatus("Connecting…", "connecting");
   const socket = new WebSocket(url);
   realtime = socket;
+  realtimeHandshakeTimer = window.setTimeout(() => {
+    if (socket !== realtime || (socket.readyState !== WebSocket.CONNECTING && socket.readyState !== WebSocket.OPEN)) return;
+    setConnectionStatus("History available · realtime unavailable", "offline");
+    socket.close();
+  }, 10_000);
   socket.addEventListener("open", () => {
     if (socket !== realtime) return;
     setConnectionStatus("Authenticating…", "connecting");
@@ -1609,6 +1642,8 @@ function connectRealtime() {
         state?: PresenceState;
       };
       if (payload.type === "ready") {
+        window.clearTimeout(realtimeHandshakeTimer);
+        realtimeHandshakeTimer = undefined;
         realtimeReadySocket = socket;
         setConnectionStatus("Connected", "connected");
         subscribeKnownConversations();
@@ -1661,6 +1696,8 @@ function connectRealtime() {
   });
   socket.addEventListener("close", () => {
     if (socket !== realtime) return;
+    window.clearTimeout(realtimeHandshakeTimer);
+    realtimeHandshakeTimer = undefined;
     realtimeReadySocket = undefined;
     setConnectionStatus("Reconnecting…", "offline");
     if (cryptoClient) window.setTimeout(connectRealtime, 1500);
@@ -1676,7 +1713,7 @@ function subscribeKnownConversations() {
 }
 
 function avatarColor(seed: string) {
-  const colors = ["#5865f2", "#3ba55d", "#ed4245", "#eb459e", "#faa61a", "#00b0f4", "#9b59b6"];
+  const colors = ["#92aaa5", "#7fa0ad", "#a28f99", "#8e99ad", "#9f9a7d", "#759b9c", "#8d9aa4"];
   let hash = 0;
   for (const character of seed) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   return colors[hash % colors.length];
@@ -1696,12 +1733,12 @@ function conversationDisplayName(conversation: Conversation) {
 
 function serverDisplayName(server: Server) {
   const index = servers.findIndex((item) => item.id === server.id);
-  return serverLabels.get(server.id) || `Server ${index >= 0 ? index + 1 : 1}`;
+  return serverLabels.get(server.id) || `Space ${index >= 0 ? index + 1 : 1}`;
 }
 
 function serverNameForId(serverId: string) {
   const server = servers.find((item) => item.id === serverId);
-  return server ? serverDisplayName(server) : "Server";
+  return server ? serverDisplayName(server) : "Space";
 }
 
 function activeServer() {
@@ -1714,8 +1751,9 @@ function hasActiveServerPermission(permission: ServerPermission) {
 }
 
 function serverRoleName(role: CustomServerRole) {
-  if (serverRoleLabels.has(role.id)) return serverRoleLabels.get(role.id)!;
   if (role.systemKey === "owner") return "Owner";
+  if (role.systemKey === "everyone") return "All members";
+  if (serverRoleLabels.has(role.id)) return serverRoleLabels.get(role.id)!;
   if (role.systemKey === "admin") return "Administrator";
   if (role.systemKey === "member") return "Member";
   return "Role";
@@ -1740,7 +1778,7 @@ function normalizeRoleIds(value: unknown) {
 }
 
 function channelDisplayName(channel: ServerChannel) {
-  return channelLabels.get(channel.id) || (channel.position === 0 ? "general" : `channel-${channel.position + 1}`);
+  return channelLabels.get(channel.id) || (channel.position === 0 ? "lobby" : `room-${channel.position + 1}`);
 }
 
 function categoryDisplayName(category: ServerCategory) {
@@ -1759,7 +1797,7 @@ function renderServers() {
   serverList.replaceChildren();
   for (const server of servers) {
     const button = document.createElement("button");
-    button.className = "server-rail-button";
+    button.className = "space-rail-button";
     button.type = "button";
     const unread = serverUnreadCount(server.id);
     button.title = unread > 0 ? `${serverDisplayName(server)} · ${unread} unread` : serverDisplayName(server);
@@ -1782,7 +1820,7 @@ function renderServers() {
   mobileServerSelect.replaceChildren();
   const homeOption = document.createElement("option");
   homeOption.value = "";
-  homeOption.textContent = "Direct messages";
+  homeOption.textContent = "Private inbox";
   mobileServerSelect.append(homeOption);
   for (const server of servers) {
     const option = document.createElement("option");
@@ -1795,11 +1833,50 @@ function renderServers() {
   homeRailButton.classList.toggle("rail-active", !selectedServerId);
   homeRailButton.setAttribute("aria-pressed", String(!selectedServerId));
   const activeServer = selectedServerId ? servers.find((server) => server.id === selectedServerId) : undefined;
-  workspaceName.textContent = activeServer ? serverDisplayName(activeServer) : "Direct messages";
-  workspaceSubtitle.textContent = selectedServerId ? "Private encrypted server" : "Encrypted workspace";
-  const canManageChannels = Boolean(activeServer?.permissions.manage_channels);
-  const canManageInvites = Boolean(activeServer?.permissions.manage_invites);
-  const canManageSettings = Boolean(activeServer?.permissions.manage_server || activeServer?.permissions.manage_roles);
+  workspaceName.textContent = activeServer ? serverDisplayName(activeServer) : "Private inbox";
+  workspaceSubtitle.textContent = selectedServerId ? "Private encrypted space" : "Encrypted home";
+  const canManageChannels = Boolean(activeServer && (
+    activeServer.permissions.manage_channels
+    || activeServer.permissions.create_channels
+    || activeServer.permissions.edit_channels
+    || activeServer.permissions.reorder_channels
+    || activeServer.permissions.archive_channels
+    || activeServer.permissions.manage_categories
+    || activeServer.permissions.manage_channel_access
+  ));
+  const canManageInvites = Boolean(activeServer && (
+    activeServer.permissions.manage_invites || activeServer.permissions.create_invites
+  ));
+  const canManageSettings = Boolean(activeServer && (
+    activeServer.permissions.manage_server
+    || activeServer.permissions.manage_channels
+    || activeServer.permissions.create_channels
+    || activeServer.permissions.edit_channels
+    || activeServer.permissions.reorder_channels
+    || activeServer.permissions.archive_channels
+    || activeServer.permissions.manage_categories
+    || activeServer.permissions.manage_roles
+    || activeServer.permissions.create_roles
+    || activeServer.permissions.edit_roles
+    || activeServer.permissions.delete_roles
+    || activeServer.permissions.reorder_roles
+    || activeServer.permissions.manage_role_permissions
+    || activeServer.permissions.manage_role_appearance
+    || activeServer.permissions.manage_channel_access
+    || activeServer.permissions.manage_invites
+    || activeServer.permissions.create_invites
+    || activeServer.permissions.assign_roles
+    || activeServer.permissions.view_invites
+    || activeServer.permissions.revoke_invites
+    || activeServer.permissions.manage_invite_limits
+    || activeServer.permissions.view_moderation_records
+    || activeServer.permissions.manage_members
+    || activeServer.permissions.kick_members
+    || activeServer.permissions.ban_members
+    || activeServer.permissions.unban_members
+    || activeServer.permissions.timeout_members
+    || activeServer.permissions.remove_timeouts
+  ));
   createChannelButton.hidden = !canManageChannels;
   serverInviteButton.hidden = !canManageInvites;
   serverSettingsButton.hidden = !canManageSettings;
@@ -1819,7 +1896,7 @@ function renderChannels() {
   if (visible.length === 0) {
     const empty = document.createElement("span");
     empty.className = "muted channel-list-empty";
-    empty.textContent = conversationSearchQuery.trim() ? "No channels match." : "No text channels yet.";
+    empty.textContent = conversationSearchQuery.trim() ? "No rooms match." : "No encrypted rooms yet.";
     channelList.append(empty);
     return;
   }
@@ -1840,7 +1917,7 @@ function renderChannels() {
     button.setAttribute("aria-pressed", String(channel.id === selectedChannelId));
     const icon = document.createElement("span");
     icon.className = "channel-item-icon";
-    icon.textContent = "#";
+    icon.append(iconElement("message-square"));
     const name = document.createElement("span");
     name.className = "channel-item-name";
     name.textContent = channelDisplayName(channel);
@@ -1863,9 +1940,10 @@ function renderChannels() {
     heading.type = "button";
     heading.setAttribute("aria-expanded", String(!category || !collapsedCategories.has(category.id)));
     const name = document.createElement("span");
-    name.textContent = category ? categoryDisplayName(category) : "TEXT CHANNELS";
+    name.textContent = category ? categoryDisplayName(category) : "ENCRYPTED ROOMS";
     const indicator = document.createElement("span");
-    indicator.textContent = category && collapsedCategories.has(category.id) ? "▸" : "⌄";
+    indicator.className = "category-heading-indicator";
+    indicator.append(iconElement(category && collapsedCategories.has(category.id) ? "chevron-right" : "chevron-down"));
     heading.append(name, indicator);
     if (category) {
       heading.addEventListener("click", () => {
@@ -1887,6 +1965,7 @@ function renderChannels() {
   for (const category of categories) appendCategory(category, byCategory.get(category.id) ?? []);
   const uncategorized = visible.filter((channel) => !channel.categoryId || !categoryIds.has(channel.categoryId));
   if (uncategorized.length > 0 || categories.length === 0) appendCategory(null, uncategorized);
+  renderIcons(channelList);
 }
 
 function renderConversationEmpty(message: string) {
@@ -1894,11 +1973,12 @@ function renderConversationEmpty(message: string) {
   empty.className = "conversation-list-empty";
   const icon = document.createElement("span");
   icon.className = "empty-icon";
-  icon.textContent = "⌕";
+  icon.append(iconElement("search"));
   const text = document.createElement("span");
   text.textContent = message;
   empty.append(icon, text);
   conversationList.append(empty);
+  renderIcons(conversationList);
 }
 
 async function removeConversation(conversation: Conversation) {
@@ -1918,7 +1998,7 @@ async function removeConversation(conversation: Conversation) {
       nextBefore = null;
       nextAfter = null;
       renderMembers([]);
-      renderConversationWelcome("Your conversations", "Start a private conversation to begin chatting.");
+       renderConversationWelcome("Your private threads", "Start a private conversation to begin chatting.");
       window.history.replaceState(null, "", "/app");
     }
     await refreshConversations();
@@ -1934,12 +2014,12 @@ function renderConversations() {
   directMessagesHeading.hidden = !visibleInWorkspace;
   createConversationButton.hidden = !visibleInWorkspace;
   conversationList.hidden = !visibleInWorkspace;
-  conversationSearch.placeholder = visibleInWorkspace ? "Find a conversation" : "Find a channel";
-  conversationSearch.setAttribute("aria-label", visibleInWorkspace ? "Find a conversation" : "Find a channel");
+  conversationSearch.placeholder = visibleInWorkspace ? "Find a private thread" : "Find a room";
+  conversationSearch.setAttribute("aria-label", visibleInWorkspace ? "Find a private thread" : "Find a room");
   conversationList.replaceChildren();
   if (!visibleInWorkspace) return;
   if (conversations.length === 0) {
-    renderConversationEmpty("No conversations yet.");
+    renderConversationEmpty("No private threads yet.");
     return;
   }
 
@@ -1966,7 +2046,7 @@ function renderConversations() {
     button.setAttribute("aria-pressed", conversation.id === selectedConversationId ? "true" : "false");
     const icon = document.createElement("span");
     icon.className = "conversation-icon";
-    icon.textContent = conversation.kind === "dm" ? "@" : "#";
+    icon.append(iconElement(conversation.kind === "dm" ? "user-round" : "users-round"));
     setAvatarStyle(icon, conversation.id);
     const copy = document.createElement("span");
     copy.className = "conversation-copy";
@@ -1977,8 +2057,8 @@ function renderConversations() {
     conversationStatus.className = "conversation-status";
     const memberCount = (conversation.memberDisplayNames?.length ?? 0) + 1;
     conversationStatus.textContent = conversation.kind === "dm"
-      ? "direct message · encrypted"
-      : `${memberCount} members · encrypted`;
+      ? "private message · encrypted"
+      : `${memberCount} people · encrypted`;
     copy.append(title, conversationStatus);
     button.append(icon, copy);
     const unread = unreadMarkers.get(conversation.id)?.count ?? 0;
@@ -1995,7 +2075,7 @@ function renderConversations() {
     remove.type = "button";
     remove.title = "Remove conversation";
     remove.setAttribute("aria-label", `Remove ${conversationDisplayName(conversation)} conversation`);
-    remove.textContent = "×";
+    remove.append(iconElement("trash-2"));
     remove.addEventListener("click", (event) => {
       event.stopPropagation();
       void removeConversation(conversation);
@@ -2003,6 +2083,7 @@ function renderConversations() {
     row.append(button, remove);
     conversationList.append(row);
   }
+  renderIcons(conversationList);
 }
 
 async function refreshServers() {
@@ -2067,10 +2148,10 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   renderChannels();
   renderMembers([]);
   updateComposerState();
-  renderConversationWelcome("Opening server…", "Loading its encrypted channels.");
+  renderConversationWelcome("Opening space…", "Loading its encrypted rooms.");
   conversationTitle.textContent = serverNameForId(serverId);
   conversationSubtitle.textContent = "Loading encrypted channels…";
-  channelIcon.textContent = "#";
+  setChannelIcon("message-square");
 
   try {
     const [channelResult, categoryResult, roleResult] = await Promise.all([
@@ -2111,14 +2192,14 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
     if (channel) await selectChannel(channel.id);
     else {
       conversationTitle.textContent = serverNameForId(serverId);
-      conversationSubtitle.textContent = "Create a text channel to start chatting";
-      renderConversationWelcome("No text channels yet", "Create a channel to start an encrypted server conversation.");
+      conversationSubtitle.textContent = "Create an encrypted room to start chatting";
+      renderConversationWelcome("No encrypted rooms yet", "Create a room to start a private space conversation.");
       setMobileSidebar(false);
     }
   } catch (error) {
     if (token !== serverSelectionToken) return;
     setStatus(readableError(error), true);
-    renderConversationWelcome("Unable to load this server", "Try selecting it again after checking your connection.");
+    renderConversationWelcome("Unable to load this space", "Try selecting it again after checking your connection.");
   }
 }
 
@@ -2168,7 +2249,7 @@ async function showDirectMessages() {
   else {
     conversationTitle.textContent = "Your conversations";
     conversationSubtitle.textContent = "Start a private conversation to begin chatting";
-    channelIcon.textContent = "@";
+    setChannelIcon("inbox");
     renderConversationWelcome("No conversations yet", "Create a direct message or group conversation to get started.");
     renderMembers([]);
     updateComposerState();
@@ -2193,7 +2274,7 @@ async function refreshConversations() {
   else if (!selectedConversationId) {
     conversationTitle.textContent = "Your conversations";
     conversationSubtitle.textContent = "Start a private conversation to begin chatting";
-    channelIcon.textContent = "@";
+    setChannelIcon("inbox");
     renderConversationWelcome("No conversations yet", "Create a direct message or group conversation to get started.");
     renderMembers([]);
     updateComposerState();
@@ -2210,53 +2291,48 @@ function renderMembers(members: ConversationMember[]) {
     memberList.append(empty);
     return;
   }
-  const orderedMembers = [...members].sort((left, right) => {
-    const leftPosition = Math.max(...normalizeRoleIds(left.roleIds).map((id) => serverRoles.find((role) => role.id === id)?.position ?? 0), 0);
-    const rightPosition = Math.max(...normalizeRoleIds(right.roleIds).map((id) => serverRoles.find((role) => role.id === id)?.position ?? 0), 0);
-    return rightPosition - leftPosition || left.displayName.localeCompare(right.displayName);
-  });
-  for (const member of orderedMembers) {
-    const row = document.createElement("button");
-    const memberName = member.userId === currentUser?.id ? currentUser?.displayName ?? "You" : member.displayName || `@${member.username}`;
-    row.className = "member-row profile-trigger";
-    row.type = "button";
-    row.title = `View ${memberName}'s profile`;
-    row.addEventListener("click", () => void openUserProfile(member.userId));
-    const avatar = document.createElement("span");
-    avatar.className = "member-avatar";
-    avatar.textContent = memberName.slice(0, 1).toUpperCase();
-    setAvatarStyle(avatar, member.userId);
-    const copy = document.createElement("div");
-    copy.className = "member-copy";
-    const name = document.createElement("strong");
-    name.textContent = memberName;
-    const identity = document.createElement("span");
-    identity.className = "member-presence";
-    const state = member.userId === currentUser?.id ? "online" : presenceByUser.get(member.userId) ?? "offline";
-    identity.dataset.state = state;
-    identity.textContent = member.userId === currentUser?.id
-      ? `you · ${state}`
-      : `${state} · keys protected`;
-    copy.append(name, identity);
-    const memberRoles = normalizeRoleIds(member.roleIds)
-      .map((id) => serverRoles.find((role) => role.id === id))
-      .filter((role): role is CustomServerRole => Boolean(role))
-      .sort((left, right) => right.position - left.position)
-      .slice(0, 2);
-    if (memberRoles.length > 0) {
-      const roleList = document.createElement("span");
-      roleList.className = "member-role-list";
-      for (const role of memberRoles) {
-        const badge = document.createElement("span");
-        badge.className = "member-role-badge";
-        badge.style.setProperty("--role-color", role.color);
-        badge.textContent = serverRoleName(role);
-        roleList.append(badge);
-      }
-      copy.append(roleList);
+  type MemberGroup = { label: string; color?: string; position: number; members: ConversationMember[] };
+  const groups = new Map<string, MemberGroup>();
+  for (const member of members) {
+    const role = normalizeRoleIds(member.roleIds)
+      .map((id) => serverRoles.find((candidate) => candidate.id === id))
+      .filter((candidate): candidate is CustomServerRole => Boolean(candidate))
+      .sort((left, right) => right.position - left.position)[0];
+    const key = role?.id ?? "participants";
+    const group = groups.get(key) ?? {
+      label: role ? serverRoleName(role) : "Participants",
+      color: role?.color,
+      position: role?.position ?? -1,
+      members: [],
+    };
+    group.members.push(member);
+    groups.set(key, group);
+  }
+
+  for (const group of [...groups.values()].sort((left, right) => right.position - left.position || left.label.localeCompare(right.label))) {
+    const heading = document.createElement("div");
+    heading.className = "member-group-heading";
+    if (group.color) heading.style.setProperty("--role-color", group.color);
+    heading.textContent = group.label;
+    memberList.append(heading);
+    for (const member of group.members.sort((left, right) => left.displayName.localeCompare(right.displayName))) {
+      const row = document.createElement("button");
+      const memberName = member.userId === currentUser?.id ? currentUser?.displayName ?? "You" : member.displayName || `@${member.username}`;
+      row.className = "member-row compact-member-row profile-trigger";
+      row.type = "button";
+      row.title = `View ${memberName}'s profile`;
+      row.addEventListener("click", () => void openUserProfile(member.userId));
+      const state = member.userId === currentUser?.id ? "online" : presenceByUser.get(member.userId) ?? "offline";
+      const presence = document.createElement("span");
+      presence.className = "member-presence-dot";
+      presence.dataset.state = state;
+      presence.setAttribute("aria-hidden", "true");
+      const name = document.createElement("span");
+      name.className = "compact-member-name";
+      name.textContent = member.userId === currentUser?.id ? `${memberName} · you` : memberName;
+      row.append(presence, name);
+      memberList.append(row);
     }
-    row.append(avatar, copy);
-    memberList.append(row);
   }
 }
 
@@ -2267,7 +2343,7 @@ function renderConversationWelcome(title: string, description: string) {
   empty.className = "conversation-welcome";
   const icon = document.createElement("div");
   icon.className = "conversation-welcome-icon";
-  icon.textContent = "✦";
+  icon.textContent = "N";
   const heading = document.createElement("h3");
   heading.textContent = title;
   const body = document.createElement("p");
@@ -2457,7 +2533,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   conversationTitle.textContent = channel ? channelDisplayName(channel) : conversation ? conversationDisplayName(conversation) : "Conversation";
   conversationSubtitle.textContent = "Loading encrypted conversation…";
   renderMessageSkeletons();
-  channelIcon.textContent = channel ? "#" : conversation?.kind === "group" ? "#" : "@";
+  setChannelIcon(channel ? "message-square" : conversation?.kind === "group" ? "users-round" : "user-round");
   updateComposerState();
   renderConversations();
   renderChannels();
@@ -2659,7 +2735,7 @@ function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sen
   const menu = document.createElement("button");
   menu.className = "message-action message-action-menu";
   menu.type = "button";
-  menu.textContent = "⋯";
+  menu.append(iconElement("more-horizontal"));
   menu.title = "Message actions";
   menu.setAttribute("aria-label", `Actions for message from ${sender}`);
   menu.setAttribute("aria-expanded", "false");
@@ -2707,6 +2783,7 @@ function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sen
     actions.append(remove);
   }
   parent.append(actions);
+  renderIcons(actions);
 }
 
 messagesPanel.addEventListener("click", (event) => {
@@ -2750,7 +2827,7 @@ function appendUnavailableMessage(messageId: string) {
     const icon = document.createElement("span");
     icon.className = "unavailable-history-icon";
     icon.setAttribute("aria-hidden", "true");
-    icon.textContent = "⌑";
+    icon.append(iconElement("key-round"));
     const copy = document.createElement("div");
     const heading = document.createElement("strong");
     heading.className = "unavailable-history-title";
@@ -2759,6 +2836,7 @@ function appendUnavailableMessage(messageId: string) {
     copy.append(heading, explanation);
     notice.append(icon, copy);
     messagesPanel.append(notice);
+    renderIcons(notice);
   }
   const count = Number(notice.dataset.count ?? "0") + 1;
   notice.dataset.count = String(count);
@@ -2979,7 +3057,10 @@ function renderMessage(
     replyContext.className = "reply-context";
     replyContext.type = "button";
     replyContext.title = "Jump to replied message";
-    replyContext.textContent = `↪ ${reply.sender}: ${(reply.body || "Encrypted message").replace(/\s+/g, " ").slice(0, 180)}`;
+    const replyLabel = document.createElement("span");
+    replyLabel.textContent = `${reply.sender}: ${(reply.body || "Encrypted message").replace(/\s+/g, " ").slice(0, 180)}`;
+    replyContext.append(iconElement("corner-up-left"), replyLabel);
+    renderIcons(replyContext);
     replyContext.addEventListener("click", () => void scrollToMessage(reply.messageId));
     messageContent.insertBefore(replyContext, messageContent.children[1] ?? null);
   }
@@ -3077,7 +3158,7 @@ async function renderMessageHistoryInternal(options: { scrollAnchor?: ScrollAnch
   if (options.scrollAnchor) {
     restoreScrollAnchor(options.scrollAnchor);
   } else if (options.scrollToBottom !== false) {
-    messagesPanel.scrollTop = messagesPanel.scrollHeight;
+    scrollToLatest();
   }
 }
 
@@ -3157,7 +3238,7 @@ async function appendOptimisticMessage(message: MessageEnvelope) {
   } else {
     await renderMessageHistory({ scrollToBottom: true });
   }
-  messagesPanel.scrollTop = messagesPanel.scrollHeight;
+  scrollToLatest();
   clearUnread();
   if (currentUser) void writeCachedMessages(currentUser.id, conversationId, loadedMessages);
 }
@@ -3239,7 +3320,7 @@ async function refreshMessages(options: { forceScrollToBottom?: boolean } = {}) 
 
     if (newMessages.length === 0) {
       nextAfter = caughtUp.nextAfter;
-      messagesPanel.scrollTop = messagesPanel.scrollHeight;
+       scrollToLatest();
        clearUnread({ clearMentionHighlights: false });
       return;
     }
@@ -3250,7 +3331,7 @@ async function refreshMessages(options: { forceScrollToBottom?: boolean } = {}) 
     const appendOnly = merged.trimmed === 0 && previousMessages.length > 0;
     if (appendOnly) await appendNewMessages(newMessages, conversationId, activeCryptoClient);
     else await renderMessageHistory({ scrollToBottom: true });
-    messagesPanel.scrollTop = messagesPanel.scrollHeight;
+    scrollToLatest();
     if (currentUser) void writeCachedMessages(currentUser.id, conversationId, loadedMessages);
      clearUnread({ clearMentionHighlights: false });
   } finally {
@@ -3312,19 +3393,19 @@ async function encryptAndStoreMetadata(serverId: string, channel: ServerChannel,
 
 async function createServer() {
   if (!cryptoClient) return;
-  const name = await askText("Create a server", "Only members you invite can join. The name is encrypted before it leaves this device.", "Server name", "My private server");
+  const name = await askText("Create a private space", "Only people you invite can join. The name is encrypted before it leaves this device.", "Space name", "My private space");
   if (!name) return;
   createServerButton.disabled = true;
   mobileCreateServerButton.disabled = true;
-  setStatus("Creating encrypted server…");
+  setStatus("Creating encrypted space…");
   try {
     const result = await api.createServer();
-    await encryptAndStoreMetadata(result.server.id, result.channel, "general", name);
+    await encryptAndStoreMetadata(result.server.id, result.channel, "lobby", name);
     serverLabels.set(result.server.id, name.slice(0, 80));
-    channelLabels.set(result.channel.id, "general");
+    channelLabels.set(result.channel.id, "lobby");
     await refreshServers();
     await selectServer(result.server.id, result.channel.id);
-    setStatus("Encrypted server is ready.");
+    setStatus("Encrypted space is ready.");
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
@@ -3337,16 +3418,16 @@ async function createServer() {
 async function createChannel() {
   const server = selectedServerId ? servers.find((item) => item.id === selectedServerId) : undefined;
   if (!server || !cryptoClient) return;
-  const name = await askText("Create a text channel", "Channel names are encrypted. Each channel has its own conversation key.", "Channel name", "new-channel");
+  const name = await askText("Create an encrypted room", "Room names are encrypted. Each room has its own conversation key.", "Room name", "new-room");
   if (!name) return;
   createChannelButton.disabled = true;
-  setStatus("Creating encrypted channel…");
+  setStatus("Creating encrypted room…");
   try {
     const result = await api.createChannel(server.id);
     await encryptAndStoreMetadata(server.id, result.channel, name);
     await refreshServers();
     await selectServer(server.id, result.channel.id);
-    setStatus("Encrypted channel is ready.");
+    setStatus("Encrypted room is ready.");
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
@@ -3371,7 +3452,7 @@ async function createInvite() {
 }
 
 async function joinServer() {
-  const token = await askText("Join a server", "Ask a server admin for an invite token. It grants access to current channels, not older message history.", "Invite token");
+  const token = await askText("Join a private space", "Ask a space steward for an invite token. It grants access to current rooms, not older message history.", "Invite token");
   if (!token) return;
   joinServerButton.disabled = true;
   mobileJoinServerButton.disabled = true;
@@ -3379,7 +3460,7 @@ async function joinServer() {
     const result = await api.acceptInvite(token);
     await refreshServers();
     await selectServer(result.serverId);
-    setStatus("You joined the encrypted server.");
+    setStatus("You joined the encrypted space.");
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
@@ -3766,6 +3847,7 @@ window.addEventListener("pagehide", () => {
 
 updateComposerState();
 resizeMessageInput();
+renderIcons();
 
 async function boot() {
   try {
@@ -3776,9 +3858,24 @@ async function boot() {
       window.location.assign("/");
       return;
     }
-    window.location.assign(`/unlock?error=${encodeURIComponent(readableError(error))}`);
+    if (error instanceof LocalCryptoStoreError) {
+      const returnPath = `${window.location.pathname}${window.location.search}`;
+      window.location.assign(`/unlock?error=${encodeURIComponent(error.message)}&return=${encodeURIComponent(returnPath)}`);
+      return;
+    }
+    window.clearTimeout(realtimeHandshakeTimer);
+    realtimeHandshakeTimer = undefined;
+    const failedRealtime = realtime;
+    realtime = undefined;
+    realtimeReadySocket = undefined;
+    failedRealtime?.close();
+    await cryptoClient?.close().catch(() => undefined);
+    cryptoClient = undefined;
+    setStatus(readableError(error), true);
+    return;
   }
 
+  if (!cryptoClient) return;
   window.setInterval(() => {
     if (cryptoClient) {
       void cryptoClient.syncToDevice()

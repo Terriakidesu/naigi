@@ -10,21 +10,21 @@
   </head>
   <body class="auth-page">
     <header class="topbar">
-      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">✦</span><div><strong>Naigi</strong><span class="tag">private consultation · new conversation</span></div></div>
+      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">N</span><div><strong>Naigi</strong><span class="tag">self-hosted · new conversation</span></div></div>
       <a class="text-link" href="/app">Back to chat</a>
     </header>
     <main class="auth-panel panel form-page-panel new-conversation-panel">
       <p class="eyebrow">NEW CONVERSATION</p>
       <h1>Start a private space.</h1>
-      <p class="muted">Only members of a shared server can be added. Naigi never searches the global account directory.</p>
+      <p class="muted">Only people in a shared space can be added. Naigi never searches the global account directory.</p>
       <form id="new-conversation-form" class="stack">
-        <label for="member-server">Shared server<select id="member-server" aria-label="Choose a shared server"><option value="">Choose a shared server…</option></select></label>
-        <label for="member-search">Find server members</label>
+        <label for="member-server">Shared space<select id="member-server" aria-label="Choose a shared space"><option value="">Choose a shared space…</option></select></label>
+        <label for="member-search">Find people in this space</label>
         <div class="member-search-field">
-          <span aria-hidden="true">⌕</span>
-          <input id="member-search" type="search" placeholder="Choose a shared server first" autocomplete="off" aria-label="Find server members" disabled>
+          <i data-lucide="search"></i>
+          <input id="member-search" type="search" placeholder="Choose a shared space first" autocomplete="off" aria-label="Find people in this space" disabled>
         </div>
-        <div id="member-results" class="member-picker" aria-live="polite"><p class="muted">Choose a shared server to see its members.</p></div>
+        <div id="member-results" class="member-picker" aria-live="polite"><p class="muted">Choose a shared space to see its people.</p></div>
         <div class="selected-members-heading"><span>SELECTED MEMBERS</span><span id="selected-count">0</span></div>
         <div id="selected-members" class="selected-members"><p class="muted">No members selected yet.</p></div>
         <button id="create-submit" type="submit" disabled>Create encrypted conversation</button>

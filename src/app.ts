@@ -197,28 +197,53 @@ const serverPermissionNames = [
   "view_channels",
   "send_messages",
   "upload_files",
+  "view_members",
   "mention_everyone",
   "mention_here",
   "mention_roles",
   "manage_server",
   "manage_channels",
+  "create_channels",
+  "edit_channels",
+  "reorder_channels",
+  "archive_channels",
+  "manage_categories",
+  "manage_channel_access",
   "manage_invites",
+  "view_invites",
+  "create_invites",
+  "revoke_invites",
+  "manage_invite_limits",
   "manage_roles",
+  "create_roles",
+  "edit_roles",
+  "delete_roles",
+  "assign_roles",
+  "reorder_roles",
+  "manage_role_permissions",
+  "manage_role_appearance",
   "manage_members",
+  "kick_members",
+  "view_moderation_records",
   "ban_members",
+  "unban_members",
   "timeout_members",
+  "remove_timeouts",
+  "pin_messages",
+  "delete_others_messages",
   "delete_messages",
 ] as const;
 
 type ServerPermission = typeof serverPermissionNames[number];
 type ServerPermissionMap = Record<ServerPermission, boolean>;
+type ServerSystemKey = "owner" | "admin" | "everyone" | "member";
 type ServerAuthorizationRole = {
   id: string;
   permissions: unknown;
   view_all_channels: boolean;
   position: number;
   is_system: boolean;
-  system_key: "owner" | "admin" | "member" | null;
+  system_key: ServerSystemKey | null;
 };
 type ServerAuthorization = {
   role: "owner" | "admin" | "member";
@@ -230,30 +255,54 @@ type ServerAuthorization = {
 
 function permissionMap(value: unknown, fallback: Partial<ServerPermissionMap> = {}) {
   const object = objectValue(value);
-  return Object.fromEntries(serverPermissionNames.map((name) => [name, object?.[name] === true || fallback[name] === true])) as ServerPermissionMap;
+  return Object.fromEntries(serverPermissionNames.map((name) => [
+    name,
+    object && Object.prototype.hasOwnProperty.call(object, name)
+      ? object[name] === true
+      : fallback[name] === true,
+  ])) as ServerPermissionMap;
 }
 
-function defaultRolePermissions(systemKey: "owner" | "admin" | "member"): ServerPermissionMap {
+function defaultRolePermissions(systemKey: ServerSystemKey): ServerPermissionMap {
   if (systemKey === "owner") return permissionMap(undefined, Object.fromEntries(serverPermissionNames.map((name) => [name, true])));
   if (systemKey === "admin") return permissionMap(undefined, {
     view_channels: true,
     send_messages: true,
     upload_files: true,
+    view_members: true,
     mention_everyone: true,
     mention_here: true,
     mention_roles: true,
     manage_server: true,
     manage_channels: true,
+    create_channels: true,
+    edit_channels: true,
+    reorder_channels: true,
+    archive_channels: true,
+    manage_categories: true,
+    manage_channel_access: true,
     manage_invites: true,
+    view_invites: true,
+    create_invites: true,
+    revoke_invites: true,
+    manage_invite_limits: true,
     manage_members: true,
+    kick_members: true,
+    view_moderation_records: true,
     ban_members: true,
+    unban_members: true,
     timeout_members: true,
+    remove_timeouts: true,
+    pin_messages: true,
+    delete_others_messages: true,
     delete_messages: true,
   });
   return permissionMap(undefined, {
     view_channels: true,
     send_messages: true,
     upload_files: true,
+    view_members: true,
+    pin_messages: true,
   });
 }
 
@@ -261,14 +310,30 @@ function hasServerPermission(authorization: ServerAuthorization, permission: Ser
   return authorization.isOwner || authorization.permissions[permission];
 }
 
+function hasAnyServerPermission(authorization: ServerAuthorization, ...permissions: ServerPermission[]) {
+  return authorization.isOwner || permissions.some((permission) => authorization.permissions[permission]);
+}
+
 function highestRolePosition(authorization: ServerAuthorization) {
   return Math.max(...authorization.roles.map((role) => role.position), 0);
 }
 
-function canManageRole(authorization: ServerAuthorization, role: ServerAuthorizationRole | Pick<ServerRoleRow, "position" | "is_system">) {
-  if (!hasServerPermission(authorization, "manage_roles")) return false;
+function canManageRoleHierarchy(
+  authorization: ServerAuthorization,
+  role: ServerAuthorizationRole | Pick<ServerRoleRow, "position" | "is_system">,
+) {
   if (authorization.isOwner) return true;
   return !role.is_system && role.position < highestRolePosition(authorization);
+}
+
+function canManageRole(
+  authorization: ServerAuthorization,
+  role: ServerAuthorizationRole | Pick<ServerRoleRow, "position" | "is_system">,
+  ...permissions: ServerPermission[]
+) {
+  const requiredPermissions: ServerPermission[] = permissions.length > 0 ? permissions : ["manage_roles"];
+  if (!hasAnyServerPermission(authorization, ...requiredPermissions, "manage_roles")) return false;
+  return canManageRoleHierarchy(authorization, role);
 }
 
 function canModerateTarget(actor: ServerAuthorization, target: ServerAuthorization) {
@@ -297,18 +362,18 @@ async function serverAuthorization(serverId: string, userId: string) {
     where smr.server_id = ${serverId} and smr.user_id = ${userId}
     order by sr.position desc, sr.created_at asc
   `;
-  const assignedRoles = roles.some((role) => role.system_key !== "member")
-    ? roles.filter((role) => role.system_key !== "member")
+  const assignedRoles = roles.some((role) => role.system_key !== "everyone")
+    ? roles.filter((role) => role.system_key !== "everyone")
     : roles;
-  const effectiveRoles = assignedRoles.length > 0
+  const effectiveRoles: ServerAuthorizationRole[] = assignedRoles.length > 0
     ? assignedRoles
     : [{
       id: "legacy",
-      permissions: defaultRolePermissions(membership.role),
+      permissions: defaultRolePermissions(membership.role === "member" ? "everyone" : membership.role),
       view_all_channels: true,
       position: membership.role === "owner" ? 100_000 : membership.role === "admin" ? 90_000 : 0,
       is_system: true,
-      system_key: membership.role,
+      system_key: (membership.role === "member" ? "everyone" : membership.role) as ServerSystemKey,
     }];
   const permissions = permissionMap(undefined);
   for (const role of effectiveRoles) {
@@ -351,14 +416,14 @@ async function channelAuthorization(serverId: string, userId: string, channelId:
           and smr.user_id = ${userId}
           and sr.permissions->>'view_channels' = 'true'
           and not (
-            sr.system_key is not distinct from 'member'
+            sr.system_key is not distinct from 'everyone'
             and exists (
               select 1
               from server_member_roles elevated_smr
               join server_roles elevated_sr on elevated_sr.id = elevated_smr.role_id
               where elevated_smr.server_id = smr.server_id
                 and elevated_smr.user_id = smr.user_id
-                and elevated_sr.system_key is distinct from 'member'
+                and elevated_sr.system_key is distinct from 'everyone'
             )
           )
           and (
@@ -377,14 +442,14 @@ async function channelAuthorization(serverId: string, userId: string, channelId:
         where smr.server_id = ${serverId}
           and smr.user_id = ${userId}
           and not (
-            sr.system_key is not distinct from 'member'
+            sr.system_key is not distinct from 'everyone'
             and exists (
               select 1
               from server_member_roles elevated_smr
               join server_roles elevated_sr on elevated_sr.id = elevated_smr.role_id
               where elevated_smr.server_id = smr.server_id
                 and elevated_smr.user_id = smr.user_id
-                and elevated_sr.system_key is distinct from 'member'
+                and elevated_sr.system_key is distinct from 'everyone'
             )
           )
           and (
@@ -450,13 +515,9 @@ async function syncChannelConversationMembership(serverId: string, channelId: st
     select sm.server_id, sm.user_id, sr.id
     from server_members sm
     join server_roles sr on sr.server_id = sm.server_id
-      and sr.system_key = case when sm.role = 'owner' then 'owner' when sm.role = 'admin' then 'admin' else 'member' end
+      and sr.system_key = 'everyone'
     where sm.server_id = ${serverId}
       and sm.left_at is null
-      and not exists (
-        select 1 from server_member_roles existing
-        where existing.server_id = sm.server_id and existing.user_id = sm.user_id
-      )
     on conflict do nothing
   `;
   const [channel] = await db<{ conversation_id: string }[]>`
@@ -488,14 +549,14 @@ async function syncChannelConversationMembership(serverId: string, channelId: st
             where smr.server_id = sm.server_id and smr.user_id = sm.user_id
               and sr.permissions->>'view_channels' = 'true'
               and not (
-                sr.system_key is not distinct from 'member'
+                sr.system_key is not distinct from 'everyone'
                 and exists (
                   select 1
                   from server_member_roles elevated_smr
                   join server_roles elevated_sr on elevated_sr.id = elevated_smr.role_id
                   where elevated_smr.server_id = smr.server_id
                     and elevated_smr.user_id = smr.user_id
-                    and elevated_sr.system_key is distinct from 'member'
+                    and elevated_sr.system_key is distinct from 'everyone'
                 )
               )
               and (
@@ -530,14 +591,14 @@ async function syncChannelConversationMembership(serverId: string, channelId: st
                 where smr.server_id = sm.server_id and smr.user_id = sm.user_id
                   and sr.permissions->>'view_channels' = 'true'
                   and not (
-                    sr.system_key is not distinct from 'member'
+                    sr.system_key is not distinct from 'everyone'
                     and exists (
                       select 1
                       from server_member_roles elevated_smr
                       join server_roles elevated_sr on elevated_sr.id = elevated_smr.role_id
                       where elevated_smr.server_id = smr.server_id
                         and elevated_smr.user_id = smr.user_id
-                        and elevated_sr.system_key is distinct from 'member'
+                        and elevated_sr.system_key is distinct from 'everyone'
                     )
                   )
                   and (
@@ -584,7 +645,7 @@ type ServerRoleRow = {
   mentionable: boolean;
   view_all_channels: boolean;
   is_system: boolean;
-  system_key: "owner" | "admin" | "member" | null;
+  system_key: ServerSystemKey | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -662,14 +723,17 @@ export function createApp() {
   const realtimeConnections = new WeakMap<object, RealtimeConnection>();
 
   return new Elysia()
-    .onError(({ code, set }) => {
+    .onError(({ code, error, request, set }) => {
       if (code === "VALIDATION") return respondError(set, 422, "validation_error");
-      console.error("Unhandled request error");
+      const detail = error instanceof Error
+        ? `${error.name}: ${error.message}${error.stack ? `\n${error.stack}` : ""}`
+        : String(error);
+      console.error(`[request-error] ${request.method} ${new URL(request.url).pathname} (${code})\n${detail}`);
       return respondError(set, 500, "internal_error");
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "1.7.0" };
+         ?? { name: "Naigi", version: "0.9.0" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -902,8 +966,8 @@ export function createApp() {
         `;
         const systemRoles = [
           { systemKey: "owner", color: "#f0b232", position: 100_000, permissions: defaultRolePermissions("owner") },
-          { systemKey: "admin", color: "#5865f2", position: 90_000, permissions: defaultRolePermissions("admin") },
-          { systemKey: "member", color: "#99aab5", position: 0, permissions: defaultRolePermissions("member") },
+          { systemKey: "admin", color: "#92aaa5", position: 90_000, permissions: defaultRolePermissions("admin") },
+          { systemKey: "everyone", color: "#99aab5", position: 0, permissions: defaultRolePermissions("everyone") },
         ] as const;
         for (const systemRole of systemRoles) {
           await transaction`
@@ -923,7 +987,7 @@ export function createApp() {
           insert into server_member_roles (server_id, user_id, role_id)
           select ${server.id}, ${user.id}, id
           from server_roles
-          where server_id = ${server.id} and system_key = 'owner'
+          where server_id = ${server.id} and system_key in ('owner', 'everyone')
         `;
         const [conversation] = await transaction<{ id: string }[]>`
           insert into conversations (kind, created_by)
@@ -1137,7 +1201,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_channels", "create_channels")) return respondError(set, 403, "insufficient_server_permissions");
 
       let metadata: Buffer;
       try {
@@ -1183,14 +1247,14 @@ export function createApp() {
                 where smr.server_id = sm.server_id and smr.user_id = sm.user_id
                   and sr.permissions->>'view_channels' = 'true'
                   and not (
-                    sr.system_key is not distinct from 'member'
+                    sr.system_key is not distinct from 'everyone'
                     and exists (
                       select 1
                       from server_member_roles elevated_smr
                       join server_roles elevated_sr on elevated_sr.id = elevated_smr.role_id
                       where elevated_smr.server_id = smr.server_id
                         and elevated_smr.user_id = smr.user_id
-                        and elevated_sr.system_key is distinct from 'member'
+                        and elevated_sr.system_key is distinct from 'everyone'
                     )
                   )
                   and sr.view_all_channels
@@ -1231,7 +1295,10 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_channels", "edit_channels", "reorder_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      if (body.encryptedMetadata !== undefined && !hasAnyServerPermission(membership, "manage_channels", "edit_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      if (body.categoryId !== undefined && !hasAnyServerPermission(membership, "manage_channels", "edit_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      if (body.position !== undefined && !hasAnyServerPermission(membership, "manage_channels", "reorder_channels")) return respondError(set, 403, "insufficient_server_permissions");
 
       const [existing] = await db<{ id: string; encrypted_metadata: Buffer }[]>`
         select id, encrypted_metadata from channels
@@ -1314,7 +1381,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_channels", "archive_channels")) return respondError(set, 403, "insufficient_server_permissions");
       const [activeCount] = await db<{ count: number }[]>`
         select count(*)::int as count from channels
         where server_id = ${params.serverId} and archived_at is null
@@ -1370,7 +1437,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_channels", "manage_categories")) return respondError(set, 403, "insufficient_server_permissions");
 
       let metadata: Buffer;
       try {
@@ -1416,7 +1483,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_channels", "manage_categories")) return respondError(set, 403, "insufficient_server_permissions");
 
       const [existing] = await db<{ id: string }[]>`
         select id from categories
@@ -1464,7 +1531,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_channels", "manage_categories")) return respondError(set, 403, "insufficient_server_permissions");
       const archived = await db.begin(async (transaction) => {
         const [category] = await transaction<{ id: string }[]>`
           update categories set archived_at = coalesce(archived_at, now())
@@ -1486,7 +1553,9 @@ export function createApp() {
     .get("/v1/servers/:serverId/members", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
-      if (!await serverMembership(params.serverId, user.id)) return respondError(set, 403, "not_a_server_member");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasServerPermission(authorization, "view_members")) return respondError(set, 403, "insufficient_server_permissions");
 
       const members = await db<{
         id: string;
@@ -1567,9 +1636,9 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const authorization = await serverAuthorization(params.serverId, user.id);
       if (!authorization) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(authorization, "manage_roles")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(authorization, "manage_roles", "create_roles")) return respondError(set, 403, "insufficient_server_permissions");
       if (body.color !== undefined && !validRoleColor(body.color)) return respondError(set, 400, "invalid_role_color");
-      const permissions = body.permissions === undefined ? defaultRolePermissions("member") : rolePermissionInput(body.permissions);
+      const permissions = body.permissions === undefined ? defaultRolePermissions("everyone") : rolePermissionInput(body.permissions);
       if (!permissions) return respondError(set, 400, "invalid_role_permissions");
 
       let metadata: Buffer;
@@ -1591,7 +1660,7 @@ export function createApp() {
         insert into server_roles (
           server_id, encrypted_metadata, color, position, permissions, mentionable, view_all_channels
         ) values (
-          ${params.serverId}, ${metadata}, ${body.color ?? "#5865f2"}, ${rolePosition},
+          ${params.serverId}, ${metadata}, ${body.color ?? "#92aaa5"}, ${rolePosition},
           ${permissions}::jsonb, ${body.mentionable ?? false}, ${body.viewAllChannels ?? true}
         )
         returning id, server_id, encrypted_metadata, color, position, permissions,
@@ -1621,11 +1690,44 @@ export function createApp() {
         from server_roles where id = ${params.roleId} and server_id = ${params.serverId}
       `;
       if (!existing) return respondError(set, 404, "role_not_found");
-      if (!canManageRole(authorization, existing)) {
+      if (!canManageRoleHierarchy(authorization, existing)) {
         return respondError(set, 403, "insufficient_server_permissions");
       }
-      if (existing.system_key === "owner" && (body.mentionable === true || body.viewAllChannels === false)) {
+      if (existing.system_key === "owner" && (
+        body.encryptedMetadata !== undefined
+        || body.color !== undefined
+        || body.position !== undefined
+        || body.permissions !== undefined
+        || body.mentionable !== undefined
+        || body.viewAllChannels !== undefined
+      )) {
         return respondError(set, 400, "owner_role_is_not_customizable");
+      }
+      if (existing.system_key === "everyone" && (
+        body.encryptedMetadata !== undefined
+        || body.color !== undefined
+        || body.position !== undefined
+        || body.mentionable !== undefined
+      )) {
+        return respondError(set, 400, "everyone_role_identity_is_not_customizable");
+      }
+      if (body.encryptedMetadata !== undefined && !hasAnyServerPermission(authorization, "manage_roles", "edit_roles", "manage_role_appearance")) {
+        return respondError(set, 403, "insufficient_server_permissions");
+      }
+      if (body.color !== undefined && !hasAnyServerPermission(authorization, "manage_roles", "manage_role_appearance")) {
+        return respondError(set, 403, "insufficient_server_permissions");
+      }
+      if (body.position !== undefined && !hasAnyServerPermission(authorization, "manage_roles", "reorder_roles")) {
+        return respondError(set, 403, "insufficient_server_permissions");
+      }
+      if (body.permissions !== undefined && !hasAnyServerPermission(authorization, "manage_roles", "manage_role_permissions")) {
+        return respondError(set, 403, "insufficient_server_permissions");
+      }
+      if (body.mentionable !== undefined && !hasAnyServerPermission(authorization, "manage_roles", "manage_role_appearance")) {
+        return respondError(set, 403, "insufficient_server_permissions");
+      }
+      if (body.viewAllChannels !== undefined && !hasAnyServerPermission(authorization, "manage_roles", "manage_channel_access")) {
+        return respondError(set, 403, "insufficient_server_permissions");
       }
       if (body.color !== undefined && !validRoleColor(body.color)) return respondError(set, 400, "invalid_role_color");
       const permissions = body.permissions === undefined ? undefined : rolePermissionInput(body.permissions);
@@ -1676,7 +1778,7 @@ export function createApp() {
       `;
       if (!role) return respondError(set, 404, "role_not_found");
       if (role.is_system) return respondError(set, 409, "cannot_delete_system_role");
-      if (!canManageRole(authorization, role)) return respondError(set, 403, "insufficient_server_permissions");
+      if (!canManageRole(authorization, role, "delete_roles")) return respondError(set, 403, "insufficient_server_permissions");
       await db`delete from server_roles where id = ${role.id}`;
       await syncServerChannelMemberships(params.serverId);
       return { deleted: true };
@@ -1688,15 +1790,16 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const authorization = await serverAuthorization(params.serverId, user.id);
       if (!authorization) return respondError(set, 403, "not_a_server_member");
-      const [role] = await db<Pick<ServerRoleRow, "id" | "position" | "is_system">[]>`
-        select id, position, is_system from server_roles where id = ${params.roleId} and server_id = ${params.serverId}
+      const [role] = await db<Pick<ServerRoleRow, "id" | "position" | "is_system" | "system_key">[]>`
+        select id, position, is_system, system_key from server_roles where id = ${params.roleId} and server_id = ${params.serverId}
       `;
       const [channel] = await db<{ id: string }[]>`
         select id from channels where id = ${params.channelId} and server_id = ${params.serverId} and archived_at is null
       `;
       if (!role) return respondError(set, 404, "role_not_found");
       if (!channel) return respondError(set, 404, "channel_not_found");
-      if (!canManageRole(authorization, role)) return respondError(set, 403, "insufficient_server_permissions");
+      if (role.is_system && role.system_key === "owner") return respondError(set, 400, "owner_role_is_not_customizable");
+      if (!canManageRole(authorization, role, "manage_channel_access")) return respondError(set, 403, "insufficient_server_permissions");
       const canView = body.canView === true || body.canUpload === true;
       const canUpload = body.canUpload === true;
       await db`
@@ -1717,8 +1820,8 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const authorization = await serverAuthorization(params.serverId, user.id);
       if (!authorization) return respondError(set, 403, "not_a_server_member");
-      const [role] = await db<Pick<ServerRoleRow, "id" | "position" | "is_system">[]>`
-        select id, position, is_system from server_roles
+      const [role] = await db<Pick<ServerRoleRow, "id" | "position" | "is_system" | "system_key">[]>`
+        select id, position, is_system, system_key from server_roles
         where id = ${params.roleId} and server_id = ${params.serverId}
       `;
       const [channel] = await db<{ id: string }[]>`
@@ -1727,7 +1830,8 @@ export function createApp() {
       `;
       if (!role) return respondError(set, 404, "role_not_found");
       if (!channel) return respondError(set, 404, "channel_not_found");
-      if (!canManageRole(authorization, role)) return respondError(set, 403, "insufficient_server_permissions");
+      if (role.is_system && role.system_key === "owner") return respondError(set, 400, "owner_role_is_not_customizable");
+      if (!canManageRole(authorization, role, "manage_channel_access")) return respondError(set, 403, "insufficient_server_permissions");
       await db`
         delete from server_role_channel_access src
         using server_roles sr, channels c
@@ -1745,7 +1849,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const authorization = await serverAuthorization(params.serverId, user.id);
       if (!authorization) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(authorization, "manage_roles")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(authorization, "manage_roles", "assign_roles")) return respondError(set, 403, "insufficient_server_permissions");
       if (params.userId === user.id && authorization.isOwner) return respondError(set, 400, "cannot_change_owner_role");
       const [target] = await db<{ role: "owner" | "admin" | "member" }[]>`
         select role from server_members
@@ -1763,21 +1867,19 @@ export function createApp() {
         where server_id = ${params.serverId} and id in ${db(roleIds)}
       `;
       if (roles.length !== roleIds.length) return respondError(set, 400, "invalid_role_assignment");
-      const defaultRole = roles.length === 0
-        ? (await db<{ id: string; is_system: boolean; system_key: string | null; position: number }[]>`
-            select id, is_system, system_key, position
-            from server_roles
-            where server_id = ${params.serverId} and system_key = 'member'
-          `)[0]
-        : undefined;
-      const assignedRoles = defaultRole ? [defaultRole] : roles;
+      const [defaultRole] = await db<{ id: string; is_system: boolean; system_key: string | null; position: number }[]>`
+        select id, is_system, system_key, position
+        from server_roles
+        where server_id = ${params.serverId} and system_key = 'everyone'
+      `;
+      if (!defaultRole) return respondError(set, 500, "everyone_role_missing");
+      const selectedRoles = roles.filter((role) => role.system_key !== "everyone");
+      const assignedRoles = [defaultRole, ...selectedRoles];
       if (assignedRoles.some((role) => role.system_key === "owner")) return respondError(set, 400, "cannot_assign_owner_role");
-      if (!authorization.isOwner && assignedRoles.some((role) => role.system_key !== "member" && role.position >= highestRolePosition(authorization))) {
+      if (!authorization.isOwner && assignedRoles.some((role) => role.system_key !== "everyone" && role.position >= highestRolePosition(authorization))) {
         return respondError(set, 403, "role_hierarchy_violation");
       }
-      const effectiveRoleIds = assignedRoles
-        .filter((role) => role.system_key !== "member" || !assignedRoles.some((candidate) => candidate.system_key !== "member"))
-        .map((role) => role.id);
+      const effectiveRoleIds = assignedRoles.map((role) => role.id);
       await db.begin(async (transaction) => {
         await transaction`
           delete from server_member_roles
@@ -1810,7 +1912,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const authorization = await serverAuthorization(params.serverId, user.id);
       if (!authorization) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(authorization, "manage_members")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(authorization, "manage_members", "view_moderation_records")) return respondError(set, 403, "insufficient_server_permissions");
       const bans = await db<{
         id: string;
         user_id: string;
@@ -1871,7 +1973,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const authorization = await serverAuthorization(params.serverId, user.id);
       if (!authorization) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(authorization, "ban_members")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(authorization, "manage_members", "ban_members")) return respondError(set, 403, "insufficient_server_permissions");
       if (params.userId === user.id) return respondError(set, 400, "cannot_moderate_self");
       const target = await serverAuthorization(params.serverId, params.userId);
       if (!target) return respondError(set, 404, "server_member_not_found");
@@ -1913,7 +2015,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const authorization = await serverAuthorization(params.serverId, user.id);
       if (!authorization) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(authorization, "ban_members")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(authorization, "manage_members", "unban_members")) return respondError(set, 403, "insufficient_server_permissions");
       const [revoked] = await db<{ id: string }[]>`
         update server_bans set revoked_at = coalesce(revoked_at, now())
         where server_id = ${params.serverId} and user_id = ${params.userId} and revoked_at is null
@@ -1929,7 +2031,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const authorization = await serverAuthorization(params.serverId, user.id);
       if (!authorization) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(authorization, "timeout_members")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(authorization, "manage_members", "timeout_members")) return respondError(set, 403, "insufficient_server_permissions");
       if (params.userId === user.id) return respondError(set, 400, "cannot_moderate_self");
       const target = await serverAuthorization(params.serverId, params.userId);
       if (!target) return respondError(set, 404, "server_member_not_found");
@@ -1961,7 +2063,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const authorization = await serverAuthorization(params.serverId, user.id);
       if (!authorization) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(authorization, "timeout_members")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(authorization, "manage_members", "remove_timeouts")) return respondError(set, 403, "insufficient_server_permissions");
       const [revoked] = await db<{ id: string }[]>`
         update server_timeouts set revoked_at = coalesce(revoked_at, now())
         where server_id = ${params.serverId} and user_id = ${params.userId} and revoked_at is null
@@ -1977,7 +2079,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_invites")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_invites", "view_invites")) return respondError(set, 403, "insufficient_server_permissions");
       const invites = await db<{
         id: string;
         max_uses: number;
@@ -2010,7 +2112,11 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_invites")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_invites", "create_invites")) return respondError(set, 403, "insufficient_server_permissions");
+      if ((body.maxUses !== undefined || body.expiresInSeconds !== undefined)
+        && !hasAnyServerPermission(membership, "manage_invites", "manage_invite_limits")) {
+        return respondError(set, 403, "insufficient_server_permissions");
+      }
 
       const token = newInviteToken();
       const tokenHash = await hashInviteToken(token);
@@ -2082,35 +2188,11 @@ export function createApp() {
                joined_at = now()
         `;
         await transaction`
-          delete from server_member_roles member_smr
-          using server_roles member_sr
-          where member_smr.role_id = member_sr.id
-            and member_smr.server_id = ${invite.server_id}
-            and member_smr.user_id = ${user.id}
-            and member_sr.system_key = 'member'
-            and exists (
-              select 1
-              from server_member_roles elevated_smr
-              join server_roles elevated_sr on elevated_sr.id = elevated_smr.role_id
-              where elevated_smr.server_id = member_smr.server_id
-                and elevated_smr.user_id = member_smr.user_id
-                and elevated_sr.system_key is distinct from 'member'
-            )
-        `;
-        await transaction`
           insert into server_member_roles (server_id, user_id, role_id)
           select ${invite.server_id}, ${user.id}, id
           from server_roles
           where server_id = ${invite.server_id}
-            and system_key = 'member'
-            and not exists (
-              select 1
-              from server_member_roles elevated_smr
-              join server_roles elevated_sr on elevated_sr.id = elevated_smr.role_id
-              where elevated_smr.server_id = ${invite.server_id}
-                and elevated_smr.user_id = ${user.id}
-                and elevated_sr.system_key is distinct from 'member'
-            )
+            and system_key = 'everyone'
           on conflict do nothing
         `;
         await transaction`
@@ -2128,14 +2210,14 @@ export function createApp() {
                 where smr.server_id = c.server_id and smr.user_id = ${user.id}
                   and sr.permissions->>'view_channels' = 'true'
                   and not (
-                    sr.system_key is not distinct from 'member'
+                    sr.system_key is not distinct from 'everyone'
                     and exists (
                       select 1
                       from server_member_roles elevated_smr
                       join server_roles elevated_sr on elevated_sr.id = elevated_smr.role_id
                       where elevated_smr.server_id = smr.server_id
                         and elevated_smr.user_id = smr.user_id
-                        and elevated_sr.system_key is distinct from 'member'
+                        and elevated_sr.system_key is distinct from 'everyone'
                     )
                   )
                   and sr.view_all_channels
@@ -2162,7 +2244,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_members")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_members", "kick_members")) return respondError(set, 403, "insufficient_server_permissions");
       if (params.userId === user.id) return respondError(set, 400, "use_leave_server");
 
       const [target] = await db<{ role: "owner" | "admin" | "member" }[]>`
@@ -2217,15 +2299,24 @@ export function createApp() {
           delete from server_member_roles smr
           using server_roles sr
           where smr.role_id = sr.id and smr.server_id = ${params.serverId}
-            and smr.user_id = ${params.userId} and sr.system_key in ('admin', 'member')
+            and smr.user_id = ${params.userId} and sr.system_key = 'admin'
         `;
         await transaction`
           insert into server_member_roles (server_id, user_id, role_id)
           select ${params.serverId}, ${params.userId}, id
           from server_roles
-          where server_id = ${params.serverId} and system_key = ${body.role}
+          where server_id = ${params.serverId} and system_key = 'everyone'
           on conflict do nothing
         `;
+        if (body.role === "admin") {
+          await transaction`
+            insert into server_member_roles (server_id, user_id, role_id)
+            select ${params.serverId}, ${params.userId}, id
+            from server_roles
+            where server_id = ${params.serverId} and system_key = 'admin'
+            on conflict do nothing
+          `;
+        }
       });
       await syncServerChannelMemberships(params.serverId);
       return { updated: true, role: body.role };
@@ -2264,7 +2355,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const membership = await serverAuthorization(params.serverId, user.id);
       if (!membership) return respondError(set, 403, "not_a_server_member");
-      if (!hasServerPermission(membership, "manage_invites")) return respondError(set, 403, "insufficient_server_permissions");
+      if (!hasAnyServerPermission(membership, "manage_invites", "revoke_invites")) return respondError(set, 403, "insufficient_server_permissions");
       const [revoked] = await db<{ id: string }[]>`
         update server_invites
         set revoked_at = coalesce(revoked_at, now())
@@ -3393,7 +3484,7 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       const channelContext = await conversationChannelAuthorization(params.conversationId, user.id);
       if (!channelContext?.access?.canView) return respondError(set, 403, "channel_not_visible");
-      if (!hasServerPermission(channelContext.access.authorization, "delete_messages")) {
+      if (!hasAnyServerPermission(channelContext.access.authorization, "delete_messages", "delete_others_messages")) {
         return respondError(set, 403, "insufficient_server_permissions");
       }
       const [message] = await db<{ id: string }[]>`

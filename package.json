@@ -1,6 +1,7 @@
 {
   "name": "priv-chat",
-  "version": "1.9.0",
+  "version": "0.9.0",
+  "description": "Self-hosted, privacy-focused end-to-end encrypted chat app.",
   "scripts": {
     "test": "bun test",
     "test:e2ee": "bun run build:client && bun run scripts/test-e2ee.ts",
@@ -13,7 +14,8 @@
   },
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-wasm": "^18.9.0",
-    "elysia": "latest"
+    "elysia": "latest",
+    "lucide": "^1.48.0"
   },
   "devDependencies": {
     "bun-types": "latest",

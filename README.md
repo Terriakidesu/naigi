@@ -1,13 +1,27 @@
 # Naigi
 
-Secret conference, private consultation — a private discussion behind closed doors.
+Self-hosted, privacy-focused chat for people who want to own their infrastructure and keep
+their conversations private.
 
-An encrypted-first text chat backend built with Bun, Elysia, PostgreSQL, and Redis.
+Naigi is an encrypted-first chat application designed to run on infrastructure you control.
+Its goal is to provide a practical alternative to hosted chat services without giving up
+modern channels, direct conversations, media, or role-based community management.
 
 The server stores encrypted message envelopes and public device key material. It does not
 accept plaintext message content or implement cryptography.
 
-## Local configuration
+## Project principles
+
+- **Self-hosted by default:** run the application, database, realtime services, and encrypted
+  attachment storage under your own control.
+- **Privacy-focused:** minimize server knowledge and keep message content, names, URLs, embeds,
+  and media keys inside end-to-end encrypted payloads.
+- **Usable security:** provide familiar chat features while keeping local keys and the local
+  encryption passphrase in the browser.
+- **Auditable boundaries:** keep authorization, delivery, and storage on the server while
+  leaving cryptography and plaintext rendering to reviewed clients.
+
+## Self-hosting
 
 Copy `.env.example` to `.env` and set credentials for the PostgreSQL and Redis instances
 running on your machine. PostgreSQL and Redis are used as follows:
@@ -168,14 +182,10 @@ every workflow into one page:
 
 The generated `public/` bundle is intentionally not tracked.
 
-## Getting Started
-To get started with this template, simply paste this command into your terminal:
-```bash
-bun create elysia ./elysia-example
-```
-
 ## Development
+
 To start the development server run:
+
 ```bash
 bun run dev
 ```

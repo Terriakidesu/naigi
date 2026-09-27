@@ -1,4 +1,5 @@
 import { ApiClient, ApiError, type Server, type ServerMember, type User } from "./api";
+import { iconElement, renderIcons } from "./icons";
 
 const api = new ApiClient();
 const form = document.getElementById("new-conversation-form") as HTMLFormElement;
@@ -23,7 +24,7 @@ function setStatus(message: string, error = false) {
 }
 
 function avatarColor(seed: string) {
-  const colors = ["#5865f2", "#3ba55d", "#ed4245", "#eb459e", "#faa61a", "#00b0f4", "#9b59b6"];
+  const colors = ["#92aaa5", "#7fa0ad", "#a28f99", "#8e99ad", "#9f9a7d", "#759b9c", "#8d9aa4"];
   let hash = 0;
   for (const character of seed) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   return colors[hash % colors.length];
@@ -67,7 +68,8 @@ function renderSelected() {
     remove.type = "button";
     remove.title = `Remove ${user.displayName}`;
     remove.setAttribute("aria-label", `Remove ${user.displayName}`);
-    remove.textContent = "×";
+    remove.append(iconElement("x"));
+    renderIcons(remove);
     remove.addEventListener("click", () => {
       selected.delete(user.id);
       renderSelected();
@@ -84,11 +86,11 @@ function renderResults() {
     const empty = document.createElement("p");
     empty.className = "muted";
     empty.textContent = !serverSelect.value
-      ? "Choose a shared server to see its members."
+      ? "Choose a shared space to see its people."
       : availableMembers.length === 0
-        ? "No other members are available in this server."
+        ? "No other people are available in this space."
         : search.value.trim()
-          ? "No matching members in this server."
+          ? "No matching people in this space."
           : "No members selected yet.";
     results.append(empty);
     return;
@@ -144,7 +146,7 @@ async function loadMembers(serverId: string) {
   selected.clear();
   search.value = "";
   search.disabled = !serverId;
-  search.placeholder = serverId ? "Filter members in this server" : "Choose a shared server first";
+  search.placeholder = serverId ? "Filter people in this space" : "Choose a shared space first";
   renderSelected();
   renderResults();
   if (!serverId) return;
@@ -163,7 +165,7 @@ async function loadMembers(serverId: string) {
     renderResults();
   } catch (error) {
     if (request !== membersRequest) return;
-    setStatus(error instanceof Error ? error.message : "Unable to load shared-server members.", true);
+    setStatus(error instanceof Error ? error.message : "Unable to load shared-space people.", true);
     renderResults();
   }
 }
@@ -194,12 +196,12 @@ async function initialize() {
     serverSelect.replaceChildren();
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = sharedServers.length > 0 ? "Choose a shared server…" : "No shared servers available";
+    placeholder.textContent = sharedServers.length > 0 ? "Choose a shared space…" : "No shared spaces available";
     serverSelect.append(placeholder);
     for (const [index, server] of sharedServers.entries()) {
       const option = document.createElement("option");
       option.value = server.id;
-      option.textContent = `Shared server ${index + 1} · ${server.id.slice(0, 8)}`;
+      option.textContent = `Shared space ${index + 1} · ${server.id.slice(0, 8)}`;
       serverSelect.append(option);
     }
     serverSelect.disabled = sharedServers.length === 0;
@@ -207,10 +209,11 @@ async function initialize() {
     renderResults();
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) window.location.assign("/");
-    else setStatus(error instanceof Error ? error.message : "Unable to load shared servers.", true);
+    else setStatus(error instanceof Error ? error.message : "Unable to load shared spaces.", true);
   }
 }
 
 renderSelected();
 renderResults();
+renderIcons();
 void initialize();

@@ -1,5 +1,10 @@
 # Naigi API v1
 
+Naigi is a self-hosted, privacy-focused chat application. This API supports deployments
+where the operator controls the application server, database, realtime service, and encrypted
+attachment storage. It deliberately handles opaque encrypted payloads rather than plaintext
+conversation content.
+
 This document describes the client-independent contract for native, desktop, and web
 frontends. The API is responsible for identity, authorization, ordering, and delivery of
 opaque encrypted envelopes. A frontend is responsible for cryptography, secure local key
