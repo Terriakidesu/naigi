@@ -1,4 +1,5 @@
 import {
+  AtSign,
   ArrowDown,
   Bell,
   ChevronDown,
@@ -41,6 +42,7 @@ import {
 } from "lucide";
 
 const iconSet = {
+  AtSign,
   ArrowDown,
   Bell,
   ChevronDown,

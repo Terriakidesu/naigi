@@ -7,6 +7,7 @@
 - Composer input now renders Unicode emoji with the bundled Twemoji artwork instead of platform emoji glyphs while preserving normal text editing and sending behavior.
 - Composer focus styling now highlights the complete input container instead of outlining only the textarea.
 - Conversation details now occupy a dedicated column beside the messages and composer instead of covering the composer width.
+- The jump-to-latest control now stays centered above the composer and switches to a mention indicator when a new encrypted message pings the current user.
 
 Released versions are maintained as one Markdown file per version under
 [`docs/changelogs/`](docs/changelogs/).

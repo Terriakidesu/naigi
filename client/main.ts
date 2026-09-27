@@ -1020,6 +1020,14 @@ function mentionedRoleIds(body: string) {
   return [...ids];
 }
 
+function messageMentionsCurrentUser(mentions: readonly string[], roleMentions: readonly string[]) {
+  if (!currentUser) return false;
+  const currentRoleIds = normalizeRoleIds(selectedMembers.find((member) => member.userId === currentUser?.id)?.roleIds);
+  return mentions.includes(currentUser.id)
+    || roleMentions.some((roleId) => currentRoleIds.includes(roleId)
+      && serverRoles.find((role) => role.id === roleId)?.systemKey !== "owner");
+}
+
 function blockedSpecialMentions(body: string) {
   if (!selectedServerId) return undefined;
   if (!hasActiveServerPermission("mention_everyone") && /(^|\s)@everyone\b/i.test(body)) return "@everyone";
@@ -1356,13 +1364,48 @@ function renderInputSuggestions() {
 
 function renderUnreadButton() {
   const distanceFromBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight;
+  const mentionCount = mentionHighlightMessageIds.size;
+  const hasMention = mentionCount > 0;
   const label = document.createElement("span");
-  label.textContent = unreadCount > 0
-    ? `${unreadCount} new message${unreadCount === 1 ? "" : "s"}`
-    : "Jump to latest";
-  jumpLatestButton.replaceChildren(iconElement("arrow-down"), label);
+  label.textContent = hasMention
+    ? `${mentionCount} new mention${mentionCount === 1 ? "" : "s"}`
+    : unreadCount > 0
+      ? `${unreadCount} new message${unreadCount === 1 ? "" : "s"}`
+      : "Jump to latest";
+  jumpLatestButton.replaceChildren(iconElement(hasMention ? "at-sign" : "arrow-down"), label);
+  jumpLatestButton.classList.toggle("jump-latest-mention", hasMention);
+  jumpLatestButton.title = hasMention ? "Jump to new mention" : "Jump to latest messages";
+  jumpLatestButton.setAttribute("aria-label", hasMention ? `Jump to ${mentionCount} new mention${mentionCount === 1 ? "" : "s"}` : "Jump to latest messages");
   renderIcons(jumpLatestButton);
-  jumpLatestButton.hidden = unreadCount === 0 && distanceFromBottom < 100;
+  jumpLatestButton.hidden = !hasMention && unreadCount === 0 && distanceFromBottom < 100;
+}
+
+async function detectUnreadMentions(messages: MessageEnvelope[], conversationId: string, activeCryptoClient: CryptoClient) {
+  if (!currentUser || messages.length === 0 || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+  let changed = false;
+  for (const message of messages) {
+    if (mentionHighlightMessageIds.has(message.id) || message.senderUserId === currentUser.id) continue;
+    let decrypted: { content: Record<string, unknown> } | null = optimisticDecryptedMessages.get(message.id) ?? null;
+    if (!decrypted) {
+      try {
+        decrypted = await activeCryptoClient.decryptMessage(conversationId, message);
+      } catch {
+        continue;
+      }
+    }
+    if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    pendingMentionNotifications.delete(message.id);
+    const mentions = Array.isArray(decrypted.content.mentions)
+      ? decrypted.content.mentions.filter((value): value is string => typeof value === "string")
+      : [];
+    const roleMentions = Array.isArray(decrypted.content.roleMentions)
+      ? decrypted.content.roleMentions.filter((value): value is string => typeof value === "string")
+      : [];
+    if (!messageMentionsCurrentUser(mentions, roleMentions)) continue;
+    mentionHighlightMessageIds.add(message.id);
+    changed = true;
+  }
+  if (changed) renderUnreadButton();
 }
 
 function isAtLatestMessage() {
@@ -2981,11 +3024,7 @@ function renderMessage(
     .map((roleId) => serverRoles.find((role) => role.id === roleId))
     .filter((role): role is CustomServerRole => role !== undefined && role.systemKey !== "owner")
     .map(serverRoleSlug));
-  const mentionedIds = effectiveMentions;
-  const currentRoleIds = normalizeRoleIds(selectedMembers.find((member) => member.userId === currentUser?.id)?.roleIds);
-  const mentionsCurrentUser = Boolean(currentUser && (mentionedIds.includes(currentUser.id)
-    || effectiveRoleMentions.some((roleId) => currentRoleIds.includes(roleId)
-      && serverRoles.find((role) => role.id === roleId)?.systemKey !== "owner")));
+  const mentionsCurrentUser = messageMentionsCurrentUser(effectiveMentions, effectiveRoleMentions);
   article.dataset.mentionsCurrentUser = String(mentionsCurrentUser);
   if (mentionsCurrentUser && wasRealtimeMessage && selectedConversationId === message.conversationId && message.senderUserId !== currentUser?.id) {
     mentionHighlightMessageIds.add(message.id);
@@ -2999,6 +3038,7 @@ function renderMessage(
       // do not recreate a badge that was just cleared while the render was in
       // flight.
       if (unreadMarkers.has(message.conversationId)) notifyNewMessage(message.conversationId, message.id, true);
+      renderUnreadButton();
     }
   }
   if (!redactedMessageIds.has(message.id) && !mediaMessage && (content.msgtype === "m.text" || content.msgtype === "m.notice" || body)) {
@@ -3347,6 +3387,7 @@ async function refreshMessages(options: { forceScrollToBottom?: boolean } = {}) 
     const newMessages = caughtUp.messages.filter((message) => !currentIds.has(message.id));
 
     if (!followLatest) {
+      await detectUnreadMentions(newMessages, conversationId, activeCryptoClient);
       if (unseen > 0) {
         unreadCount += unseen;
         updateMentionHighlights();

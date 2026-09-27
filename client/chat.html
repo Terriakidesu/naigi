@@ -75,7 +75,6 @@
           </header>
           <div class="chat-content">
               <div id="messages" class="messages" aria-label="Messages"><button id="load-older-button" class="load-older-button" type="button" hidden>Load older messages</button></div>
-              <button id="jump-latest-button" class="jump-latest-button" type="button" hidden>↓ Jump to latest</button>
             <div id="outbox-notice" class="outbox-notice" hidden><span id="outbox-label"></span><button id="outbox-retry" class="secondary" type="button">Retry now</button></div>
             <div id="typing-indicator" class="typing-indicator" hidden role="status" aria-live="polite"></div>
           <form id="composer" class="composer">
@@ -91,6 +90,7 @@
               <div id="emoji-picker-grid" class="emoji-picker-grid"></div>
             </div>
             <div class="composer-box">
+              <button id="jump-latest-button" class="jump-latest-button" type="button" hidden></button>
               <label class="file-button" title="Attach encrypted file, image, or video"><i data-lucide="paperclip"></i><input id="photo-input" type="file" aria-label="Attach encrypted file, image, or video" accept="*/*"></label>
               <div class="composer-input-wrap">
                 <div id="message-input-rendered" class="message-input-rendered" aria-hidden="true"></div>
