@@ -1,10 +1,11 @@
-import { emojiAssetCodes, emojiData } from "./emoji-data";
+import { emojiAssetCodes, emojiData, type EmojiCategory } from "./emoji-data";
 
 export type EmojiShortcode = {
   emoji: string;
   name: string;
   aliases: readonly string[];
   code: string;
+  category: EmojiCategory;
 };
 
 const assetCodeSet = new Set(emojiAssetCodes);
@@ -81,11 +82,12 @@ function assetCodeForEmoji(emoji: string) {
   return assetCodeForSequence(codePointSequence(emoji).split("-")) ?? codePointSequence(emoji);
 }
 
-export const emojiShortcodes: readonly EmojiShortcode[] = emojiData.map(([emoji, name, aliases]) => ({
+export const emojiShortcodes: readonly EmojiShortcode[] = emojiData.map(([emoji, name, aliases, category]) => ({
   emoji,
   name,
   aliases: [...new Set([...aliases, ...(legacyAliases[emoji] ?? [])])],
   code: assetCodeForEmoji(emoji),
+  category,
 }));
 
 const emojiByText = new Map(emojiShortcodes.map((entry) => [entry.emoji, entry]));
@@ -163,6 +165,7 @@ export function emojiEntryAt(value: string, offset: number) {
     name: "emoji",
     aliases: [],
     code: match.code,
+    category: "Symbols",
   } satisfies EmojiShortcode;
   return { entry, text };
 }

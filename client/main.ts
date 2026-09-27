@@ -20,6 +20,7 @@ import {
   emojiShortcodes,
   replaceEmojiShortcodes,
 } from "./emoji";
+import type { EmojiCategory } from "./emoji-data";
 import { appendMarkdown } from "./markdown";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
@@ -84,6 +85,20 @@ const reactionOptions: ReactionOption[] = [
   { emoji: "✅", code: "2705", label: "Done" },
 ];
 const emojiOptions = emojiShortcodes;
+type EmojiPickerCategory = "all" | EmojiCategory;
+const emojiPickerCategories: Array<{ id: EmojiPickerCategory; label: string; icon: string }> = [
+  { id: "all", label: "All emojis", icon: "😀" },
+  { id: "Smileys & Emotion", label: "Smileys and emotion", icon: "😀" },
+  { id: "People & Body", label: "People and body", icon: "👋" },
+  { id: "Animals & Nature", label: "Animals and nature", icon: "🐻" },
+  { id: "Food & Drink", label: "Food and drink", icon: "🍔" },
+  { id: "Travel & Places", label: "Travel and places", icon: "✈️" },
+  { id: "Activities", label: "Activities", icon: "⚽" },
+  { id: "Objects", label: "Objects", icon: "💡" },
+  { id: "Symbols", label: "Symbols", icon: "❤️" },
+  { id: "Flags", label: "Flags", icon: "🏳️" },
+];
+let emojiPickerCategory: EmojiPickerCategory = "all";
 let editTarget: EditTarget | undefined;
 let contextMessage: ContextMessage | undefined;
 const messageContextTargets = new Map<string, ContextMessage>();
@@ -167,6 +182,9 @@ const cancelReply = byId<HTMLButtonElement>("cancel-reply");
 const mentionSuggestions = byId<HTMLElement>("mention-suggestions");
 const emojiSuggestions = byId<HTMLElement>("emoji-suggestions");
 const emojiPicker = byId<HTMLElement>("emoji-picker");
+const emojiPickerSearch = byId<HTMLInputElement>("emoji-picker-search");
+const emojiCategoryTabs = byId<HTMLElement>("emoji-category-tabs");
+const emojiPickerGrid = byId<HTMLElement>("emoji-picker-grid");
 const emojiToggle = byId<HTMLButtonElement>("emoji-toggle");
 const lockButton = byId<HTMLButtonElement>("lock-button");
 const mobileSidebarToggle = byId<HTMLButtonElement>("mobile-sidebar-toggle");
@@ -202,6 +220,7 @@ const profileModalEdit = byId<HTMLAnchorElement>("profile-modal-edit");
 const messageContextMenu = byId<HTMLElement>("message-context-menu");
 let profileRequest = 0;
 let modalReturnFocus: HTMLElement | null = null;
+let activeSuggestionIndex = -1;
 
 function setStatus(message: string, error = false) {
   if (error) console.error(`[Naigi] ${message}`);
@@ -928,16 +947,58 @@ function mentionToken() {
 function hideMentionSuggestions() {
   mentionSuggestions.hidden = true;
   mentionSuggestions.replaceChildren();
+  activeSuggestionIndex = -1;
 }
 
 function hideEmojiSuggestions() {
   emojiSuggestions.hidden = true;
   emojiSuggestions.replaceChildren();
+  activeSuggestionIndex = -1;
+}
+
+function setActiveSuggestion(index: number) {
+  const container = !mentionSuggestions.hidden ? mentionSuggestions : !emojiSuggestions.hidden ? emojiSuggestions : undefined;
+  if (!container) return;
+  const options = [...container.querySelectorAll<HTMLButtonElement>("button")];
+  if (options.length === 0) return;
+  activeSuggestionIndex = (index + options.length) % options.length;
+  for (const [optionIndex, option] of options.entries()) {
+    const active = optionIndex === activeSuggestionIndex;
+    option.classList.toggle("suggestion-active", active);
+    option.setAttribute("aria-selected", String(active));
+  }
+  options[activeSuggestionIndex]?.scrollIntoView({ block: "nearest" });
+}
+
+function handleSuggestionKeydown(event: KeyboardEvent) {
+  const container = !mentionSuggestions.hidden ? mentionSuggestions : !emojiSuggestions.hidden ? emojiSuggestions : undefined;
+  if (!container) return false;
+  const options = [...container.querySelectorAll<HTMLButtonElement>("button")];
+  if (options.length === 0) return false;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    setActiveSuggestion(activeSuggestionIndex + (event.key === "ArrowDown" ? 1 : -1));
+    return true;
+  }
+  if (event.key === "Enter" || event.key === "Tab") {
+    event.preventDefault();
+    options[activeSuggestionIndex < 0 ? 0 : activeSuggestionIndex]?.click();
+    return true;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    if (!mentionSuggestions.hidden) hideMentionSuggestions();
+    if (!emojiSuggestions.hidden) hideEmojiSuggestions();
+    return true;
+  }
+  return false;
 }
 
 function closeEmojiPicker() {
   emojiPicker.hidden = true;
   emojiToggle.setAttribute("aria-expanded", "false");
+  emojiPickerSearch.value = "";
+  emojiPickerCategory = "all";
 }
 
 function insertEmoji(emoji: string) {
@@ -953,9 +1014,54 @@ function insertEmoji(emoji: string) {
   messageInput.focus();
 }
 
-function renderEmojiPicker() {
-  emojiPicker.replaceChildren();
-  for (const option of emojiOptions) {
+function emojiCategorySlug(category: EmojiPickerCategory) {
+  return category.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function renderEmojiCategoryTabs() {
+  emojiCategoryTabs.replaceChildren();
+  for (const category of emojiPickerCategories) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "emoji-category-tab";
+    button.id = `emoji-category-tab-${emojiCategorySlug(category.id)}`;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(emojiPickerCategory === category.id));
+    button.setAttribute("aria-label", category.label);
+    button.title = category.label;
+    const icon = document.createElement("span");
+    icon.className = "emoji-category-icon";
+    icon.setAttribute("aria-hidden", "true");
+    const iconEntry = emojiEntryAt(category.icon, 0);
+    if (iconEntry) appendTwemoji(icon, iconEntry.entry, "emoji-category-twemoji");
+    else icon.textContent = category.icon;
+    button.append(icon);
+    button.addEventListener("click", () => {
+      emojiPickerCategory = category.id;
+      emojiPickerSearch.value = "";
+      renderEmojiPicker();
+      emojiPickerSearch.focus();
+    });
+    emojiCategoryTabs.append(button);
+  }
+}
+
+function renderEmojiPickerGrid() {
+  const query = emojiPickerSearch.value.trim().toLowerCase();
+  const candidates = emojiOptions.filter((option) => {
+    const matchesCategory = !query && emojiPickerCategory !== "all" ? option.category === emojiPickerCategory : true;
+    const matchesSearch = !query || [option.name, ...option.aliases].some((name) => name.includes(query));
+    return matchesCategory && matchesSearch;
+  });
+  emojiPickerGrid.replaceChildren();
+  if (candidates.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "emoji-picker-empty";
+    empty.textContent = "No emojis found.";
+    emojiPickerGrid.append(empty);
+    return;
+  }
+  for (const option of candidates) {
     const button = document.createElement("button");
     button.type = "button";
     appendTwemoji(button, option);
@@ -964,8 +1070,13 @@ function renderEmojiPicker() {
     button.setAttribute("aria-label", `Insert :${option.name}:`);
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", () => insertEmoji(option.emoji));
-    emojiPicker.append(button);
+    emojiPickerGrid.append(button);
   }
+}
+
+function renderEmojiPicker() {
+  renderEmojiCategoryTabs();
+  renderEmojiPickerGrid();
 }
 
 function toggleEmojiPicker() {
@@ -973,6 +1084,7 @@ function toggleEmojiPicker() {
     renderEmojiPicker();
     emojiPicker.hidden = false;
     emojiToggle.setAttribute("aria-expanded", "true");
+    emojiPickerSearch.focus();
   } else {
     closeEmojiPicker();
   }
@@ -987,6 +1099,7 @@ function renderMentionSuggestions() {
   const candidates = selectedMembers
     .filter((member) => !token.query || member.username.toLowerCase().startsWith(token.query))
     .slice(0, 8);
+  activeSuggestionIndex = -1;
   mentionSuggestions.replaceChildren();
   if (candidates.length === 0) {
     hideMentionSuggestions();
@@ -996,6 +1109,8 @@ function renderMentionSuggestions() {
     const option = document.createElement("button");
     option.type = "button";
     option.className = "mention-suggestion";
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", "false");
     option.textContent = `@${member.username} · ${member.displayName || member.username}`;
     option.addEventListener("mousedown", (event) => event.preventDefault());
     option.addEventListener("click", () => {
@@ -1020,6 +1135,7 @@ function renderEmojiSuggestions() {
     return;
   }
   const candidates = emojiShortcodeMatches(token.query).slice(0, 8);
+  activeSuggestionIndex = -1;
   emojiSuggestions.replaceChildren();
   if (candidates.length === 0) {
     hideEmojiSuggestions();
@@ -1031,6 +1147,7 @@ function renderEmojiSuggestions() {
     option.type = "button";
     option.className = "emoji-suggestion";
     option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", "false");
     const preview = document.createElement("span");
     preview.className = "emoji-suggestion-preview";
     appendTwemoji(preview, candidate);
@@ -3142,16 +3259,7 @@ composer.addEventListener("submit", async (event) => {
 });
 
 messageInput.addEventListener("keydown", (event) => {
-  if (!mentionSuggestions.hidden && (event.key === "Tab" || event.key === "ArrowDown")) {
-    event.preventDefault();
-    mentionSuggestions.querySelector<HTMLButtonElement>("button")?.focus();
-    return;
-  }
-  if (!emojiSuggestions.hidden && (event.key === "Tab" || event.key === "ArrowDown")) {
-    event.preventDefault();
-    emojiSuggestions.querySelector<HTMLButtonElement>("button")?.focus();
-    return;
-  }
+  if (handleSuggestionKeydown(event)) return;
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     composer.requestSubmit();
@@ -3187,6 +3295,10 @@ clearAttachment.addEventListener("click", () => {
 cancelReply.addEventListener("click", clearReplyTarget);
 cancelEdit.addEventListener("click", () => clearEditTarget());
 emojiToggle.addEventListener("click", toggleEmojiPicker);
+emojiPickerSearch.addEventListener("input", () => {
+  if (emojiPickerSearch.value.trim()) emojiPickerCategory = "all";
+  renderEmojiPicker();
+});
 notificationToggle.addEventListener("click", () => void toggleNotifications());
 
 conversationSearch.addEventListener("input", () => {
