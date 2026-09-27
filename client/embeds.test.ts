@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractEmbeds, parseSafeEmbed } from "./embeds";
+import { extractEmbeds, normalizeStoredEmbeds, parseLinkMetadata, parseSafeEmbed } from "./embeds";
 
 describe("safe embeds", () => {
   test("normalizes supported YouTube URLs to the privacy host", () => {
@@ -13,13 +13,30 @@ describe("safe embeds", () => {
     });
   });
 
-  test("does not turn arbitrary URLs into embeds", () => {
-    expect(parseSafeEmbed("https://example.com/status/123")).toBeNull();
-    expect(parseSafeEmbed("https://x.com.evil.example/status/123")).toBeNull();
+  test("creates a safe link card for every ordinary website", () => {
+    expect(parseSafeEmbed("https://example.com/status/123")).toEqual({
+      kind: "link",
+      url: "https://example.com/status/123",
+      title: "example.com",
+    });
+    expect(parseSafeEmbed("https://x.com.evil.example/status/123")).toMatchObject({ kind: "link" });
     expect(parseSafeEmbed("javascript:alert(1)")).toBeNull();
   });
 
-  test("extracts an X status ID for the official widget", () => {
+  test("recognizes directly linked images and videos", () => {
+    expect(parseSafeEmbed("https://cdn.example/image.webp?size=large")).toEqual({
+      kind: "media",
+      mediaType: "image",
+      url: "https://cdn.example/image.webp?size=large",
+    });
+    expect(parseSafeEmbed("https://cdn.example/clip.mp4")).toEqual({
+      kind: "media",
+      mediaType: "video",
+      url: "https://cdn.example/clip.mp4",
+    });
+  });
+
+  test("recognizes X status URLs for legacy compatibility", () => {
     expect(parseSafeEmbed("https://x.com/example/status/123")).toEqual({
       kind: "social",
       network: "x",
@@ -28,7 +45,7 @@ describe("safe embeds", () => {
     });
   });
 
-  test("extracts at most four allowlisted previews", () => {
+  test("extracts at most four website previews", () => {
     const embeds = extractEmbeds([
       "https://youtu.be/dQw4w9WgXcQ",
       "https://x.com/example/status/123",
@@ -38,6 +55,45 @@ describe("safe embeds", () => {
     ].join(" "));
 
     expect(embeds).toHaveLength(4);
-    expect(embeds.map((embed) => embed.kind)).toEqual(["youtube", "social", "social", "youtube"]);
+    expect(embeds.map((embed) => embed.kind)).toEqual(["link", "link", "link", "link"]);
+  });
+
+  test("uses Twitter image metadata before Open Graph fallback", () => {
+    expect(parseLinkMetadata(
+      '<meta property="og:title" content="Open Graph title"><meta name="twitter:image" content="/social-card.png"><title>Page title</title>',
+      "https://example.com/articles/one",
+    )).toEqual({
+      title: "Open Graph title",
+      imageUrl: "https://example.com/social-card.png",
+    });
+  });
+
+  test("keeps stored link metadata while rejecting unsafe fields", () => {
+    expect(normalizeStoredEmbeds([
+      {
+        kind: "link",
+        url: "https://example.com/article",
+        title: "Example article",
+        imageUrl: "https://cdn.example/card.png",
+      },
+      {
+        kind: "link",
+        url: "https://example.com/unsafe",
+        title: "&#x110000;",
+        imageUrl: "javascript:alert(1)",
+      },
+    ])).toEqual([
+      {
+        kind: "link",
+        url: "https://example.com/article",
+        title: "Example article",
+        imageUrl: "https://cdn.example/card.png",
+      },
+      {
+        kind: "link",
+        url: "https://example.com/unsafe",
+        title: "example.com",
+      },
+    ]);
   });
 });

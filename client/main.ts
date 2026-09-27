@@ -14,7 +14,7 @@ import {
 } from "./api";
 import { CryptoClient, LocalCryptoStoreError, MAX_MESSAGE_TEXT_LENGTH, type DecryptedMessage, type ReplyReference } from "./crypto";
 import { roomKeyUnavailable } from "./decryption";
-import { appendSafeEmbed, extractEmbeds, type SafeEmbed } from "./embeds";
+import { appendSafeEmbed, extractEmbeds, normalizeStoredEmbeds, prepareEmbeds, type SafeEmbed } from "./embeds";
 import {
   emojiEntryAt,
   emojiShortcodeMatches,
@@ -3801,7 +3801,8 @@ function renderMessage(
   const edited = editedMessageBodies.get(message.id);
   const originalBody = decrypted && typeof decrypted.content.body === "string" ? decrypted.content.body : "";
   const body = edited?.body ?? originalBody;
-  const effectiveEmbeds = edited?.embeds ?? extractEmbeds(body);
+  const storedEmbeds = normalizeStoredEmbeds(decrypted?.content.embeds);
+  const effectiveEmbeds = edited?.embeds ?? (storedEmbeds.length > 0 ? storedEmbeds : extractEmbeds(body));
   const effectiveMentions = edited?.mentions ?? (Array.isArray(decrypted?.content.mentions)
     ? decrypted.content.mentions.filter((value): value is string => typeof value === "string")
     : []);
@@ -3869,7 +3870,8 @@ function renderMessage(
   if (content.msgtype === "m.replace" && typeof content.replaces === "string" && typeof content.body === "string") {
     const target = loadedMessages.find((candidate) => candidate.id === content.replaces);
     if (!target?.senderUserId || !message.senderUserId || target.senderUserId !== message.senderUserId) return false;
-    const embeds = extractEmbeds(content.body);
+    const storedEmbeds = normalizeStoredEmbeds(content.embeds);
+    const embeds = storedEmbeds.length > 0 ? storedEmbeds : extractEmbeds(content.body);
     const mentions = Array.isArray(content.mentions) ? content.mentions.filter((value): value is string => typeof value === "string") : [];
     const roleMentions = Array.isArray(content.roleMentions) ? content.roleMentions.filter((value): value is string => typeof value === "string") : [];
     applyEditedBody(content.replaces, content.body, embeds, mentions, roleMentions);
@@ -4424,7 +4426,7 @@ composer.addEventListener("submit", async (event) => {
   let activeBatchAttachmentIndex = -1;
   try {
     if (activeEdit) {
-      const embeds = extractEmbeds(text);
+      const embeds = await prepareEmbeds(text);
       const mentions = mentionedUserIds(text);
       const roleMentions = mentionedRoleIds(text);
       const result = await activeCryptoClient.sendEdit(conversationId, members, activeEdit.messageId, text, embeds, mentions, roleMentions);
@@ -4448,7 +4450,7 @@ composer.addEventListener("submit", async (event) => {
       if (replyTarget?.mentionSender && replyTarget.userId) {
         mentions.push(replyTarget.userId);
       }
-      const result = await activeCryptoClient.sendText(conversationId, members, text, extractEmbeds(text), replyTarget, mentions, roleMentions);
+      const result = await activeCryptoClient.sendText(conversationId, members, text, await prepareEmbeds(text), replyTarget, mentions, roleMentions);
       queued = result.delivery === "queued";
       textSent = true;
       if (result.message) {
@@ -4478,7 +4480,7 @@ composer.addEventListener("submit", async (event) => {
           {
             signal: uploadController?.signal,
             body: text,
-            embeds: extractEmbeds(text),
+            embeds: await prepareEmbeds(text),
             replyTo: replyTarget,
             mentions,
             roleMentions,

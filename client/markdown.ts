@@ -1,4 +1,5 @@
 import { emojiEntryAt } from "./emoji";
+import { guardExternalLink } from "./external-link";
 
 export type MarkdownInline =
   | { kind: "text"; value: string }
@@ -198,6 +199,7 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
       link.href = token.url;
       link.target = "_blank";
       link.rel = "noreferrer noopener nofollow";
+      guardExternalLink(link, token.url);
       appendText(link, token.label, mentionUsernames, mentionRoleNames);
       parent.append(link);
       continue;
