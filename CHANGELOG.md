@@ -4,4 +4,4 @@
 
 ### Added
 
-- Added emoji shortcodes with autocomplete and bundled Twemoji rendering for the supported emoji set.
+- Added full local Twemoji rendering, complete Unicode emoji shortcode autocomplete, and bundled Twemoji artwork for offline use.

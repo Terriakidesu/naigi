@@ -249,7 +249,7 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .message-context-shortcut { margin-left: auto; color: var(--text-faint); font-size: 0.55rem; }
 .message-context-divider { height: 1px; margin: 0.2rem 0; background: var(--line-soft); }
 .message-highlight { background: rgba(88, 101, 242, 0.2) !important; box-shadow: inset 3px 0 0 var(--accent); }
-.emoji-picker { position: absolute; z-index: 12; right: 1rem; bottom: 5.1rem; display: grid; grid-template-columns: repeat(8, 1fr); gap: 0.12rem; width: min(300px, calc(100% - 2rem)); padding: 0.45rem; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg-elevated); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42); }
+.emoji-picker { position: absolute; z-index: 12; right: 1rem; bottom: 5.1rem; display: grid; grid-template-columns: repeat(8, 1fr); gap: 0.12rem; width: min(300px, calc(100% - 2rem)); max-height: min(360px, calc(100dvh - 8rem)); overflow: auto; padding: 0.45rem; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg-elevated); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42); }
 .emoji-picker button { display: grid; place-items: center; min-width: 30px; min-height: 30px; padding: 0.15rem; border-radius: 4px; color: var(--text); background: transparent; font-size: 1.2rem; line-height: 1; }
 .emoji-picker button:hover, .emoji-picker button:focus-visible { background: var(--bg-active); }
 .emoji-picker .twemoji { width: 1.2rem; height: 1.2rem; }

@@ -959,6 +959,7 @@ function renderEmojiPicker() {
     const button = document.createElement("button");
     button.type = "button";
     appendTwemoji(button, option);
+    button.querySelector<HTMLImageElement>("img")!.loading = "lazy";
     button.title = `Insert :${option.name}:`;
     button.setAttribute("aria-label", `Insert :${option.name}:`);
     button.addEventListener("mousedown", (event) => event.preventDefault());

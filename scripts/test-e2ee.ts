@@ -117,11 +117,13 @@ try {
   assert.equal(await a.locator(".emoji-suggestion").filter({ hasText: ":smiley:" }).count(), 1);
   await a.locator(".emoji-suggestion").filter({ hasText: ":smiley:" }).click();
   assert.equal(await a.locator("#message-input").inputValue(), "😃");
-  await a.locator("#message-input").fill(":smile: native 😄");
+  await a.locator("#message-input").fill(":melting_face: full 👩‍🚀 😄");
   await a.locator("#send-button").click();
-  const emojiMessage = b.locator(".message").filter({ hasText: "native" });
+  const emojiMessage = b.locator(".message").filter({ hasText: "full" });
   await emojiMessage.waitFor({ timeout: 20_000 });
-  assert.equal(await emojiMessage.locator('img[src$="/assets/twemoji/1f604.svg"]').count(), 2);
+  assert.equal(await emojiMessage.locator('img[src$="/assets/twemoji/1fae0.svg"]').count(), 1);
+  assert.equal(await emojiMessage.locator('img[src$="/assets/twemoji/1f469-200d-1f680.svg"]').count(), 1);
+  assert.equal(await emojiMessage.locator('img[src$="/assets/twemoji/1f604.svg"]').count(), 1);
   await send(a, b, `Ping @${users[1].username}: mention styling and unread state`);
   await b.locator(".message").filter({ hasText: "mention styling" }).waitFor({ timeout: 20_000 });
   assert.equal(await b.locator(".message").filter({ hasText: "mention styling" }).count(), 1);

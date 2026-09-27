@@ -1,3 +1,8 @@
-The emoji artwork in this directory is Twemoji artwork by Twitter, Inc.
-Copyright 2020 Twitter, Inc and other contributors.
+The emoji artwork in this directory is Twemoji artwork by Twitter, Inc. and
+other contributors.
+
+Twemoji v17.0.3
+Copyright 2014–2021 Twitter, Inc.
+Copyright 2022–present Jason Sofonia and Justine De Caires.
 Licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
+Source: https://github.com/jdecked/twemoji
