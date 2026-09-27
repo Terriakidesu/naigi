@@ -1,3 +1,5 @@
+import { emojiEntryAt } from "./emoji";
+
 export type MarkdownInline =
   | { kind: "text"; value: string }
   | { kind: "strong" | "emphasis" | "strike" | "code" | "spoiler"; value: string }
@@ -128,32 +130,60 @@ export function parseMarkdown(value: string): MarkdownBlock[] {
   return blocks;
 }
 
+function appendTextChunk(parent: HTMLElement, value: string) {
+  value.split("\n").forEach((part, line) => {
+    if (line) parent.append(document.createElement("br"));
+    if (part) parent.append(document.createTextNode(part));
+  });
+}
+
 function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<string>) {
   const pattern = /@([A-Za-z0-9_.-]+)/g;
   let offset = 0;
-  for (const match of value.matchAll(pattern)) {
-    const index = match.index ?? offset;
-    const username = match[1].toLowerCase();
-    const text = value.slice(offset, index).split("\n");
-    text.forEach((part, line) => {
-      if (line) parent.append(document.createElement("br"));
-      parent.append(document.createTextNode(part));
-    });
-    if (mentionUsernames?.has(username)) {
-      const mention = document.createElement("span");
-      mention.className = "user-mention";
-      mention.textContent = match[0];
-      parent.append(mention);
-    } else {
-      parent.append(document.createTextNode(match[0]));
+  while (offset < value.length) {
+    pattern.lastIndex = offset;
+    const mentionMatch = pattern.exec(value);
+    const mentionIndex = mentionMatch?.index ?? Number.POSITIVE_INFINITY;
+    let emojiIndex = Number.POSITIVE_INFINITY;
+    let emojiMatch: ReturnType<typeof emojiEntryAt> = undefined;
+    for (let index = offset; index < value.length; index += Math.max(1, value.codePointAt(index)! > 0xffff ? 2 : 1)) {
+      const candidate = emojiEntryAt(value, index);
+      if (candidate) {
+        emojiIndex = index;
+        emojiMatch = candidate;
+        break;
+      }
     }
-    offset = index + match[0].length;
+    if (emojiMatch && emojiIndex < mentionIndex) {
+      appendTextChunk(parent, value.slice(offset, emojiIndex));
+      const image = document.createElement("img");
+      image.className = "twemoji inline-twemoji";
+      image.src = `/assets/twemoji/${emojiMatch.entry.code}.svg`;
+      image.alt = emojiMatch.entry.emoji;
+      image.title = `:${emojiMatch.entry.name}:`;
+      image.draggable = false;
+      parent.append(image);
+      offset = emojiIndex + emojiMatch.text.length;
+      continue;
+    }
+    if (mentionMatch) {
+      const index = mentionMatch.index ?? offset;
+      appendTextChunk(parent, value.slice(offset, index));
+      const username = mentionMatch[1].toLowerCase();
+      if (mentionUsernames?.has(username)) {
+        const mention = document.createElement("span");
+        mention.className = "user-mention";
+        mention.textContent = mentionMatch[0];
+        parent.append(mention);
+      } else {
+        parent.append(document.createTextNode(mentionMatch[0]));
+      }
+      offset = index + mentionMatch[0].length;
+      continue;
+    }
+    appendTextChunk(parent, value.slice(offset));
+    break;
   }
-  const remainder = value.slice(offset).split("\n");
-  remainder.forEach((part, line) => {
-    if (line) parent.append(document.createElement("br"));
-    parent.append(document.createTextNode(part));
-  });
 }
 
 function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set<string>) {
@@ -167,7 +197,7 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
       link.href = token.url;
       link.target = "_blank";
       link.rel = "noreferrer noopener nofollow";
-      link.textContent = token.label;
+      appendText(link, token.label, mentionUsernames);
       parent.append(link);
       continue;
     }
@@ -177,7 +207,7 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
       spoiler.tabIndex = 0;
       spoiler.setAttribute("role", "button");
       spoiler.setAttribute("aria-label", "Reveal spoiler");
-      spoiler.textContent = token.value;
+      appendText(spoiler, token.value, mentionUsernames);
       const reveal = () => {
         spoiler.classList.toggle("revealed");
         spoiler.setAttribute("aria-label", spoiler.classList.contains("revealed") ? "Hide spoiler" : "Reveal spoiler");
@@ -193,7 +223,8 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
       continue;
     }
     const element = document.createElement(token.kind === "strong" ? "strong" : token.kind === "emphasis" ? "em" : token.kind === "strike" ? "del" : "code");
-    element.textContent = token.value;
+    if (token.kind === "code") element.textContent = token.value;
+    else appendText(element, token.value, mentionUsernames);
     parent.append(element);
   }
 }

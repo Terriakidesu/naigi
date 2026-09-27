@@ -12,6 +12,14 @@ import {
 import { CryptoClient, type DecryptedMessage, type ReplyReference } from "./crypto";
 import { roomKeyUnavailable } from "./decryption";
 import { appendSafeEmbed, extractEmbeds, type SafeEmbed } from "./embeds";
+import {
+  emojiEntryAt,
+  emojiShortcodeMatches,
+  emojiShortcodeName,
+  emojiShortcodeToken,
+  emojiShortcodes,
+  replaceEmojiShortcodes,
+} from "./emoji";
 import { appendMarkdown } from "./markdown";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
@@ -62,6 +70,7 @@ const pendingMediaLoads = new Map<HTMLElement, AbortController>();
 type EditTarget = { messageId: string; body: string; sender: string };
 type ContextMessage = { message: MessageEnvelope; article: HTMLElement; sender: string; body: string; editable: boolean };
 type ReactionOption = { emoji: string; code: string; label: string };
+type TwemojiOption = { emoji: string; code: string };
 const reactionOptions: ReactionOption[] = [
   { emoji: "👍", code: "1f44d", label: "Like" },
   { emoji: "❤️", code: "2764", label: "Love" },
@@ -74,14 +83,7 @@ const reactionOptions: ReactionOption[] = [
   { emoji: "👀", code: "1f440", label: "Watching" },
   { emoji: "✅", code: "2705", label: "Done" },
 ];
-const emojiOptions = [
-  "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣",
-  "🙂", "🙃", "😉", "😊", "😇", "🥰", "😍", "🤩",
-  "😘", "😎", "🤔", "🙄", "😴", "🤗", "🤭", "🤫",
-  "😐", "😶", "😮", "😱", "😭", "😡", "🤝", "👍",
-  "👎", "👏", "🙏", "💪", "❤️", "🔥", "✨", "🎉",
-  "🚀", "✅", "❌", "💯", "👀", "🍕", "☕", "🎂",
-];
+const emojiOptions = emojiShortcodes;
 let editTarget: EditTarget | undefined;
 let contextMessage: ContextMessage | undefined;
 const messageContextTargets = new Map<string, ContextMessage>();
@@ -163,6 +165,7 @@ const replyPreviewText = byId<HTMLElement>("reply-preview-text");
 const replyMentionToggle = byId<HTMLButtonElement>("reply-mention-toggle");
 const cancelReply = byId<HTMLButtonElement>("cancel-reply");
 const mentionSuggestions = byId<HTMLElement>("mention-suggestions");
+const emojiSuggestions = byId<HTMLElement>("emoji-suggestions");
 const emojiPicker = byId<HTMLElement>("emoji-picker");
 const emojiToggle = byId<HTMLButtonElement>("emoji-toggle");
 const lockButton = byId<HTMLButtonElement>("lock-button");
@@ -408,7 +411,7 @@ function receivePresence(conversationId: string, userId: string, state: Presence
   renderMembers(selectedMembers);
 }
 
-function appendTwemoji(parent: HTMLElement, option: ReactionOption, className = "twemoji") {
+function appendTwemoji(parent: HTMLElement, option: TwemojiOption, className = "twemoji") {
   const image = document.createElement("img");
   image.className = className;
   image.src = `/assets/twemoji/${option.code}.svg`;
@@ -482,7 +485,9 @@ function renderMessageReactions(messageId: string) {
     button.className = "message-reaction";
     button.setAttribute("aria-pressed", String(Boolean(currentUser?.id && senders.has(currentUser.id))));
     button.setAttribute("aria-label", `${option?.label ?? key}: ${senders.size}`);
+    const twemoji = emojiEntryAt(key, 0);
     if (option) appendTwemoji(button, option);
+    else if (twemoji?.text === key) appendTwemoji(button, twemoji.entry);
     else {
       const text = document.createElement("span");
       text.textContent = key;
@@ -925,6 +930,11 @@ function hideMentionSuggestions() {
   mentionSuggestions.replaceChildren();
 }
 
+function hideEmojiSuggestions() {
+  emojiSuggestions.hidden = true;
+  emojiSuggestions.replaceChildren();
+}
+
 function closeEmojiPicker() {
   emojiPicker.hidden = true;
   emojiToggle.setAttribute("aria-expanded", "false");
@@ -939,20 +949,20 @@ function insertEmoji(emoji: string) {
   rememberDraft();
   resizeMessageInput();
   updateLocalTyping();
-  renderMentionSuggestions();
+  renderInputSuggestions();
   messageInput.focus();
 }
 
 function renderEmojiPicker() {
   emojiPicker.replaceChildren();
-  for (const emoji of emojiOptions) {
+  for (const option of emojiOptions) {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = emoji;
-    button.title = `Insert ${emoji}`;
-    button.setAttribute("aria-label", `Insert ${emoji}`);
+    appendTwemoji(button, option);
+    button.title = `Insert :${option.name}:`;
+    button.setAttribute("aria-label", `Insert :${option.name}:`);
     button.addEventListener("mousedown", (event) => event.preventDefault());
-    button.addEventListener("click", () => insertEmoji(emoji));
+    button.addEventListener("click", () => insertEmoji(option.emoji));
     emojiPicker.append(button);
   }
 }
@@ -1000,6 +1010,53 @@ function renderMentionSuggestions() {
     mentionSuggestions.append(option);
   }
   mentionSuggestions.hidden = false;
+}
+
+function renderEmojiSuggestions() {
+  const token = emojiShortcodeToken(messageInput.value, messageInput.selectionStart ?? messageInput.value.length);
+  if (!token) {
+    hideEmojiSuggestions();
+    return;
+  }
+  const candidates = emojiShortcodeMatches(token.query).slice(0, 8);
+  emojiSuggestions.replaceChildren();
+  if (candidates.length === 0) {
+    hideEmojiSuggestions();
+    return;
+  }
+  hideMentionSuggestions();
+  for (const candidate of candidates) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "emoji-suggestion";
+    option.setAttribute("role", "option");
+    const preview = document.createElement("span");
+    preview.className = "emoji-suggestion-preview";
+    appendTwemoji(preview, candidate);
+    const label = document.createElement("span");
+    label.className = "emoji-suggestion-label";
+    label.textContent = `:${emojiShortcodeName(candidate, token.query)}:`;
+    option.append(preview, label);
+    option.addEventListener("mousedown", (event) => event.preventDefault());
+    option.addEventListener("click", () => {
+      const replacement = candidate.emoji;
+      messageInput.value = `${messageInput.value.slice(0, token.start)}${replacement}${messageInput.value.slice(token.end)}`;
+      const nextCursor = token.start + replacement.length;
+      messageInput.setSelectionRange(nextCursor, nextCursor);
+      hideEmojiSuggestions();
+      rememberDraft();
+      resizeMessageInput();
+      updateLocalTyping();
+      messageInput.focus();
+    });
+    emojiSuggestions.append(option);
+  }
+  emojiSuggestions.hidden = false;
+}
+
+function renderInputSuggestions() {
+  renderMentionSuggestions();
+  renderEmojiSuggestions();
 }
 
 function renderUnreadButton() {
@@ -2043,6 +2100,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   const wasSidebarOpen = chatLayout.classList.contains("mobile-sidebar-open") && window.matchMedia("(max-width: 760px)").matches;
   setMobileSidebar(false);
   hideMentionSuggestions();
+  hideEmojiSuggestions();
   const hashTarget = messageTargetFromHash();
   const currentLocation = chatLocation();
   const messageTarget = hashTarget && (channel && selectedServerId
@@ -2306,6 +2364,8 @@ messagesPanel.addEventListener("contextmenu", (event) => {
 document.addEventListener("pointerdown", (event) => {
   if (!messageContextMenu.hidden && event.target instanceof Node && !messageContextMenu.contains(event.target)) closeMessageContextMenu();
   if (!emojiPicker.hidden && event.target instanceof Node && !emojiPicker.contains(event.target) && event.target !== emojiToggle) closeEmojiPicker();
+  if (!emojiSuggestions.hidden && event.target instanceof Node && !emojiSuggestions.contains(event.target) && event.target !== messageInput) hideEmojiSuggestions();
+  if (!mentionSuggestions.hidden && event.target instanceof Node && !mentionSuggestions.contains(event.target) && event.target !== messageInput) hideMentionSuggestions();
 });
 window.addEventListener("resize", closeMessageContextMenu);
 messagesPanel.addEventListener("scroll", closeMessageContextMenu, { passive: true });
@@ -2967,13 +3027,14 @@ composer.addEventListener("submit", async (event) => {
   const selection = selectionToken;
   const stillHere = () => selection === selectionToken && selectedConversationId === conversationId && cryptoClient === activeCryptoClient;
   const activeEdit = editTarget;
-  const text = messageInput.value.trim();
+  const text = replaceEmojiShortcodes(messageInput.value.trim());
   const file = activeEdit ? undefined : photoInput.files?.[0];
   if (!text && !file) return;
   stopLocalTyping();
   sendInProgress = true;
   updateComposerState();
   hideMentionSuggestions();
+  hideEmojiSuggestions();
   closeEmojiPicker();
   const uploadController = file ? new AbortController() : undefined;
   uploadAbortController = uploadController;
@@ -3085,6 +3146,11 @@ messageInput.addEventListener("keydown", (event) => {
     mentionSuggestions.querySelector<HTMLButtonElement>("button")?.focus();
     return;
   }
+  if (!emojiSuggestions.hidden && (event.key === "Tab" || event.key === "ArrowDown")) {
+    event.preventDefault();
+    emojiSuggestions.querySelector<HTMLButtonElement>("button")?.focus();
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     composer.requestSubmit();
@@ -3096,7 +3162,7 @@ messageInput.addEventListener("input", () => {
   if (!editTarget) rememberDraft();
   updateLocalTyping();
 });
-messageInput.addEventListener("input", renderMentionSuggestions);
+messageInput.addEventListener("input", renderInputSuggestions);
 
 photoInput.addEventListener("change", () => {
   const file = photoInput.files?.[0];
@@ -3181,6 +3247,7 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape") {
     if (!emojiPicker.hidden) closeEmojiPicker();
+    else if (!emojiSuggestions.hidden) hideEmojiSuggestions();
     else if (!mentionSuggestions.hidden) hideMentionSuggestions();
     else if (editTarget && document.activeElement === messageInput) clearEditTarget();
     else if (replyTarget && document.activeElement === messageInput) clearReplyTarget();

@@ -112,7 +112,16 @@ try {
   await a.locator("#message-input:enabled").waitFor({ timeout: 20_000 });
   await send(a, b, "Alice to Bob: decrypted through the real transport");
   assert.equal(await b.locator(".message").filter({ hasText: "Alice to Bob: decrypted through the real transport" }).getByRole("button", { name: "Edit", exact: true }).count(), 0);
-  assert.equal(await a.locator("#chat-toast").isHidden(), true);
+  await a.locator("#message-input").fill(":smi");
+  await a.locator("#emoji-suggestions").waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(await a.locator(".emoji-suggestion").filter({ hasText: ":smiley:" }).count(), 1);
+  await a.locator(".emoji-suggestion").filter({ hasText: ":smiley:" }).click();
+  assert.equal(await a.locator("#message-input").inputValue(), "😃");
+  await a.locator("#message-input").fill(":smile: native 😄");
+  await a.locator("#send-button").click();
+  const emojiMessage = b.locator(".message").filter({ hasText: "native" });
+  await emojiMessage.waitFor({ timeout: 20_000 });
+  assert.equal(await emojiMessage.locator('img[src$="/assets/twemoji/1f604.svg"]').count(), 2);
   await send(a, b, `Ping @${users[1].username}: mention styling and unread state`);
   await b.locator(".message").filter({ hasText: "mention styling" }).waitFor({ timeout: 20_000 });
   assert.equal(await b.locator(".message").filter({ hasText: "mention styling" }).count(), 1);

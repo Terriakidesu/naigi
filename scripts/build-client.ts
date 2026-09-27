@@ -1,4 +1,4 @@
-export {};
+import { emojiShortcodes } from "../client/emoji";
 
 for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "server-settings"]) {
   const result = await Bun.build({
@@ -27,8 +27,8 @@ await Bun.write(
   "public/assets/matrix_sdk_crypto_wasm_bg.wasm",
   Bun.file("node_modules/@matrix-org/matrix-sdk-crypto-wasm/pkg/matrix_sdk_crypto_wasm_bg.wasm"),
 );
-for (const emoji of ["1f44d", "2764", "1f602", "1f62e", "1f622", "1f621", "1f389", "1f680", "1f440", "2705"]) {
-  await Bun.write(`public/assets/twemoji/${emoji}.svg`, Bun.file(`client/assets/twemoji/${emoji}.svg`));
+for (const emoji of emojiShortcodes) {
+  await Bun.write(`public/assets/twemoji/${emoji.code}.svg`, Bun.file(`client/assets/twemoji/${emoji.code}.svg`));
 }
 await Bun.write("public/assets/twemoji/NOTICE.txt", Bun.file("client/assets/twemoji/NOTICE.txt"));
 

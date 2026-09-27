@@ -1,6 +1,6 @@
 {
   "name": "priv-chat",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "scripts": {
     "test": "bun test",
     "test:e2ee": "bun run build:client && bun run scripts/test-e2ee.ts",

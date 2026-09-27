@@ -210,6 +210,8 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .spoiler { display: inline; padding: 0 0.25rem; border-radius: 3px; color: transparent; background: #111214; cursor: pointer; user-select: none; }
 .spoiler:hover, .spoiler:focus-visible { background: #18191c; }
 .spoiler.revealed { color: inherit; background: rgba(88, 101, 242, 0.2); user-select: text; }
+.spoiler .inline-twemoji { visibility: hidden; }
+.spoiler.revealed .inline-twemoji { visibility: visible; }
 .spoiler:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .message > .message-content > button { margin-top: 0.55rem; }
 .reply-context { display: block; width: min(100%, 620px); max-width: 100%; overflow: hidden; padding: 0.38rem 0.55rem; border-left: 3px solid var(--accent); border-radius: 3px; color: var(--text-muted); background: rgba(88, 101, 242, 0.1); font-size: 0.72rem; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
@@ -227,6 +229,7 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .message-reaction { display: inline-flex; align-items: center; gap: 0.25rem; min-height: 28px; padding: 0.18rem 0.42rem; border: 1px solid var(--line-soft); border-radius: 999px; color: var(--text-muted); background: rgba(35, 36, 40, 0.72); font-size: 0.7rem; }
 .message-reaction:hover, .message-reaction[aria-pressed="true"] { border-color: rgba(101, 114, 250, 0.85); color: var(--text); background: rgba(101, 114, 250, 0.2); }
 .twemoji { display: block; width: 1.15rem; height: 1.15rem; object-fit: contain; }
+.markdown-body .inline-twemoji { display: inline-block; width: 1.15em; height: 1.15em; vertical-align: -0.2em; }
 .message-reaction-count { min-width: 0.7rem; text-align: center; }
 .message-pin-badge { display: inline-flex; align-items: center; gap: 0.2rem; margin-left: 0.2rem; color: #f5d9a4; font-size: 0.62rem; }
 .edited-label { margin-left: 0.2rem; color: var(--text-faint); font-size: 0.6rem; }
@@ -303,6 +306,12 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .mention-suggestions { display: grid; gap: 0.2rem; max-height: 190px; overflow: auto; padding: 0.35rem; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--bg-elevated); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25); }
 .mention-suggestion { padding: 0.45rem 0.55rem; color: var(--text-muted); background: transparent; font-size: 0.72rem; text-align: left; }
 .mention-suggestion:hover, .mention-suggestion:focus-visible { color: var(--text); background: var(--bg-active); }
+.emoji-suggestions { display: grid; gap: 0.2rem; max-height: 190px; overflow: auto; padding: 0.35rem; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--bg-elevated); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25); }
+.emoji-suggestion { display: flex; align-items: center; gap: 0.55rem; padding: 0.35rem 0.55rem; color: var(--text-muted); background: transparent; font-size: 0.72rem; text-align: left; }
+.emoji-suggestion:hover, .emoji-suggestion:focus-visible { color: var(--text); background: var(--bg-active); }
+.emoji-suggestion-preview { display: grid; place-items: center; width: 1.25rem; flex: 0 0 1.25rem; }
+.emoji-suggestion-preview .twemoji { width: 1.15rem; height: 1.15rem; }
+.emoji-suggestion-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-box { display: flex; align-items: flex-end; gap: 0.55rem; min-height: 44px; padding: 0.55rem 0.65rem; border: 1px solid transparent; border-radius: 8px; background: var(--bg-input); transition: border-color 120ms ease, box-shadow 120ms ease; }
 .composer-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(101, 114, 250, 0.14); }
 .composer textarea { min-height: 25px; max-height: 180px; resize: none; padding: 0.15rem 0; border: 0; background: transparent; line-height: 1.4; }
