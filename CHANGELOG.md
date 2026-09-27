@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Restored readable contrast for the bottom-left account control and applied role colors to message sender names and member lists.
 - Transparent profile images now reveal the surrounding chat surface instead of the initials background.
 - Space settings now render immediately and hydrate encrypted room names in the background instead of waiting for every room to finish preparing.
 - Browser unlock failures now distinguish an encrypted local-store problem from unrelated chat startup errors instead of blaming every failure on the passphrase.

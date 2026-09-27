@@ -1770,6 +1770,13 @@ function normalizeRoleIds(value: unknown) {
   return value.slice(1, -1).split(",").map((item) => item.replace(/^"|"$/g, "")).filter(Boolean);
 }
 
+function highestServerRole(roleIds: unknown) {
+  return normalizeRoleIds(roleIds)
+    .map((id) => serverRoles.find((role) => role.id === id))
+    .filter((role): role is CustomServerRole => Boolean(role))
+    .sort((left, right) => right.position - left.position)[0];
+}
+
 function channelDisplayName(channel: ServerChannel) {
   return channelLabels.get(channel.id) || (channel.position === 0 ? "lobby" : `room-${channel.position + 1}`);
 }
@@ -2287,10 +2294,7 @@ function renderMembers(members: ConversationMember[]) {
   type MemberGroup = { label: string; color?: string; position: number; members: ConversationMember[] };
   const groups = new Map<string, MemberGroup>();
   for (const member of members) {
-    const role = normalizeRoleIds(member.roleIds)
-      .map((id) => serverRoles.find((candidate) => candidate.id === id))
-      .filter((candidate): candidate is CustomServerRole => Boolean(candidate))
-      .sort((left, right) => right.position - left.position)[0];
+    const role = highestServerRole(member.roleIds);
     const key = role?.id ?? "participants";
     const group = groups.get(key) ?? {
       label: role ? serverRoleName(role) : "Participants",
@@ -2309,6 +2313,7 @@ function renderMembers(members: ConversationMember[]) {
     heading.textContent = group.label;
     memberList.append(heading);
     for (const member of group.members.sort((left, right) => left.displayName.localeCompare(right.displayName))) {
+      const memberRole = highestServerRole(member.roleIds);
       const row = document.createElement("button");
       const memberName = member.userId === currentUser?.id ? currentUser?.displayName ?? "You" : member.displayName || `@${member.username}`;
       row.className = "member-row compact-member-row profile-trigger";
@@ -2326,6 +2331,7 @@ function renderMembers(members: ConversationMember[]) {
       avatar.setAttribute("aria-hidden", "true");
       const name = document.createElement("span");
       name.className = "compact-member-name";
+      if (memberRole?.color) name.style.setProperty("--role-color", memberRole.color);
       name.textContent = member.userId === currentUser?.id ? `${memberName} · you` : memberName;
       row.append(avatar, presence, name);
       memberList.append(row);
@@ -2878,10 +2884,8 @@ function renderMessage(
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
   avatar.setAttribute("aria-hidden", "true");
-  const senderMember = message.senderUserId === currentUser?.id
-    ? currentUser
-    : message.senderUserId ? selectedMembers.find((member) => member.userId === message.senderUserId) : undefined;
-  renderAvatar(avatar, senderIdentity, senderKey(message, decrypted), senderMember?.avatarUrl);
+  const senderMember = message.senderUserId ? selectedMembers.find((member) => member.userId === message.senderUserId) : undefined;
+  renderAvatar(avatar, senderIdentity, senderKey(message, decrypted), senderMember?.avatarUrl ?? (message.senderUserId === currentUser?.id ? currentUser.avatarUrl : null));
   const messageContent = document.createElement("div");
   messageContent.className = "message-content";
   const header = document.createElement("header");
@@ -2890,6 +2894,8 @@ function renderMessage(
   sender.className = "message-sender-link";
   sender.type = "button";
   sender.textContent = senderIdentity;
+  const senderRole = highestServerRole(senderMember?.roleIds);
+  if (senderRole?.color) sender.style.setProperty("--role-color", senderRole.color);
   if (message.senderUserId) sender.addEventListener("click", () => void openUserProfile(message.senderUserId as string));
   const time = document.createElement("time");
   const createdAt = new Date(message.createdAt);

@@ -73,11 +73,11 @@
 .create-button:hover { color: var(--text); background: #39515a; }
 .create-button span { font-size: 1rem; line-height: 0.5; }
 .sidebar-user { gap: 0.35rem; margin-top: auto; padding: 0.55rem 0.6rem; border-top: 1px solid var(--line); background: #0f1922; }
-.self-profile-button { display: flex; align-items: center; gap: 0.55rem; flex: 1 1 auto; min-width: 0; padding: 0.22rem; text-align: left; background: transparent; }
+.self-profile-button { display: flex; align-items: center; gap: 0.55rem; flex: 1 1 auto; min-width: 0; padding: 0.22rem; color: var(--text-muted); text-align: left; background: transparent; }
 .self-profile-button:hover { background: var(--bg-active); }
 .user-avatar { display: grid; place-items: center; flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%; color: #fff; background: var(--avatar-color, var(--accent)); font-size: 0.82rem; font-weight: 750; }
 .user-copy { min-width: 0; overflow: hidden; }
 .user-copy strong, .user-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.user-copy strong { font-size: 0.72rem; }
+.user-copy strong { color: var(--text); font-size: 0.72rem; }
 .user-copy span { margin-top: 0.15rem; color: var(--text-faint); font-size: 0.6rem; }
 .user-status-dot { margin-left: auto; width: 7px; height: 7px; box-shadow: none; }

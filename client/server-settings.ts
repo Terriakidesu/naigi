@@ -806,10 +806,13 @@ function renderMembers() {
     const assignedRoleIds = normalizeRoleIds(member.roleIds ?? roleAssignments.get(member.userId) ?? []);
     const roleSummary = document.createElement("div");
     roleSummary.className = "member-role-summary";
-    for (const role of assignedRoleIds
+    const assignedRoles = assignedRoleIds
       .map((id) => roles.find((role) => role.id === id))
       .filter((role): role is CustomServerRole => Boolean(role))
-      .sort((left, right) => right.position - left.position)) {
+      .sort((left, right) => right.position - left.position);
+    const highestRole = assignedRoles[0];
+    if (highestRole?.color) name.style.color = highestRole.color;
+    for (const role of assignedRoles) {
       const badge = document.createElement("span");
       badge.className = "role-badge";
       badge.style.setProperty("--role-color", role.color);

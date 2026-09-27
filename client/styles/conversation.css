@@ -26,7 +26,7 @@
 .message-compact .message-avatar { height: 0; visibility: hidden; }
 .message-content { min-width: 0; }
 .message-meta { display: flex; align-items: baseline; gap: 0.5rem; margin: 0 0 0.22rem; overflow-wrap: anywhere; color: var(--text-muted); font-size: 0.73rem; }
-.message-meta strong, .message-sender-link { color: var(--text); font-size: 0.82rem; }
+.message-meta strong, .message-sender-link { color: var(--role-color, var(--text)); font-size: 0.82rem; }
 .message-sender-link { padding: 0; border-radius: 2px; background: transparent; font-weight: 700; }
 .message-sender-link:hover { color: var(--accent-hover); background: transparent; }
 .message-meta time { color: var(--text-faint); font-size: 0.62rem; }
@@ -163,7 +163,7 @@
 .member-presence-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--text-faint); }
 .member-presence-dot[data-state="online"] { background: var(--green); }
 .member-presence-dot[data-state="idle"] { background: #a8a47e; }
-.compact-member-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.72rem; }
+.compact-member-name { min-width: 0; overflow: hidden; color: var(--role-color, inherit); text-overflow: ellipsis; white-space: nowrap; font-size: 0.72rem; }
 .member-avatar { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 8px; color: #fff; background: #3f6870; font-size: 0.68rem; font-weight: 700; }
 .member-copy { min-width: 0; }
 .member-role-list { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-top: 0.2rem; }
