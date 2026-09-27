@@ -194,6 +194,7 @@ const serverSettingsButton = byId<HTMLAnchorElement>("server-settings-button");
 const workspaceName = byId<HTMLElement>("workspace-name");
 const workspaceSubtitle = byId<HTMLElement>("workspace-subtitle");
 const composer = byId<HTMLFormElement>("composer");
+const messageInputRendered = byId<HTMLElement>("message-input-rendered");
 const messageInput = byId<HTMLTextAreaElement>("message-input");
 const photoInput = byId<HTMLInputElement>("photo-input");
 const sendButton = byId<HTMLButtonElement>("send-button");
@@ -463,7 +464,7 @@ function receivePresence(conversationId: string, userId: string, state: Presence
   renderMembers(selectedMembers);
 }
 
-function appendTwemoji(parent: HTMLElement, option: TwemojiOption, className = "twemoji") {
+function appendTwemoji(parent: HTMLElement | DocumentFragment, option: TwemojiOption, className = "twemoji") {
   const image = document.createElement("img");
   image.className = className;
   image.src = `/assets/twemoji/${option.code}.svg`;
@@ -471,6 +472,30 @@ function appendTwemoji(parent: HTMLElement, option: TwemojiOption, className = "
   image.draggable = false;
   parent.append(image);
   return image;
+}
+
+function renderMessageInput() {
+  const value = messageInput.value;
+  const fragment = document.createDocumentFragment();
+  messageInputRendered.dataset.placeholder = messageInput.placeholder;
+  let offset = 0;
+  let textStart = 0;
+  while (offset < value.length) {
+    const emoji = emojiEntryAt(value, offset);
+    if (!emoji) {
+      const codePoint = value.codePointAt(offset);
+      offset += codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+      continue;
+    }
+    if (textStart < offset) fragment.append(value.slice(textStart, offset));
+    appendTwemoji(fragment, emoji.entry, "composer-twemoji");
+    offset += emoji.text.length;
+    textStart = offset;
+  }
+  if (textStart < value.length) fragment.append(value.slice(textStart));
+  messageInputRendered.replaceChildren(fragment);
+  messageInputRendered.scrollTop = messageInput.scrollTop;
+  messageInputRendered.scrollLeft = messageInput.scrollLeft;
 }
 
 function closeMessageContextMenu() {
@@ -2406,6 +2431,7 @@ function updateComposerState() {
     : !channelPermissions.canSend
       ? "You can view this channel but cannot send messages"
       : "Message this conversation";
+  renderMessageInput();
   if (!enabled) {
     closeEmojiPicker();
     attachmentPreview.hidden = true;
@@ -3484,6 +3510,7 @@ async function joinServer() {
 function resizeMessageInput() {
   messageInput.style.height = "auto";
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 180)}px`;
+  renderMessageInput();
 }
 
 composer.addEventListener("submit", async (event) => {
@@ -3624,6 +3651,10 @@ messageInput.addEventListener("keydown", (event) => {
 });
 
 messageInput.addEventListener("input", resizeMessageInput);
+messageInput.addEventListener("scroll", () => {
+  messageInputRendered.scrollTop = messageInput.scrollTop;
+  messageInputRendered.scrollLeft = messageInput.scrollLeft;
+});
 messageInput.addEventListener("input", () => {
   if (!editTarget) rememberDraft();
   updateLocalTyping();

@@ -19,7 +19,14 @@
 .emoji-suggestion-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-box { display: flex; align-items: flex-end; gap: 0.55rem; min-height: 48px; padding: 0.6rem 0.7rem; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--bg-input); transition: border-color 120ms ease, box-shadow 120ms ease; }
 .composer-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(146, 170, 165, 0.14); }
-.composer textarea { min-height: 25px; max-height: 180px; resize: none; padding: 0.15rem 0; border: 0; background: transparent; line-height: 1.4; }
+.composer-input-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
+.message-input-rendered { position: absolute; z-index: 0; inset: 0; overflow: hidden; padding: 0.15rem 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: 1.4; pointer-events: none; user-select: none; }
+.message-input-rendered:empty::before { content: attr(data-placeholder); color: #9db1b2; }
+.composer-input-wrap:has(textarea:disabled) .message-input-rendered { opacity: 0.6; }
+.composer-twemoji { display: inline-block; width: 1.15em; height: 1.15em; vertical-align: -0.2em; object-fit: contain; }
+.composer textarea { position: relative; z-index: 1; display: block; min-height: 25px; max-height: 180px; resize: none; padding: 0.15rem 0; border: 0; color: transparent; overflow-wrap: anywhere; word-break: break-word; -webkit-text-fill-color: transparent; caret-color: var(--text); background: transparent; line-height: 1.4; }
+.composer textarea::placeholder { color: transparent; -webkit-text-fill-color: transparent; }
+.composer textarea::selection { color: transparent; background: rgba(146, 170, 165, 0.3); }
 .composer textarea:focus { border: 0; }
 .composer textarea:disabled { cursor: not-allowed; opacity: 0.6; }
 .composer-icon-button { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; padding: 0; border-radius: 8px; color: var(--text-muted); background: transparent; font-size: 1.1rem; }

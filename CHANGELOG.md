@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-No unreleased changes.
+### Changed
+
+- Composer input now renders Unicode emoji with the bundled Twemoji artwork instead of platform emoji glyphs while preserving normal text editing and sending behavior.
 
 Released versions are maintained as one Markdown file per version under
 [`docs/changelogs/`](docs/changelogs/).

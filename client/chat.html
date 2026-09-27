@@ -99,7 +99,10 @@
             </div>
             <div class="composer-box">
               <label class="file-button" title="Attach encrypted file, image, or video"><i data-lucide="paperclip"></i><input id="photo-input" type="file" aria-label="Attach encrypted file, image, or video" accept="*/*"></label>
-              <textarea id="message-input" rows="1" maxlength="200000" placeholder="Message this conversation" aria-label="Message this conversation"></textarea>
+              <div class="composer-input-wrap">
+                <div id="message-input-rendered" class="message-input-rendered" aria-hidden="true"></div>
+                <textarea id="message-input" rows="1" maxlength="200000" placeholder="Message this conversation" aria-label="Message this conversation"></textarea>
+              </div>
               <button id="emoji-toggle" class="composer-icon-button" type="button" title="Insert emoji" aria-label="Insert emoji" aria-expanded="false"><i data-lucide="smile"></i></button>
               <button id="send-button" class="send-button" type="submit" title="Send encrypted message" aria-label="Send encrypted message"><i data-lucide="send"></i></button>
             </div>
