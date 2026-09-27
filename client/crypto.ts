@@ -146,6 +146,7 @@ export type SendContentResult = {
   delivery: "sent" | "queued";
   pending?: PendingMessage;
   message?: MessageEnvelope;
+  decrypted?: DecryptedMessage;
 };
 
 function canRetryMessage(error: unknown) {
@@ -414,6 +415,10 @@ export class CryptoClient {
 
   async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>): Promise<SendContentResult> {
     const ciphertext = await this.encryptContent(conversationId, members, content);
+    const decrypted: DecryptedMessage = {
+      sender: matrixUserId(this.accountUserId),
+      content,
+    };
     const payload: PendingMessagePayload = {
       senderDeviceId: this.deviceId,
       clientMessageId: randomUuid(),
@@ -422,7 +427,7 @@ export class CryptoClient {
     };
     try {
       const result = await this.api.sendMessage(conversationId, payload);
-      return { delivery: "sent", message: result.message };
+      return { delivery: "sent", message: result.message, decrypted };
     } catch (error) {
       if (!canRetryMessage(error)) throw error;
       try {

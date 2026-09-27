@@ -132,7 +132,10 @@ try {
   await a.locator("#reply-mention-toggle").click();
   assert.equal(await a.locator("#reply-mention-toggle").getAttribute("aria-pressed"), "false");
   await send(a, b, "Reply without a ping");
-  assert.equal(await b.locator(".message").filter({ hasText: "Reply without a ping" }).getAttribute("data-mentions-current-user"), "false");
+  const replyMessage = b.locator(".message").filter({ hasText: "Reply without a ping" });
+  assert.equal(await replyMessage.getAttribute("data-mentions-current-user"), "false");
+  await replyMessage.locator(".reply-context").waitFor({ timeout: 20_000 });
+  assert.equal(await replyMessage.locator(".reply-context").filter({ hasText: "Encrypted message" }).count(), 0);
   assert.equal(await a.locator(".unavailable-history").count(), 0);
   assert.equal(await b.locator(".unavailable-history").count(), 0);
   assert.equal(await a.locator("#status-line").textContent(), "Connected");
