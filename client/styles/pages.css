@@ -145,6 +145,36 @@
 .role-channel-access-row > strong { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 0.7rem; text-overflow: ellipsis; white-space: nowrap; }
 .role-channel-access-row .checkbox-label { width: auto; font-size: 0.66rem; }
 .role-card-actions { justify-content: flex-end; padding-top: 0.2rem; }
+.role-preview { --role-color: var(--accent); border-color: color-mix(in srgb, var(--role-color) 42%, var(--line-soft)); background: color-mix(in srgb, var(--role-color) 4%, var(--bg-elevated)); scroll-margin-top: 1rem; }
+.role-preview-heading { align-items: center; }
+.role-preview-banner { display: flex; align-items: center; gap: 0.7rem; margin-top: 1rem; padding: 0.7rem 0.8rem; border-left: 3px solid var(--role-color); border-radius: 6px; background: color-mix(in srgb, var(--role-color) 10%, var(--bg-sidebar)); }
+.role-preview-swatch { display: block; flex: 0 0 13px; width: 13px; height: 13px; border-radius: 4px; transform: rotate(45deg); box-shadow: 0 0 0 3px color-mix(in srgb, var(--role-color) 20%, transparent); }
+.role-preview-banner-copy { display: grid; min-width: 0; gap: 0.18rem; }
+.role-preview-banner-copy strong { color: var(--text); font-size: 0.74rem; }
+.role-preview-banner-copy span { color: var(--text-faint); font-size: 0.65rem; line-height: 1.4; }
+.role-preview-grid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 0.8rem; margin-top: 0.8rem; }
+.role-preview-card { min-width: 0; padding: 0.75rem; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--bg-sidebar); }
+.role-preview-card-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.55rem; }
+.role-preview-card-heading strong { font-size: 0.75rem; }
+.role-preview-card-heading .small { margin: 0; font-size: 0.6rem; }
+.role-preview-channel-list, .role-preview-permission-groups { display: grid; gap: 0.35rem; }
+.role-preview-channel { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; padding: 0.45rem 0.5rem; border-radius: 6px; background: var(--bg-elevated); }
+.role-preview-channel > strong { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 0.68rem; text-overflow: ellipsis; white-space: nowrap; }
+.role-preview-channel-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.2rem; }
+.role-preview-action, .role-preview-permission-status { display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; font-size: 0.56rem; font-weight: 700; white-space: nowrap; }
+.role-preview-action { min-width: 2.8rem; padding: 0.14rem 0.3rem; }
+.role-preview-action.allowed, .role-preview-permission.allowed .role-preview-permission-status { color: #b9d9c8; background: rgba(120, 179, 155, 0.18); }
+.role-preview-action.blocked, .role-preview-permission.blocked .role-preview-permission-status { color: var(--text-faint); background: rgba(127, 143, 147, 0.15); }
+.role-preview-permission-group { display: grid; gap: 0.25rem; }
+.role-preview-permission-group h3 { margin: 0.35rem 0 0.05rem; color: var(--text-faint); font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.role-preview-permission-list { display: grid; gap: 0.2rem; }
+.role-preview-permission { display: flex; align-items: center; gap: 0.45rem; min-width: 0; padding: 0.35rem 0.4rem; border-radius: 5px; background: var(--bg-elevated); }
+.role-preview-permission.blocked { opacity: 0.68; }
+.role-preview-permission-status { flex: 0 0 3.1rem; padding: 0.15rem 0.25rem; }
+.role-preview-permission-copy { display: grid; min-width: 0; gap: 0.08rem; }
+.role-preview-permission-copy strong, .role-preview-permission-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.role-preview-permission-copy strong { color: var(--text-muted); font-size: 0.64rem; }
+.role-preview-permission-copy small { color: var(--text-faint); font-size: 0.56rem; }
 .member-role-summary { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.35rem; }
 .role-badge { display: inline-flex; align-items: center; max-width: 150px; padding: 0.16rem 0.4rem; overflow: hidden; border: 1px solid color-mix(in srgb, var(--role-color, var(--accent)) 55%, var(--line-soft)); border-radius: 999px; color: var(--role-color, var(--text-muted)); background: color-mix(in srgb, var(--role-color, var(--accent)) 12%, transparent); font-size: 0.59rem; text-overflow: ellipsis; white-space: nowrap; }
 .member-role-select { flex: 0 0 145px; min-height: 52px; padding: 0.3rem; font-size: 0.64rem; }

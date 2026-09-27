@@ -42,6 +42,11 @@ const roleForm = document.getElementById("role-form") as HTMLFormElement;
 const newRoleName = document.getElementById("new-role-name") as HTMLInputElement;
 const newRoleColor = document.getElementById("new-role-color") as HTMLInputElement;
 const roleList = document.getElementById("role-settings-list") as HTMLElement;
+const rolePreview = document.getElementById("role-preview") as HTMLElement;
+const rolePreviewTitle = document.getElementById("role-preview-title") as HTMLElement;
+const rolePreviewBanner = document.getElementById("role-preview-banner") as HTMLElement;
+const rolePreviewContent = document.getElementById("role-preview-content") as HTMLElement;
+const exitRolePreview = document.getElementById("exit-role-preview") as HTMLButtonElement;
 const memberList = document.getElementById("member-settings-list") as HTMLElement;
 const moderationList = document.getElementById("moderation-settings-list") as HTMLElement;
 const createInvite = document.getElementById("create-invite-settings") as HTMLButtonElement;
@@ -62,6 +67,7 @@ let cryptoClient: CryptoClient | undefined;
 let metadataConversationId: string | undefined;
 let metadataMembers: Awaited<ReturnType<ApiClient["conversationMembers"]>>["members"] = [];
 let selectedRoleId: string | undefined;
+let previewRoleId: string | undefined;
 let roleSearchQuery = "";
 let roleEditorDirty = false;
 let metadataReady = false;
@@ -109,6 +115,15 @@ const permissionDefinitions: Array<{ id: ServerPermission; label: string; descri
   { id: "pin_messages", label: "Pin messages", description: "Pin and unpin encrypted messages." },
   { id: "delete_others_messages", label: "Delete others' messages", description: "Permanently remove encrypted messages for everyone." },
   { id: "delete_messages", label: "Delete messages (legacy)", description: "Legacy shortcut for moderator message deletion." },
+];
+
+const previewPermissionGroups: Array<{ label: string; permissions: ServerPermission[] }> = [
+  { label: "Messages", permissions: ["view_channels", "send_messages", "upload_files", "pin_messages", "delete_others_messages", "delete_messages"] },
+  { label: "People and mentions", permissions: ["view_members", "mention_everyone", "mention_here", "mention_roles"] },
+  { label: "Rooms", permissions: ["manage_channels", "create_channels", "edit_channels", "reorder_channels", "archive_channels", "manage_categories", "manage_channel_access"] },
+  { label: "Invites", permissions: ["manage_invites", "view_invites", "create_invites", "revoke_invites", "manage_invite_limits"] },
+  { label: "Roles", permissions: ["manage_roles", "create_roles", "edit_roles", "delete_roles", "assign_roles", "reorder_roles", "manage_role_permissions", "manage_role_appearance"] },
+  { label: "Moderation", permissions: ["manage_server", "manage_members", "kick_members", "view_moderation_records", "ban_members", "unban_members", "timeout_members", "remove_timeouts"] },
 ];
 
 function normalizeRoleIds(value: unknown) {
@@ -260,6 +275,135 @@ function roleOptions(selected: string[]) {
     fragment.append(option);
   }
   return fragment;
+}
+
+function previewPermissions(role: CustomServerRole) {
+  const permissions = {} as ServerPermissionMap;
+  for (const definition of permissionDefinitions) permissions[definition.id] = role.permissions[definition.id] === true;
+  return permissions;
+}
+
+function renderRolePreview() {
+  const role = previewRoleId ? roles.find((candidate) => candidate.id === previewRoleId) : undefined;
+  if (!role) {
+    rolePreview.hidden = true;
+    rolePreviewBanner.replaceChildren();
+    rolePreviewContent.replaceChildren();
+    return;
+  }
+
+  const permissions = previewPermissions(role);
+  rolePreview.hidden = false;
+  rolePreview.style.setProperty("--role-color", role.color);
+  rolePreviewTitle.textContent = `Viewing as ${roleName(role)}`;
+  rolePreviewBanner.replaceChildren();
+
+  const swatch = document.createElement("span");
+  swatch.className = "role-preview-swatch";
+  swatch.style.background = role.color;
+  swatch.setAttribute("aria-hidden", "true");
+  const copy = document.createElement("div");
+  copy.className = "role-preview-banner-copy";
+  const stack = document.createElement("strong");
+  stack.textContent = role.systemKey === "everyone" ? "All members" : `All members · ${roleName(role)}`;
+  const explanation = document.createElement("span");
+  explanation.textContent = "Read-only simulation. No member is impersonated and no encrypted message history is loaded or decrypted.";
+  copy.append(stack, explanation);
+  rolePreviewBanner.append(swatch, copy);
+
+  const roomCard = document.createElement("section");
+  roomCard.className = "role-preview-card";
+  const roomHeading = document.createElement("div");
+  roomHeading.className = "role-preview-card-heading";
+  const roomTitle = document.createElement("strong");
+  roomTitle.textContent = "Room access";
+  const roomMeta = document.createElement("span");
+  roomMeta.className = "muted small";
+  roomMeta.textContent = `${channels.length} room${channels.length === 1 ? "" : "s"}`;
+  roomHeading.append(roomTitle, roomMeta);
+  const roomList = document.createElement("div");
+  roomList.className = "role-preview-channel-list";
+  for (const channel of [...channels].sort((left, right) => left.position - right.position)) {
+    const access = role.channelAccess.find((item) => item.channelId === channel.id);
+    const canView = permissions.view_channels && (role.viewAllChannels || Boolean(access?.canView || access?.canUpload));
+    const canSend = canView && permissions.send_messages;
+    const canUpload = canView && permissions.upload_files && (role.viewAllChannels || Boolean(access?.canUpload));
+    const row = document.createElement("div");
+    row.className = "role-preview-channel";
+    const name = document.createElement("strong");
+    name.textContent = channelName(channel);
+    const actions = document.createElement("div");
+    actions.className = "role-preview-channel-actions";
+    for (const action of [
+      ["View", canView],
+      ["Send", canSend],
+      ["Upload", canUpload],
+    ] as const) {
+      const badge = document.createElement("span");
+      badge.className = `role-preview-action ${action[1] ? "allowed" : "blocked"}`;
+      badge.textContent = action[0];
+      actions.append(badge);
+    }
+    row.append(name, actions);
+    roomList.append(row);
+  }
+  if (channels.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted small";
+    empty.textContent = "No active encrypted rooms.";
+    roomList.append(empty);
+  }
+  roomCard.append(roomHeading, roomList);
+
+  const permissionCard = document.createElement("section");
+  permissionCard.className = "role-preview-card";
+  const permissionHeading = document.createElement("div");
+  permissionHeading.className = "role-preview-card-heading";
+  const permissionTitle = document.createElement("strong");
+  permissionTitle.textContent = "Actions";
+  const permissionMeta = document.createElement("span");
+  permissionMeta.className = "muted small";
+  permissionMeta.textContent = "Allowed and blocked";
+  permissionHeading.append(permissionTitle, permissionMeta);
+  const permissionGroups = document.createElement("div");
+  permissionGroups.className = "role-preview-permission-groups";
+  for (const group of previewPermissionGroups) {
+    const groupSection = document.createElement("section");
+    groupSection.className = "role-preview-permission-group";
+    const groupTitle = document.createElement("h3");
+    groupTitle.textContent = group.label;
+    const groupList = document.createElement("div");
+    groupList.className = "role-preview-permission-list";
+    for (const permissionId of group.permissions) {
+      const definition = permissionDefinitions.find((candidate) => candidate.id === permissionId);
+      if (!definition) continue;
+      const row = document.createElement("div");
+      const allowed = permissions[permissionId];
+      row.className = `role-preview-permission ${allowed ? "allowed" : "blocked"}`;
+      const statusLabel = document.createElement("span");
+      statusLabel.className = "role-preview-permission-status";
+      statusLabel.textContent = allowed ? "Allowed" : "Blocked";
+      const text = document.createElement("span");
+      text.className = "role-preview-permission-copy";
+      const label = document.createElement("strong");
+      label.textContent = definition.label;
+      const description = document.createElement("small");
+      description.textContent = definition.description;
+      text.append(label, description);
+      row.append(statusLabel, text);
+      groupList.append(row);
+    }
+    groupSection.append(groupTitle, groupList);
+    permissionGroups.append(groupSection);
+  }
+  permissionCard.append(permissionHeading, permissionGroups);
+  rolePreviewContent.replaceChildren(roomCard, permissionCard);
+}
+
+function startRolePreview(roleId: string) {
+  previewRoleId = roleId;
+  renderRolePreview();
+  rolePreview.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function categoryName(category: ServerCategory) {
@@ -450,6 +594,7 @@ function renderRoles() {
     empty.className = "muted small";
     empty.textContent = "No roles have been configured yet.";
     roleList.append(empty);
+    renderRolePreview();
     return;
   }
   const editableRoles = roles.filter((role) => role.systemKey !== "owner");
@@ -458,6 +603,7 @@ function renderRoles() {
     empty.className = "muted small";
     empty.textContent = "No editable roles have been configured yet.";
     roleList.append(empty);
+    renderRolePreview();
     return;
   }
   if (!selectedRoleId || !editableRoles.some((role) => role.id === selectedRoleId)) {
@@ -714,6 +860,13 @@ function renderRoles() {
 
   const actions = document.createElement("div");
   actions.className = "role-card-actions";
+  const preview = document.createElement("button");
+  preview.type = "button";
+  preview.className = "secondary";
+  preview.textContent = previewRoleId === role.id ? "Previewing role" : "View as role";
+  preview.setAttribute("aria-pressed", String(previewRoleId === role.id));
+  preview.addEventListener("click", () => startRolePreview(role.id));
+  actions.append(preview);
   const save = document.createElement("button");
   save.type = "button";
   save.textContent = "Save role";
@@ -784,6 +937,7 @@ function renderRoles() {
   card.append(actions);
   manager.append(listPanel, card);
   renderRoleList();
+  renderRolePreview();
 }
 
 function renderMembers() {
@@ -1081,6 +1235,7 @@ async function hydrateChannelMetadata(version: number, channelSnapshot: ServerCh
         if (roleRow.dataset.channelId === channel.id) roleRow.querySelector<HTMLElement>(".role-channel-name")!.textContent = name;
       }
     }
+    renderRolePreview();
   } catch (error) {
     console.warn("encrypted room metadata hydration failed", error);
   }
@@ -1287,6 +1442,12 @@ roleForm.addEventListener("submit", async (event) => {
   } finally {
     if (button) button.disabled = !hasAnyPermission("manage_roles", "create_roles") || !metadataReady;
   }
+});
+
+exitRolePreview.addEventListener("click", () => {
+  previewRoleId = undefined;
+  renderRolePreview();
+  roleList.querySelector<HTMLElement>(".role-list-item[aria-selected='true']")?.focus();
 });
 
 createInvite.addEventListener("click", async () => {

@@ -71,6 +71,14 @@
             </form>
             <div id="role-settings-list" class="role-manager"></div>
           </section>
+          <section id="role-preview" class="settings-section panel role-preview" hidden aria-live="polite">
+            <div class="settings-section-heading role-preview-heading">
+              <div><p class="eyebrow">READ-ONLY PREVIEW</p><h2 id="role-preview-title">Viewing as role</h2></div>
+              <button id="exit-role-preview" class="secondary" type="button">Exit preview</button>
+            </div>
+            <div id="role-preview-banner" class="role-preview-banner"></div>
+            <div id="role-preview-content" class="role-preview-grid"></div>
+          </section>
           <section class="settings-section panel">
             <div class="settings-section-heading"><div><p class="eyebrow">PEOPLE</p><h2>Members</h2></div><span class="muted small">Membership is visible for authorization</span></div>
             <p class="settings-section-description">Assign multiple roles per member. The role with the highest position is shown first.</p>

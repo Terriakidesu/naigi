@@ -28,6 +28,7 @@
   .role-manager { grid-template-columns: 1fr; }
   .role-list-panel { position: static; }
   .role-list-items { max-height: 220px; }
+  .role-preview-grid { grid-template-columns: 1fr; }
   .settings-layout, .server-settings-layout { grid-template-columns: 1fr; width: min(100% - 1rem, 560px); margin: 1rem auto; }
   .settings-nav { top: 0; z-index: 3; grid-template-columns: repeat(4, 1fr); align-items: center; }
   .settings-nav .eyebrow { grid-column: 1 / -1; margin-bottom: 0; }
