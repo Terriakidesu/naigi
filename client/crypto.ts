@@ -164,6 +164,20 @@ export type SendContentResult = {
   decrypted?: DecryptedMessage;
 };
 
+type MediaUploadOptions = UploadOptions & {
+  spoiler?: boolean;
+  album?: { id: string; index: number; total: number };
+};
+
+type MediaBatchOptions = UploadOptions & {
+  body?: string;
+  embeds?: unknown[];
+  replyTo?: ReplyReference;
+  mentions?: string[];
+  roleMentions?: string[];
+  onAttachmentStart?: (index: number) => void;
+};
+
 export class LocalCryptoStoreError extends Error {
   constructor() {
     super("local_crypto_store_unlock_failed");
@@ -461,18 +475,20 @@ export class CryptoClient {
     return jsonObject(decrypted.content.body);
   }
 
-  async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>, attachmentId?: string): Promise<SendContentResult> {
+  async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>, attachmentIds?: string | string[]): Promise<SendContentResult> {
     const ciphertext = await this.encryptContent(conversationId, members, content);
     const decrypted: DecryptedMessage = {
       sender: matrixUserId(this.accountUserId),
       content,
     };
+    const ids = typeof attachmentIds === "string" ? [attachmentIds] : [...new Set(attachmentIds ?? [])];
     const payload: PendingMessagePayload = {
       senderDeviceId: this.deviceId,
       clientMessageId: randomUuid(),
       protocol: "matrix-v1",
       ciphertext,
-      ...(attachmentId ? { attachmentId } : {}),
+      ...(ids.length === 1 ? { attachmentId: ids[0] } : {}),
+      ...(ids.length > 1 ? { attachmentIds: ids } : {}),
     };
     try {
       const result = await this.api.sendMessage(conversationId, payload);
@@ -518,6 +534,7 @@ export class CryptoClient {
           ciphertext: record.ciphertext,
           protocolMetadata: record.protocolMetadata,
           attachmentId: record.attachmentId,
+          attachmentIds: record.attachmentIds,
         });
         await removePendingMessage(record.id);
         sent += 1;
@@ -602,10 +619,7 @@ export class CryptoClient {
     });
   }
 
-  async sendMedia(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions & {
-    spoiler?: boolean;
-    album?: { id: string; index: number; total: number };
-  } = {}) {
+  private async uploadEncryptedMedia(conversationId: string, file: File, options: MediaUploadOptions = {}) {
     options.signal?.throwIfAborted();
     const compressed = await prepareMedia(file);
     options.signal?.throwIfAborted();
@@ -632,31 +646,73 @@ export class CryptoClient {
         ...jsonObject(mediaEncryptionInfo),
         url: attachment.attachment.uploadPath,
       };
-      return this.sendContent(conversationId, members, {
-        msgtype: compressed.mimeType.startsWith("video/")
-          ? "m.video"
-          : compressed.mimeType.startsWith("image/") ? "m.image" : "m.file",
-        body: "",
-        filename: compressed.name.slice(0, 255),
-        info: {
-          mimetype: compressed.mimeType,
-          size: compressed.blob.size,
-          w: compressed.width || undefined,
-          h: compressed.height || undefined,
+      return {
+        attachmentId: attachment.attachment.id,
+        content: {
+          msgtype: compressed.mimeType.startsWith("video/")
+            ? "m.video"
+            : compressed.mimeType.startsWith("image/") ? "m.image" : "m.file",
+          body: "",
+          filename: compressed.name.slice(0, 255),
+          info: {
+            mimetype: compressed.mimeType,
+            size: compressed.blob.size,
+            w: compressed.width || undefined,
+            h: compressed.height || undefined,
+          },
+          file: mediaFile,
+          ...(options.spoiler ? { spoiler: true } : {}),
+          ...(options.album ? { album: options.album } : {}),
         },
-        file: mediaFile,
-        ...(options.spoiler ? { spoiler: true } : {}),
-        ...(options.album ? { album: options.album } : {}),
-      }, attachment.attachment.id);
+      };
     } finally {
       encrypted.free();
     }
   }
 
-  async sendPhoto(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions & {
-    spoiler?: boolean;
-    album?: { id: string; index: number; total: number };
-  } = {}) {
+  async sendMedia(conversationId: string, members: ConversationMember[], file: File, options: MediaUploadOptions = {}) {
+    const uploaded = await this.uploadEncryptedMedia(conversationId, file, options);
+    return this.sendContent(conversationId, members, uploaded.content, uploaded.attachmentId);
+  }
+
+  async sendMediaBatch(
+    conversationId: string,
+    members: ConversationMember[],
+    files: Array<{ file: File; spoiler?: boolean }>,
+    options: MediaBatchOptions = {},
+  ) {
+    if (files.length === 0) throw new Error("empty_media_batch");
+    const attachments: Record<string, unknown>[] = [];
+    const attachmentIds: string[] = [];
+    for (let index = 0; index < files.length; index += 1) {
+      options.onAttachmentStart?.(index);
+      const uploaded = await this.uploadEncryptedMedia(conversationId, files[index].file, {
+        ...options,
+        spoiler: files[index].spoiler,
+      });
+      attachments.push(uploaded.content);
+      attachmentIds.push(uploaded.attachmentId);
+    }
+    const body = options.body ?? "";
+    if (body.length > MAX_MESSAGE_TEXT_LENGTH) throw new Error("message_too_long");
+    return this.sendContent(conversationId, members, {
+      msgtype: "m.attachments",
+      body,
+      attachments,
+      embeds: options.embeds ?? [],
+      ...(options.mentions && options.mentions.length > 0 ? { mentions: [...new Set(options.mentions)].slice(0, 50) } : {}),
+      ...(options.roleMentions && options.roleMentions.length > 0 ? { roleMentions: [...new Set(options.roleMentions)].slice(0, 25) } : {}),
+      ...(options.replyTo ? {
+        replyTo: {
+          messageId: options.replyTo.messageId,
+          sender: options.replyTo.sender.slice(0, 120),
+          body: options.replyTo.body.slice(0, 1_000),
+        },
+      } : {}),
+    }, attachmentIds);
+  }
+
+  async sendPhoto(conversationId: string, members: ConversationMember[], file: File, options: MediaUploadOptions = {}) {
     return this.sendMedia(conversationId, members, file, options);
   }
 

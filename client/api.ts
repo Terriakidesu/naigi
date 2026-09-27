@@ -617,6 +617,7 @@ export class ApiClient {
     ciphertext: string;
     protocolMetadata?: string;
     attachmentId?: string;
+    attachmentIds?: string[];
   }) {
     return this.post<{ message: MessageEnvelope; deduplicated: boolean }>(
       `/v1/conversations/${conversationId}/messages`,

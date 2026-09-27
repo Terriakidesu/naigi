@@ -3450,6 +3450,23 @@ function mediaAlbumFromContent(content: Record<string, unknown>): MediaAlbumInfo
   return { id: album.id, index, total };
 }
 
+function mediaAttachmentsFromContent(content: Record<string, unknown>) {
+  if (content.msgtype === "m.attachments") {
+    return Array.isArray(content.attachments)
+      ? content.attachments.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value)))
+      : [];
+  }
+  return content.msgtype === "m.image" || content.msgtype === "m.video" || content.msgtype === "m.file" ? [content] : [];
+}
+
+function isVisualMediaContent(content: Record<string, unknown>) {
+  const info = content.info && typeof content.info === "object" && !Array.isArray(content.info) ? content.info as Record<string, unknown> : {};
+  const mimeType = typeof info.mimetype === "string" ? info.mimetype.toLowerCase() : "";
+  const filename = typeof content.filename === "string" ? content.filename : "";
+  return !isPlaintextAttachment(filename, mimeType)
+    && (content.msgtype === "m.image" || content.msgtype === "m.video" || mimeType.startsWith("image/") || mimeType.startsWith("video/"));
+}
+
 function appendEncryptedMedia(
   parent: HTMLElement,
   content: Record<string, unknown>,
@@ -3751,7 +3768,8 @@ function collapseMediaAlbums() {
       tile.dataset.messageId = messageId;
       tile.dataset.albumIndex = source.dataset.mediaAlbumIndex ?? "0";
       if (card && !tile.contains(card)) tile.append(card);
-      if (action && !tile.contains(action)) tile.append(action);
+      tile.querySelector<HTMLElement>(".message-actions")?.remove();
+      if (source !== root) action?.remove();
       if (!existingTile) album.append(tile);
       const filename = source.querySelector<HTMLElement>(".encrypted-media-card")?.dataset.mediaFilename;
       if (filename) filenames.push(filename);
@@ -3863,7 +3881,8 @@ function renderMessage(
     redactionAuthors.delete(message.id);
   }
   if (redactedMessageIds.has(message.id)) appendDeletedMessage(messageContent);
-  const mediaMessage = content.msgtype === "m.image" || content.msgtype === "m.video" || content.msgtype === "m.file";
+  const mediaAttachments = mediaAttachmentsFromContent(content);
+  const mediaMessage = mediaAttachments.length > 0;
   const mediaAlbum = mediaMessage ? mediaAlbumFromContent(content) : undefined;
   article.classList.toggle("message-emoji-only", !mediaMessage && isEmojiOnlyMessage(body));
   const mentionNames = new Set(selectedMembers.filter((member) => effectiveMentions.includes(member.userId)).map((member) => member.username.toLowerCase()));
@@ -3888,7 +3907,7 @@ function renderMessage(
       renderUnreadButton();
     }
   }
-  if (!redactedMessageIds.has(message.id) && !mediaMessage && (content.msgtype === "m.text" || content.msgtype === "m.notice" || body)) {
+  if (!redactedMessageIds.has(message.id) && (!mediaMessage || body) && (content.msgtype === "m.text" || content.msgtype === "m.notice" || body)) {
     appendMarkdown(messageContent, body, { mentionUsernames: mentionNames, mentionRoleNames });
     for (const embed of effectiveEmbeds) appendSafeEmbed(messageContent, embed);
   }
@@ -3900,15 +3919,40 @@ function renderMessage(
   }
 
   if (!redactedMessageIds.has(message.id) && mediaMessage) {
-    const fileMessage = content.msgtype === "m.file";
-    const video = content.msgtype === "m.video";
-    const filename = typeof content.filename === "string" ? content.filename : "";
+    const visualAttachments = mediaAttachments.filter(isVisualMediaContent);
+    const otherAttachments = mediaAttachments.filter((attachment) => !isVisualMediaContent(attachment));
+    if (visualAttachments.length > 1) {
+      const album = document.createElement("div");
+      album.className = "media-album";
+      for (const attachment of visualAttachments) {
+        const fileMessage = attachment.msgtype === "m.file";
+        const video = attachment.msgtype === "m.video";
+        const filename = typeof attachment.filename === "string" ? attachment.filename : "";
+        const tile = document.createElement("div");
+        tile.className = "media-album-tile";
+        appendEncryptedMedia(tile, attachment, filename, fileMessage, video);
+        album.append(tile);
+      }
+      messageContent.append(album);
+    } else {
+      for (const attachment of visualAttachments) {
+        const fileMessage = attachment.msgtype === "m.file";
+        const video = attachment.msgtype === "m.video";
+        const filename = typeof attachment.filename === "string" ? attachment.filename : "";
+        appendEncryptedMedia(messageContent, attachment, filename, fileMessage, video);
+      }
+    }
+    for (const attachment of otherAttachments) {
+      const fileMessage = attachment.msgtype === "m.file";
+      const video = attachment.msgtype === "m.video";
+      const filename = typeof attachment.filename === "string" ? attachment.filename : "";
+      appendEncryptedMedia(messageContent, attachment, filename, fileMessage, video);
+    }
     if (mediaAlbum && (content.msgtype === "m.image" || content.msgtype === "m.video")) {
       article.dataset.mediaAlbumId = mediaAlbum.id;
       article.dataset.mediaAlbumIndex = String(mediaAlbum.index);
       article.dataset.mediaAlbumTotal = String(mediaAlbum.total);
     }
-    appendEncryptedMedia(messageContent, content, filename, fileMessage, video, mediaAlbum);
   }
 
   const reply = replyReferenceFromContent(content);
@@ -4376,11 +4420,8 @@ composer.addEventListener("submit", async (event) => {
   let deliveredMessageCount = 0;
   let sentAttachmentCount = 0;
   const failedAttachments: ComposerAttachment[] = [];
-  const albumAttachments = attachmentsToSend.filter((attachment) => {
-    const kind = composerAttachmentKind(attachment.file);
-    return kind === "image" || kind === "video";
-  });
-  const albumId = albumAttachments.length > 1 ? globalThis.crypto.randomUUID() : undefined;
+  const sendAsSingleBatch = attachmentsToSend.length > 1;
+  let activeBatchAttachmentIndex = -1;
   try {
     if (activeEdit) {
       const embeds = extractEmbeds(text);
@@ -4401,7 +4442,7 @@ composer.addEventListener("submit", async (event) => {
       }
       return;
     }
-    if (text) {
+    if (text && !sendAsSingleBatch) {
       const mentions = mentionedUserIds(text);
       const roleMentions = mentionedRoleIds(text);
       if (replyTarget?.mentionSender && replyTarget.userId) {
@@ -4425,27 +4466,42 @@ composer.addEventListener("submit", async (event) => {
         clearUnread();
       }
     }
-    for (const attachment of attachmentsToSend) {
-      if (!stillHere()) break;
-      const albumIndex = albumId ? albumAttachments.indexOf(attachment) : -1;
-      attachment.status = "uploading";
-      attachment.error = undefined;
-      attachment.progress = 0;
-      renderComposerAttachments();
+    if (sendAsSingleBatch) {
       try {
-        const result = await activeCryptoClient.sendMedia(conversationId, members, attachment.file, {
-          signal: uploadController?.signal,
-          spoiler: attachment.spoiler,
-          album: albumId && albumIndex >= 0
-            ? { id: albumId, index: albumIndex, total: albumAttachments.length }
-            : undefined,
-          onProgress: (loadedBytes, totalBytes) => {
-            if (!stillHere()) return;
-            setComposerAttachmentProgress(attachment, loadedBytes, totalBytes);
+        const mentions = mentionedUserIds(text);
+        const roleMentions = mentionedRoleIds(text);
+        if (replyTarget?.mentionSender && replyTarget.userId) mentions.push(replyTarget.userId);
+        const result = await activeCryptoClient.sendMediaBatch(
+          conversationId,
+          members,
+          attachmentsToSend.map((attachment) => ({ file: attachment.file, spoiler: attachment.spoiler })),
+          {
+            signal: uploadController?.signal,
+            body: text,
+            embeds: extractEmbeds(text),
+            replyTo: replyTarget,
+            mentions,
+            roleMentions,
+            onAttachmentStart: (index) => {
+              activeBatchAttachmentIndex = index;
+              for (const candidate of attachmentsToSend) {
+                if (candidate.status === "uploading") candidate.status = "ready";
+              }
+              const attachment = attachmentsToSend[index];
+              attachment.status = "uploading";
+              attachment.error = undefined;
+              attachment.progress = 0;
+              renderComposerAttachments();
+            },
+            onProgress: (loadedBytes, totalBytes) => {
+              const attachment = attachmentsToSend[activeBatchAttachmentIndex];
+              if (attachment && stillHere()) setComposerAttachmentProgress(attachment, loadedBytes, totalBytes);
+            },
           },
-        });
-        queued = queued || result.delivery === "queued";
-        sentAttachmentCount += 1;
+        );
+        queued = result.delivery === "queued";
+        textSent = Boolean(text);
+        sentAttachmentCount = attachmentsToSend.length;
         if (result.message) {
           deliveredMessageCount += 1;
           if (stillHere()) {
@@ -4453,13 +4509,56 @@ composer.addEventListener("submit", async (event) => {
             await appendOptimisticMessage(result.message);
           }
         }
-        if (composerAttachments.includes(attachment)) removeComposerAttachment(attachment.id);
+        drafts.delete(conversationId);
+        if (stillHere()) {
+          clearComposerAttachments();
+          messageInput.value = "";
+          clearReplyTarget();
+          resizeMessageInput();
+          clearUnread();
+        }
       } catch (error) {
-        attachment.status = "error";
-        attachment.error = error instanceof Error && error.name === "AbortError" ? "Canceled" : readableError(error);
-        failedAttachments.push(attachment);
+        const attachment = attachmentsToSend[activeBatchAttachmentIndex] ?? attachmentsToSend[0];
+        if (attachment) {
+          attachment.status = "error";
+          attachment.error = error instanceof Error && error.name === "AbortError" ? "Canceled" : readableError(error);
+          failedAttachments.push(attachment);
+          renderComposerAttachments();
+        }
+      }
+    } else {
+      for (const attachment of attachmentsToSend) {
+        if (!stillHere()) break;
+        attachment.status = "uploading";
+        attachment.error = undefined;
+        attachment.progress = 0;
         renderComposerAttachments();
-        if (error instanceof Error && error.name === "AbortError") break;
+        try {
+          const result = await activeCryptoClient.sendMedia(conversationId, members, attachment.file, {
+            signal: uploadController?.signal,
+            spoiler: attachment.spoiler,
+            onProgress: (loadedBytes, totalBytes) => {
+              if (!stillHere()) return;
+              setComposerAttachmentProgress(attachment, loadedBytes, totalBytes);
+            },
+          });
+          queued = queued || result.delivery === "queued";
+          sentAttachmentCount += 1;
+          if (result.message) {
+            deliveredMessageCount += 1;
+            if (stillHere()) {
+              if (result.decrypted) optimisticDecryptedMessages.set(result.message.id, result.decrypted);
+              await appendOptimisticMessage(result.message);
+            }
+          }
+          if (composerAttachments.includes(attachment)) removeComposerAttachment(attachment.id);
+        } catch (error) {
+          attachment.status = "error";
+          attachment.error = error instanceof Error && error.name === "AbortError" ? "Canceled" : readableError(error);
+          failedAttachments.push(attachment);
+          renderComposerAttachments();
+          if (error instanceof Error && error.name === "AbortError") break;
+        }
       }
     }
     if (stillHere()) {

@@ -224,6 +224,10 @@ try {
   const mediaAlbum = b.locator(".media-album").last();
   await mediaAlbum.waitFor({ timeout: 20_000 });
   await mediaAlbum.locator(".media-preview").first().waitFor({ timeout: 20_000 });
+  const albumMessage = b.locator(".message:has(.media-album)").last();
+  assert.equal(await b.locator(".message:has(.media-album)").count(), 1);
+  assert.equal(await albumMessage.locator(".message-actions").count(), 1);
+  assert.equal(await mediaAlbum.locator(".message-actions").count(), 0);
   assert.equal(await mediaAlbum.locator(".media-album-tile").count(), 2);
   assert.equal(await mediaAlbum.locator(".media-preview").count(), 2);
   assert.equal(await mediaAlbum.locator("a[download]").count(), 2);

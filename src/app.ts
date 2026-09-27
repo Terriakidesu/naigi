@@ -3408,23 +3408,20 @@ export function createApp() {
     .post("/v1/conversations/:conversationId/messages", async ({ body, headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      const attachmentIds = [...new Set([
+        ...(body.attachmentIds ?? []),
+        ...(body.attachmentId ? [body.attachmentId] : []),
+      ])];
+      const hasAttachments = attachmentIds.length > 0;
       const channelContext = await conversationChannelAuthorization(params.conversationId, user.id);
       if (channelContext) {
         if (!channelContext.access?.canView) return respondError(set, 403, "channel_not_visible");
         const canSendText = hasServerPermission(channelContext.access.authorization, "send_messages");
-        if (!canSendText && !body.attachmentId) {
+        if (!canSendText && !hasAttachments) {
           return respondError(set, 403, "insufficient_channel_permissions");
         }
-        if (!canSendText && body.attachmentId) {
+        if (!canSendText && hasAttachments) {
           if (!channelContext.access.canUpload) return respondError(set, 403, "insufficient_channel_permissions");
-          const [attachment] = await db<{ id: string }[]>`
-            select id from attachments
-            where id = ${body.attachmentId}
-              and conversation_id = ${params.conversationId}
-              and uploaded_by = ${user.id}
-              and status = 'uploaded'
-          `;
-          if (!attachment) return respondError(set, 403, "insufficient_channel_permissions");
         }
         if (await isUserTimedOut(channelContext.channel.server_id, user.id)) return respondError(set, 403, "member_timed_out");
       }
@@ -3434,6 +3431,17 @@ export function createApp() {
         where conversation_id = ${params.conversationId} and user_id = ${user.id} and left_at is null
       `;
       if (!membership) return respondError(set, 403, "not_a_conversation_member");
+
+      if (hasAttachments) {
+        const uploadedAttachments = await db<{ id: string }[]>`
+          select id from attachments
+          where id in ${db(attachmentIds)}
+            and conversation_id = ${params.conversationId}
+            and uploaded_by = ${user.id}
+            and status = 'uploaded'
+        `;
+        if (uploadedAttachments.length !== attachmentIds.length) return respondError(set, 403, "invalid_attachment");
+      }
 
       const [device] = await db<{ id: string }[]>`
         select id from devices where id = ${body.senderDeviceId} and user_id = ${user.id} and revoked_at is null
@@ -3522,6 +3530,7 @@ export function createApp() {
         ciphertext: t.String({ minLength: 1, maxLength: 6_000_000 }),
         protocolMetadata: t.Optional(t.String({ maxLength: 350_000 })),
         attachmentId: t.Optional(t.String({ format: "uuid" })),
+        attachmentIds: t.Optional(t.Array(t.String({ format: "uuid" }), { minItems: 1, maxItems: 20 })),
       }),
     })
     .get("/v1/conversations/:conversationId/messages", async ({ headers, params, query, set }) => {

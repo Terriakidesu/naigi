@@ -5,6 +5,7 @@ export type PendingMessagePayload = {
   ciphertext: string;
   protocolMetadata?: string;
   attachmentId?: string;
+  attachmentIds?: string[];
 };
 
 export type PendingMessage = PendingMessagePayload & {
