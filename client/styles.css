@@ -291,9 +291,6 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .member-presence[data-state="idle"]::before { background: #f1bc66; }
 
 .composer { display: grid; gap: 0.4rem; margin: 0 1rem 1rem; }
-.chat-toast { position: absolute; z-index: 8; right: 1.2rem; bottom: 6.6rem; display: flex; align-items: center; gap: 0.75rem; max-width: min(440px, calc(100% - 2rem)); min-height: 44px; padding: 0.55rem 0.55rem 0.55rem 0.9rem; border: 1px solid rgba(142, 230, 175, 0.45); border-radius: 8px; color: var(--text); background: #24332c; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3); font-size: 0.78rem; line-height: 1.35; }
-.chat-toast.error { border-color: rgba(242, 63, 66, 0.5); background: #44282b; }
-.chat-toast .icon-button { flex: 0 0 auto; margin-left: auto; }
 .outbox-notice { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; margin: 0.65rem 1.2rem; padding: 0.55rem 0.75rem; border: 1px solid rgba(241, 188, 102, 0.3); border-radius: 6px; color: #f5d9a4; background: rgba(241, 188, 102, 0.09); font-size: 0.75rem; }
 .outbox-notice button { flex: 0 0 auto; padding: 0.35rem 0.6rem; font-size: 0.7rem; }
 .typing-indicator { min-height: 1rem; margin: 0 1rem 0.25rem; color: var(--text-faint); font-size: 0.65rem; font-style: italic; }
@@ -548,7 +545,6 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
   .composer-actions { font-size: 0.58rem; }
   .composer-actions kbd { display: none; }
   .outbox-notice { margin: 0.45rem 0.55rem; }
-  .chat-toast { right: 0.55rem; bottom: 6.2rem; max-width: calc(100% - 1.1rem); }
   .emoji-picker { right: 0.55rem; bottom: 5.2rem; width: min(300px, calc(100% - 1.1rem)); }
   .media-zoom-control { gap: 0.1rem; }
   .media-zoom-control input { width: min(72px, 18vw); }

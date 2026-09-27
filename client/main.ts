@@ -118,9 +118,6 @@ const chatLayout = byId<HTMLElement>("chat-panel");
 const sidebar = byId<HTMLElement>("workspace-sidebar");
 const statusLine = byId<HTMLElement>("status-line");
 const connectionIndicator = byId<HTMLElement>("connection-indicator");
-const chatToast = byId<HTMLElement>("chat-toast");
-const chatToastText = byId<HTMLElement>("chat-toast-text");
-const chatToastClose = byId<HTMLButtonElement>("chat-toast-close");
 const outboxNotice = byId<HTMLElement>("outbox-notice");
 const outboxLabel = byId<HTMLElement>("outbox-label");
 const outboxRetry = byId<HTMLButtonElement>("outbox-retry");
@@ -200,16 +197,11 @@ const profileModalUsername = byId<HTMLElement>("profile-modal-username");
 const profileModalCreated = byId<HTMLElement>("profile-modal-created");
 const profileModalEdit = byId<HTMLAnchorElement>("profile-modal-edit");
 const messageContextMenu = byId<HTMLElement>("message-context-menu");
-let toastTimeout: number | undefined;
 let profileRequest = 0;
 let modalReturnFocus: HTMLElement | null = null;
 
 function setStatus(message: string, error = false) {
-  window.clearTimeout(toastTimeout);
-  chatToastText.textContent = message;
-  chatToast.classList.toggle("error", error);
-  chatToast.hidden = false;
-  toastTimeout = window.setTimeout(() => { chatToast.hidden = true; }, error ? 8_000 : 4_000);
+  if (error) console.error(`[Naigi] ${message}`);
 }
 
 function notificationsSupported() {
@@ -728,11 +720,6 @@ function openMessageContextMenu(target: ContextMessage, x: number, y: number) {
   const firstAction = messageContextMenu.querySelector<HTMLButtonElement>(".message-context-reaction, .message-context-action");
   firstAction?.focus();
 }
-
-chatToastClose.addEventListener("click", () => {
-  window.clearTimeout(toastTimeout);
-  chatToast.hidden = true;
-});
 
 outboxRetry.addEventListener("click", async () => {
   if (!cryptoClient) return;
