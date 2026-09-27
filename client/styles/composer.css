@@ -41,9 +41,29 @@
 .mobile-composer-hint { display: none; }
 .composer-security { display: inline-flex; align-items: center; gap: 0.35rem; color: #9db9ae; }
 .composer-security .status-dot { width: 6px; height: 6px; box-shadow: none; }
-.attachment-preview { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; width: fit-content; max-width: 100%; padding: 0.3rem 0.45rem 0.3rem 0.65rem; border: 1px solid var(--line-soft); border-radius: 4px; color: var(--text-muted); background: var(--bg-elevated); font-size: 0.68rem; }
-.attachment-preview span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.attachment-preview progress { width: 90px; height: 6px; accent-color: var(--accent); }
+.attachment-preview { display: grid; gap: 0.45rem; width: min(100%, 620px); max-width: 100%; padding: 0.45rem; border: 1px solid var(--line-soft); border-radius: 6px; color: var(--text-muted); background: var(--bg-elevated); font-size: 0.68rem; }
+.attachment-preview-list { display: grid; gap: 0.35rem; max-height: 245px; overflow: auto; }
+.attachment-preview-footer { display: flex; align-items: center; gap: 0.5rem; min-width: 0; padding: 0.1rem 0.15rem 0; }
+.attachment-preview-footer > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-preview-footer progress { width: 100px; height: 6px; accent-color: var(--accent); }
+.attachment-item { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: center; gap: 0.35rem 0.55rem; min-width: 0; padding: 0.35rem; border-radius: 5px; background: var(--bg-deep); }
+.attachment-item-error { border-left: 2px solid #d47c82; }
+.attachment-item-visual { position: relative; display: grid; place-items: center; width: 42px; height: 42px; overflow: hidden; border-radius: 5px; color: var(--text-faint); background: var(--bg-active); font-size: 0.55rem; font-weight: 800; }
+.attachment-item-thumb { display: block; width: 100%; height: 100%; object-fit: cover; }
+.attachment-item-spoiler .attachment-item-thumb { filter: blur(8px); transform: scale(1.15); }
+.attachment-item-spoiler-label { position: absolute; inset: auto 2px 2px; padding: 0.12rem; border-radius: 3px; color: #fff; background: rgba(8, 9, 11, 0.78); font-size: 0.48rem; text-align: center; }
+.attachment-item-copy { display: grid; min-width: 0; gap: 0.08rem; }
+.attachment-item-copy strong, .attachment-item-copy span, .attachment-item-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-item-copy strong { color: var(--text); font-size: 0.68rem; }
+.attachment-item-copy span { color: var(--text-faint); font-size: 0.58rem; }
+.attachment-item-status { color: var(--text-faint); font-size: 0.56rem; }
+.attachment-item-error .attachment-item-status { color: #e5a4a6; }
+.attachment-item-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.25rem; }
+.attachment-item-actions .secondary { padding: 0.28rem 0.4rem; font-size: 0.58rem; }
+.attachment-spoiler-toggle { display: inline-flex; align-items: center; gap: 0.2rem; color: var(--text-faint); font-size: 0.56rem; white-space: nowrap; }
+.attachment-spoiler-toggle input { margin: 0; accent-color: var(--accent); }
+.attachment-item-actions .icon-button { width: 23px; height: 23px; padding: 0; font-size: 0.9rem; }
+.attachment-item-progress { grid-column: 1 / -1; width: 100%; height: 4px; accent-color: var(--accent); }
 .embed-card { overflow: hidden; width: min(100%, 360px); margin-top: 0.55rem; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--bg-elevated); }
 .embed-load-button { display: block; width: 100%; padding: 0.7rem; border-radius: 0; color: var(--text-muted); background: transparent; font-size: 0.72rem; text-align: left; }
 .embed-load-button:hover { color: var(--text); background: var(--bg-hover); }

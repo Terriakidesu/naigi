@@ -12,7 +12,7 @@ import {
   type ServerPermission,
   type User,
 } from "./api";
-import { CryptoClient, LocalCryptoStoreError, type DecryptedMessage, type ReplyReference } from "./crypto";
+import { CryptoClient, LocalCryptoStoreError, MAX_MESSAGE_TEXT_LENGTH, type DecryptedMessage, type ReplyReference } from "./crypto";
 import { roomKeyUnavailable } from "./decryption";
 import { appendSafeEmbed, extractEmbeds, type SafeEmbed } from "./embeds";
 import {
@@ -29,6 +29,7 @@ import { appendMarkdown } from "./markdown";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { isEmojiOnlyMessage } from "./message-format";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
+import { isPlaintextAttachment, readTextPreview, textLanguage } from "./text-file";
 import { confirmLocalUnlock, lockLocalSession, resolveLocalPassphrase } from "./unlock-vault";
 import { iconElement, renderIcons } from "./icons";
 import { askText, showOneTimeToken } from "./ui-dialog";
@@ -80,6 +81,19 @@ let conversationReady = false;
 const pendingMediaLoads = new Map<HTMLElement, AbortController>();
 type EditTarget = { messageId: string; body: string; sender: string };
 type ContextMessage = { message: MessageEnvelope; article: HTMLElement; sender: string; body: string; editable: boolean };
+type ComposerAttachmentStatus = "ready" | "uploading" | "error";
+type ComposerAttachment = {
+  id: string;
+  file: File;
+  spoiler: boolean;
+  status: ComposerAttachmentStatus;
+  progress: number;
+  error?: string;
+  previewUrl?: string;
+  row?: HTMLElement;
+  progressElement?: HTMLProgressElement;
+  statusElement?: HTMLElement;
+};
 type ReactionOption = { emoji: string; code: string; label: string };
 type TwemojiOption = { emoji: string; code: string };
 const reactionOptions: ReactionOption[] = [
@@ -203,6 +217,7 @@ const messageInput = byId<HTMLTextAreaElement>("message-input");
 const photoInput = byId<HTMLInputElement>("photo-input");
 const sendButton = byId<HTMLButtonElement>("send-button");
 const attachmentPreview = byId<HTMLElement>("attachment-preview");
+const attachmentPreviewList = byId<HTMLElement>("attachment-preview-list");
 const attachmentLabel = byId<HTMLElement>("attachment-label");
 const uploadProgress = byId<HTMLProgressElement>("upload-progress");
 const clearAttachment = byId<HTMLButtonElement>("clear-attachment");
@@ -241,9 +256,11 @@ const mediaViewerZoom = byId<HTMLInputElement>("media-zoom");
 const mediaZoomOut = byId<HTMLButtonElement>("media-zoom-out");
 const mediaZoomIn = byId<HTMLButtonElement>("media-zoom-in");
 const mediaZoomReset = byId<HTMLButtonElement>("media-zoom-reset");
+const mediaViewerCopy = byId<HTMLButtonElement>("media-viewer-copy");
 const mediaViewerClose = byId<HTMLButtonElement>("media-viewer-close");
 let mediaViewerUrl: string | undefined;
 let mediaViewerElement: HTMLElement | undefined;
+let mediaViewerText: string | undefined;
 const profileModal = byId<HTMLElement>("profile-modal");
 const profileModalClose = byId<HTMLButtonElement>("profile-modal-close");
 const profileModalAvatar = byId<HTMLElement>("profile-modal-avatar");
@@ -255,6 +272,13 @@ const messageContextMenu = byId<HTMLElement>("message-context-menu");
 let profileRequest = 0;
 let modalReturnFocus: HTMLElement | null = null;
 let activeSuggestionIndex = -1;
+let composerAttachments: ComposerAttachment[] = [];
+let composerAttachmentSequence = 0;
+const autoMediaLoadTargets = new Map<HTMLElement, () => Promise<void>>();
+const autoMediaLoadQueue: Array<() => Promise<void>> = [];
+let autoMediaLoadsInFlight = 0;
+const MAX_AUTO_MEDIA_LOADS = 3;
+let autoMediaLoadObserver: IntersectionObserver | undefined;
 
 function setChannelIcon(name: string) {
   channelIcon.replaceChildren(iconElement(name));
@@ -659,6 +683,7 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
 
 function setEditTarget(target: EditTarget) {
   editTarget = target;
+  clearComposerAttachments();
   clearReplyTarget();
   editPreviewText.textContent = `Editing ${target.sender}: ${target.body.replace(/\s+/g, " ").slice(0, 180)}`;
   editPreview.hidden = false;
@@ -874,6 +899,8 @@ function closeMediaViewer() {
   if (mediaViewerUrl) URL.revokeObjectURL(mediaViewerUrl);
   mediaViewerUrl = undefined;
   mediaViewerElement = undefined;
+  mediaViewerText = undefined;
+  mediaViewerCopy.hidden = true;
   mediaViewerStage.replaceChildren();
   mediaViewerZoom.value = "1";
   mediaZoomReset.textContent = "100%";
@@ -905,6 +932,25 @@ function openMediaViewer(blob: Blob, filename: string, video: boolean) {
   mediaViewerStage.append(element);
   showDialog(mediaViewer, mediaViewerClose);
   setMediaZoom(1);
+}
+
+async function openTextViewer(blob: Blob, filename: string, mimeType: string) {
+  try {
+    const preview = await readTextPreview(blob);
+    if (mediaViewer.hidden === false) closeMediaViewer();
+    mediaViewerText = preview.text;
+    mediaViewerTitle.textContent = `${filename || "Text file"} · ${textLanguage(filename, mimeType)}`;
+    const pre = document.createElement("pre");
+    pre.className = "text-file-viewer";
+    pre.textContent = preview.text;
+    mediaViewerElement = pre;
+    mediaViewerCopy.hidden = false;
+    mediaViewerStage.replaceChildren(pre);
+    showDialog(mediaViewer, mediaViewerClose);
+    setMediaZoom(1);
+  } catch (error) {
+    setStatus(`Text preview unavailable: ${readableError(error)}`, true);
+  }
 }
 
 function closeProfileModal() {
@@ -942,6 +988,15 @@ mediaViewerZoom.addEventListener("input", () => {
 mediaZoomOut.addEventListener("click", () => setMediaZoom(Number(mediaViewerZoom.value) - 0.1));
 mediaZoomIn.addEventListener("click", () => setMediaZoom(Number(mediaViewerZoom.value) + 0.1));
 mediaZoomReset.addEventListener("click", () => setMediaZoom(1));
+mediaViewerCopy.addEventListener("click", async () => {
+  if (mediaViewerText === undefined) return;
+  try {
+    await navigator.clipboard.writeText(mediaViewerText);
+    setStatus("Text copied to the clipboard.");
+  } catch {
+    setStatus("Clipboard access is unavailable.", true);
+  }
+});
 mediaViewerStage.addEventListener("dblclick", () => setMediaZoom(Number(mediaViewerZoom.value) === 1 ? 2 : 1));
 mediaViewerStage.addEventListener("wheel", (event) => {
   if (!event.ctrlKey && !event.metaKey) return;
@@ -1489,6 +1544,12 @@ function scrollToLatest() {
   });
 }
 
+function waitForScrollSettled() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
+}
+
 function hasUnreadConversation() {
   return unreadCount > 0 || Boolean(selectedConversationId && unreadMarkers.has(selectedConversationId));
 }
@@ -1637,6 +1698,7 @@ function restoreScrollAnchor(anchor: ScrollAnchor | undefined) {
 
 function readableError(error: unknown) {
   if (error instanceof Error && error.name === "AbortError") return "Upload canceled.";
+  if (error instanceof Error && error.message === "message_too_long") return "Messages are limited to 4,000 characters. Long pasted text is sent as a text file.";
   if (error instanceof ApiError) {
     if (error.code === "invalid_credentials") return "The username or password is incorrect.";
     if (error.code === "username_taken") return "That username is already in use.";
@@ -2514,6 +2576,50 @@ function renderMessageSkeletons(count = 7) {
   messagesPanel.append(list);
 }
 
+function drainAutoMediaLoads() {
+  while (autoMediaLoadsInFlight < MAX_AUTO_MEDIA_LOADS && autoMediaLoadQueue.length > 0) {
+    const load = autoMediaLoadQueue.shift()!;
+    autoMediaLoadsInFlight += 1;
+    void load().catch(() => undefined).finally(() => {
+      autoMediaLoadsInFlight -= 1;
+      drainAutoMediaLoads();
+    });
+  }
+}
+
+function queueAutoMediaLoad(load: () => Promise<void>) {
+  autoMediaLoadQueue.push(load);
+  drainAutoMediaLoads();
+}
+
+function registerAutoMediaLoad(target: HTMLElement, load: () => Promise<void>) {
+  if (typeof IntersectionObserver === "undefined") {
+    if (target.isConnected) queueAutoMediaLoad(load);
+    else window.setTimeout(() => {
+      if (target.isConnected) queueAutoMediaLoad(load);
+    }, 0);
+    return;
+  }
+  if (!autoMediaLoadObserver) {
+    autoMediaLoadObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const element = entry.target as HTMLElement;
+        const loader = autoMediaLoadTargets.get(element);
+        if (!loader) continue;
+        autoMediaLoadTargets.delete(element);
+        autoMediaLoadObserver?.unobserve(element);
+        queueAutoMediaLoad(loader);
+      }
+    }, { root: messagesPanel, rootMargin: "420px 0px" });
+  }
+  autoMediaLoadTargets.set(target, load);
+  if (target.isConnected) autoMediaLoadObserver.observe(target);
+  else window.setTimeout(() => {
+    if (autoMediaLoadTargets.get(target) === load && target.isConnected) autoMediaLoadObserver?.observe(target);
+  }, 0);
+}
+
 function releaseMediaResources(root: HTMLElement) {
   for (const [button, controller] of pendingMediaLoads) {
     if (root.contains(button)) {
@@ -2521,10 +2627,192 @@ function releaseMediaResources(root: HTMLElement) {
       pendingMediaLoads.delete(button);
     }
   }
+  for (const target of autoMediaLoadTargets.keys()) {
+    if (!root.contains(target)) continue;
+    autoMediaLoadObserver?.unobserve(target);
+    autoMediaLoadTargets.delete(target);
+  }
   for (const element of root.querySelectorAll<HTMLElement>("[data-media-url]")) {
     if (element.dataset.mediaUrl) URL.revokeObjectURL(element.dataset.mediaUrl);
     delete element.dataset.mediaUrl;
   }
+}
+
+const MAX_COMPOSER_ATTACHMENTS = 10;
+
+function fileSizeLabel(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function composerAttachmentKind(file: File): "image" | "video" | "text" | "file" {
+  if (isPlaintextAttachment(file.name, file.type)) return "text";
+  if (file.type.toLowerCase().startsWith("video/")) return "video";
+  if (file.type.toLowerCase().startsWith("image/")) return "image";
+  return "file";
+}
+
+function revokeComposerAttachment(attachment: ComposerAttachment) {
+  if (!attachment.previewUrl) return;
+  URL.revokeObjectURL(attachment.previewUrl);
+  attachment.previewUrl = undefined;
+}
+
+function renderComposerAttachments() {
+  attachmentPreviewList.replaceChildren();
+  attachmentPreview.hidden = composerAttachments.length === 0;
+  if (composerAttachments.length === 0) {
+    attachmentLabel.textContent = "";
+    uploadProgress.hidden = true;
+    uploadProgress.value = 0;
+    return;
+  }
+
+  const totalSize = composerAttachments.reduce((total, attachment) => total + attachment.file.size, 0);
+  const uploading = composerAttachments.filter((attachment) => attachment.status === "uploading");
+  const failed = composerAttachments.filter((attachment) => attachment.status === "error").length;
+  attachmentLabel.textContent = `${composerAttachments.length} file${composerAttachments.length === 1 ? "" : "s"} · ${fileSizeLabel(totalSize)}${failed ? ` · ${failed} failed` : ""}`;
+  uploadProgress.hidden = uploading.length === 0;
+  uploadProgress.value = uploading.length === 0
+    ? 0
+    : uploading.reduce((total, attachment) => total + attachment.progress, 0) / uploading.length;
+
+  for (const attachment of composerAttachments) {
+    const kind = composerAttachmentKind(attachment.file);
+    const row = document.createElement("article");
+    row.className = `attachment-item${attachment.status === "error" ? " attachment-item-error" : ""}`;
+    row.dataset.attachmentId = attachment.id;
+    attachment.row = row;
+
+    const visual = document.createElement("div");
+    visual.className = `attachment-item-visual attachment-item-${kind}${attachment.spoiler ? " attachment-item-spoiler" : ""}`;
+    if (kind === "image" || kind === "video") {
+      attachment.previewUrl ??= URL.createObjectURL(attachment.file);
+      const preview = document.createElement(kind === "video" ? "video" : "img");
+      preview.className = "attachment-item-thumb";
+      preview.src = attachment.previewUrl;
+      if (kind === "video") {
+        const player = preview as HTMLVideoElement;
+        player.muted = true;
+        player.preload = "metadata";
+      } else {
+        (preview as HTMLImageElement).alt = attachment.file.name;
+      }
+      visual.append(preview);
+    } else {
+      const extension = attachment.file.name.match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toUpperCase() || (kind === "text" ? "TXT" : "FILE");
+      const extensionLabel = document.createElement("strong");
+      extensionLabel.textContent = extension;
+      visual.append(extensionLabel);
+    }
+    if (attachment.spoiler) {
+      const spoilerCover = document.createElement("span");
+      spoilerCover.className = "attachment-item-spoiler-label";
+      spoilerCover.textContent = "Spoiler";
+      visual.append(spoilerCover);
+    }
+
+    const copy = document.createElement("div");
+    copy.className = "attachment-item-copy";
+    const name = document.createElement("strong");
+    name.textContent = attachment.file.name || "Untitled file";
+    name.title = attachment.file.name;
+    const meta = document.createElement("span");
+    meta.textContent = `${kind === "text" ? "Plaintext" : kind[0].toUpperCase() + kind.slice(1)} · ${fileSizeLabel(attachment.file.size)}`;
+    const status = document.createElement("small");
+    status.className = "attachment-item-status";
+    status.textContent = attachment.status === "uploading"
+      ? `Uploading · ${Math.round(attachment.progress)}%`
+      : attachment.error ?? (attachment.status === "error" ? "Upload failed" : "Ready to send");
+    attachment.statusElement = status;
+    copy.append(name, meta, status);
+
+    const actions = document.createElement("div");
+    actions.className = "attachment-item-actions";
+    if (kind === "text") {
+      const previewButton = document.createElement("button");
+      previewButton.type = "button";
+      previewButton.className = "secondary";
+      previewButton.textContent = "Preview";
+      previewButton.disabled = attachment.status === "uploading";
+      previewButton.addEventListener("click", () => void openTextViewer(attachment.file, attachment.file.name, attachment.file.type));
+      actions.append(previewButton);
+    }
+    const spoilerLabel = document.createElement("label");
+    spoilerLabel.className = "attachment-spoiler-toggle";
+    const spoiler = document.createElement("input");
+    spoiler.type = "checkbox";
+    spoiler.checked = attachment.spoiler;
+    spoiler.disabled = attachment.status === "uploading";
+    spoiler.addEventListener("change", () => {
+      attachment.spoiler = spoiler.checked;
+      renderComposerAttachments();
+    });
+    spoilerLabel.append(spoiler, document.createTextNode("Spoiler"));
+    actions.append(spoilerLabel);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-button";
+    remove.title = "Remove attachment";
+    remove.setAttribute("aria-label", `Remove ${attachment.file.name || "attachment"}`);
+    remove.textContent = "×";
+    remove.disabled = attachment.status === "uploading";
+    remove.addEventListener("click", () => removeComposerAttachment(attachment.id));
+    actions.append(remove);
+
+    const progress = document.createElement("progress");
+    progress.className = "attachment-item-progress";
+    progress.max = 100;
+    progress.value = attachment.progress;
+    progress.hidden = attachment.status !== "uploading";
+    attachment.progressElement = progress;
+    row.append(visual, copy, actions, progress);
+    attachmentPreviewList.append(row);
+  }
+}
+
+function removeComposerAttachment(id: string) {
+  const index = composerAttachments.findIndex((attachment) => attachment.id === id);
+  if (index < 0) return;
+  const [removed] = composerAttachments.splice(index, 1);
+  if (removed) revokeComposerAttachment(removed);
+  renderComposerAttachments();
+}
+
+function clearComposerAttachments() {
+  for (const attachment of composerAttachments) revokeComposerAttachment(attachment);
+  composerAttachments = [];
+  photoInput.value = "";
+  renderComposerAttachments();
+}
+
+function addComposerFiles(files: File[]) {
+  const available = Math.max(0, MAX_COMPOSER_ATTACHMENTS - composerAttachments.length);
+  const accepted = files.filter((file) => file.size > 0).slice(0, available);
+  for (const file of accepted) {
+    composerAttachments.push({
+      id: `attachment-${Date.now()}-${composerAttachmentSequence += 1}`,
+      file,
+      spoiler: false,
+      status: "ready",
+      progress: 0,
+    });
+  }
+  if (files.length > accepted.length) {
+    setStatus(`Only ${MAX_COMPOSER_ATTACHMENTS} attachments can be queued, and empty files are ignored.`, true);
+  }
+  if (accepted.length > 0) renderComposerAttachments();
+  photoInput.value = "";
+  return accepted.length;
+}
+
+function setComposerAttachmentProgress(attachment: ComposerAttachment, loadedBytes: number, totalBytes: number) {
+  attachment.progress = totalBytes > 0 ? Math.min(100, Math.round((loadedBytes / totalBytes) * 100)) : 0;
+  if (attachment.progressElement) attachment.progressElement.value = attachment.progress;
+  if (attachment.statusElement) attachment.statusElement.textContent = `Uploading · ${Math.round(attachment.progress)}%`;
+  const uploading = composerAttachments.filter((candidate) => candidate.status === "uploading");
+  if (uploading.length > 0) uploadProgress.value = uploading.reduce((total, candidate) => total + candidate.progress, 0) / uploading.length;
 }
 
 function updateComposerState() {
@@ -2543,9 +2831,7 @@ function updateComposerState() {
   renderMessageInput();
   if (!enabled) {
     closeEmojiPicker();
-    attachmentPreview.hidden = true;
-    uploadProgress.hidden = true;
-    photoInput.value = "";
+    clearComposerAttachments();
   }
   if (editTarget) {
     attachmentPreview.hidden = true;
@@ -2663,9 +2949,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   clearUnread();
   clearConversationUnread(conversationId);
   clearReplyTarget();
-  photoInput.value = "";
-  attachmentPreview.hidden = true;
-  uploadProgress.hidden = true;
+  clearComposerAttachments();
   messageInput.value = drafts.get(conversationId) ?? "";
   resizeMessageInput();
   const conversation = conversations.find((item) => item.id === conversationId);
@@ -2998,6 +3282,194 @@ function appendUnavailableMessage(messageId: string) {
   unavailableMessageNotices.set(messageId, notice);
 }
 
+function appendDownloadButton(parent: HTMLElement, url: string, filename: string) {
+  const download = document.createElement("a");
+  download.className = "media-file-download";
+  download.href = url;
+  download.download = filename || "encrypted-file.bin";
+  download.textContent = `Download ${filename || "file"}`;
+  parent.append(download);
+}
+
+function appendEncryptedMedia(parent: HTMLElement, content: Record<string, unknown>, filename: string, fileMessage: boolean, videoMessage: boolean) {
+  const info = content.info && typeof content.info === "object" && !Array.isArray(content.info) ? content.info as Record<string, unknown> : {};
+  const mimeType = typeof info.mimetype === "string" ? info.mimetype : "application/octet-stream";
+  const isText = isPlaintextAttachment(filename, mimeType);
+  const isVideo = !isText && (videoMessage || mimeType.toLowerCase().startsWith("video/"));
+  const isImage = !isText && !isVideo && (content.msgtype === "m.image" || mimeType.toLowerCase().startsWith("image/"));
+  const isSpoiler = content.spoiler === true;
+  const kindLabel = isText ? "text file" : fileMessage ? "file" : isVideo ? "video" : "image";
+  const size = typeof info.size === "number" && Number.isFinite(info.size) ? ` · ${fileSizeLabel(info.size)}` : "";
+  const card = document.createElement("div");
+  card.className = `encrypted-media-card${isSpoiler ? " encrypted-media-spoiler" : ""}`;
+  let revealed = !isSpoiler;
+  let loadPromise: Promise<void> | undefined;
+  let mediaProgress: HTMLProgressElement | undefined;
+  let mediaStatus: HTMLElement | undefined;
+
+  const renderPending = (failure?: string) => {
+    card.replaceChildren();
+    card.classList.toggle("encrypted-media-spoiler", !revealed);
+    const heading = document.createElement("div");
+    heading.className = "encrypted-media-heading";
+    const icon = document.createElement("span");
+    icon.className = "encrypted-media-heading-icon";
+    icon.textContent = isText ? "TXT" : isVideo ? "VID" : isImage ? "IMG" : "FILE";
+    const copy = document.createElement("div");
+    copy.className = "encrypted-media-heading-copy";
+    const title = document.createElement("strong");
+    title.textContent = revealed ? (filename || `Encrypted ${kindLabel}`) : "Spoiler attachment";
+    const meta = document.createElement("span");
+    meta.textContent = revealed ? `${kindLabel}${size}` : "Reveal to view";
+    copy.append(title, meta);
+    heading.append(icon, copy);
+    card.append(heading);
+    mediaStatus = document.createElement("p");
+    mediaStatus.className = "encrypted-media-status muted";
+    mediaStatus.textContent = failure ? `Unavailable: ${failure}` : revealed && isImage ? "Loading encrypted image…" : revealed ? "Encrypted attachment" : "Hidden until revealed";
+    card.append(mediaStatus);
+    const actions = document.createElement("div");
+    actions.className = "encrypted-media-actions";
+    if (!revealed) {
+      const reveal = document.createElement("button");
+      reveal.type = "button";
+      reveal.className = "secondary";
+      reveal.textContent = `Reveal ${kindLabel} spoiler`;
+      reveal.addEventListener("click", () => {
+        revealed = true;
+        renderPending();
+        void loadMedia();
+      });
+      actions.append(reveal);
+    } else if (!isImage) {
+      const load = document.createElement("button");
+      load.type = "button";
+      load.className = "secondary";
+      load.textContent = isText ? "Preview text" : isVideo ? "Load video" : "Prepare download";
+      load.addEventListener("click", () => void loadMedia());
+      actions.append(load);
+    }
+    if (failure) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "secondary";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => void loadMedia());
+      actions.append(retry);
+    }
+    if (actions.childElementCount > 0) card.append(actions);
+    mediaProgress = document.createElement("progress");
+    mediaProgress.className = "media-load-progress";
+    mediaProgress.max = 100;
+    mediaProgress.removeAttribute("value");
+    mediaProgress.hidden = true;
+    card.append(mediaProgress);
+  };
+
+  const loadMedia = () => {
+    if (loadPromise) return loadPromise;
+    if (!card.isConnected) return Promise.resolve();
+    const activeCryptoClient = cryptoClient;
+    if (!activeCryptoClient) return Promise.resolve();
+    const preserveLatestPosition = isImage && isAtLatestMessage();
+    const controller = new AbortController();
+    pendingMediaLoads.set(card, controller);
+    if (mediaStatus) mediaStatus.textContent = `Loading encrypted ${kindLabel}…`;
+    if (mediaProgress) mediaProgress.hidden = false;
+    for (const button of card.querySelectorAll<HTMLButtonElement>("button")) button.disabled = true;
+    loadPromise = (async () => {
+      try {
+        const blob = await activeCryptoClient.decryptMedia(content, {
+          signal: controller.signal,
+          onProgress: (loadedBytes, totalBytes) => {
+            if (!card.isConnected || controller.signal.aborted) return;
+            if (mediaStatus) mediaStatus.textContent = totalBytes > 0
+              ? `Loading encrypted ${kindLabel} · ${Math.round((loadedBytes / totalBytes) * 100)}%`
+              : `Loading encrypted ${kindLabel}…`;
+            if (mediaProgress && totalBytes > 0) mediaProgress.value = Math.round((loadedBytes / totalBytes) * 100);
+          },
+        });
+        if (!blob) throw new Error("crypto_not_initialized");
+        if (!card.isConnected || controller.signal.aborted) return;
+        const url = URL.createObjectURL(blob);
+        card.dataset.mediaUrl = url;
+        card.replaceChildren();
+        card.classList.remove("encrypted-media-spoiler");
+        if (isText) {
+          const label = document.createElement("div");
+          label.className = "encrypted-media-heading";
+          const copy = document.createElement("div");
+          copy.className = "encrypted-media-heading-copy";
+          const title = document.createElement("strong");
+          title.textContent = filename || "Text file";
+          const meta = document.createElement("span");
+          meta.textContent = `Plaintext · ${textLanguage(filename, mimeType)}${size}`;
+          copy.append(title, meta);
+          label.append(copy);
+          const actions = document.createElement("div");
+          actions.className = "encrypted-media-actions";
+          const preview = document.createElement("button");
+          preview.type = "button";
+          preview.className = "secondary";
+          preview.textContent = "Preview text";
+          preview.addEventListener("click", () => void openTextViewer(blob, filename, mimeType));
+          actions.append(preview);
+          appendDownloadButton(actions, url, filename);
+          card.append(label, actions);
+          void openTextViewer(blob, filename, mimeType);
+        } else if (isImage || isVideo) {
+          const preview = document.createElement(isVideo ? "video" : "img");
+          preview.className = `media-preview${isVideo ? " video" : ""}`;
+          preview.src = url;
+          if (isVideo) {
+            const player = preview as HTMLVideoElement;
+            player.controls = true;
+            player.preload = "metadata";
+          } else {
+            (preview as HTMLImageElement).alt = filename || "Encrypted image";
+            (preview as HTMLImageElement).loading = "eager";
+            preview.addEventListener("click", () => openMediaViewer(blob, filename, false));
+          }
+          const actions = document.createElement("div");
+          actions.className = "encrypted-media-actions";
+          const view = document.createElement("button");
+          view.type = "button";
+          view.className = "secondary";
+          view.textContent = `Open ${isVideo ? "video" : "image"}`;
+          view.addEventListener("click", () => openMediaViewer(blob, filename, isVideo));
+          actions.append(view);
+          appendDownloadButton(actions, url, filename);
+          card.append(preview, actions);
+        } else {
+          const copy = document.createElement("div");
+          copy.className = "encrypted-media-heading-copy";
+          const title = document.createElement("strong");
+          title.textContent = filename || "Encrypted file";
+          const meta = document.createElement("span");
+          meta.textContent = `Encrypted file${size}`;
+          copy.append(title, meta);
+          const actions = document.createElement("div");
+          actions.className = "encrypted-media-actions";
+          appendDownloadButton(actions, url, filename);
+          card.append(copy, actions);
+        }
+        if (preserveLatestPosition) scrollToLatest();
+      } catch (error) {
+        if (!card.isConnected || controller.signal.aborted) return;
+        loadPromise = undefined;
+        renderPending(readableError(error));
+      } finally {
+        pendingMediaLoads.delete(card);
+      }
+    })();
+    return loadPromise;
+  };
+
+  renderPending();
+  parent.append(card);
+  if (isImage && revealed) registerAutoMediaLoad(card, () => loadMedia());
+}
+
 function renderMessage(
   message: MessageEnvelope,
   decrypted: { sender: string; content: Record<string, unknown> } | null,
@@ -3131,77 +3603,7 @@ function renderMessage(
     const fileMessage = content.msgtype === "m.file";
     const video = content.msgtype === "m.video";
     const filename = typeof content.filename === "string" ? content.filename : "";
-    const mediaButton = document.createElement("button");
-    mediaButton.className = "encrypted-media-button secondary";
-    mediaButton.type = "button";
-    mediaButton.textContent = `Load encrypted ${fileMessage ? "file" : video ? "video" : "image"}`;
-    const mediaProgress = document.createElement("progress");
-    mediaProgress.className = "media-load-progress";
-    mediaProgress.max = 100;
-    mediaProgress.removeAttribute("value");
-    mediaProgress.hidden = true;
-    mediaButton.addEventListener("click", async () => {
-      const controller = new AbortController();
-      pendingMediaLoads.set(mediaButton, controller);
-      mediaButton.disabled = true;
-      mediaProgress.hidden = false;
-      mediaButton.textContent = `Loading encrypted ${fileMessage ? "file" : video ? "video" : "image"}…`;
-      try {
-        const blob = await cryptoClient?.decryptMedia(content, {
-          signal: controller.signal,
-          onProgress: (loadedBytes, totalBytes) => {
-            mediaButton.textContent = totalBytes > 0
-              ? `Loading encrypted ${fileMessage ? "file" : video ? "video" : "image"} · ${Math.round((loadedBytes / totalBytes) * 100)}%`
-              : `Loading encrypted ${fileMessage ? "file" : video ? "video" : "image"}…`;
-            if (totalBytes > 0) mediaProgress.value = Math.round((loadedBytes / totalBytes) * 100);
-          },
-        });
-        if (!blob) throw new Error("crypto_not_initialized");
-        if (!mediaButton.isConnected || controller.signal.aborted) return;
-        if (fileMessage) {
-          const download = document.createElement("a");
-          download.className = "media-file-download";
-          download.href = URL.createObjectURL(blob);
-          download.dataset.mediaUrl = download.href;
-          download.download = filename || "encrypted-file.bin";
-          download.textContent = `Download ${filename || "encrypted file"}`;
-          mediaProgress.remove();
-          mediaButton.replaceWith(download);
-          return;
-        }
-        const preview = document.createElement(video ? "video" : "img");
-        preview.className = `media-preview${video ? " video" : ""}`;
-        const previewUrl = URL.createObjectURL(blob);
-        preview.src = previewUrl;
-        if (video) {
-          const player = preview as HTMLVideoElement;
-          player.controls = true;
-          player.preload = "metadata";
-        } else {
-          (preview as HTMLImageElement).alt = "Encrypted image";
-        }
-        const mediaWrap = document.createElement("div");
-        mediaWrap.className = "media-preview-wrap";
-        mediaWrap.dataset.mediaUrl = previewUrl;
-        const viewButton = document.createElement("button");
-        viewButton.className = "media-view-button secondary";
-        viewButton.type = "button";
-        viewButton.textContent = `Open ${video ? "video" : "image"} viewer`;
-        viewButton.addEventListener("click", () => openMediaViewer(blob, filename, video));
-        if (!video) preview.addEventListener("click", () => openMediaViewer(blob, filename, false));
-        mediaWrap.append(preview, viewButton);
-        mediaProgress.remove();
-        mediaButton.replaceWith(mediaWrap);
-      } catch (loadError) {
-        if (!mediaButton.isConnected || controller.signal.aborted) return;
-        mediaButton.disabled = false;
-        mediaProgress.hidden = true;
-        mediaButton.textContent = `${fileMessage ? "File" : video ? "Video" : "Image"} unavailable: ${readableError(loadError)}`;
-      } finally {
-        pendingMediaLoads.delete(mediaButton);
-      }
-    });
-    messageContent.append(mediaButton, mediaProgress);
+    appendEncryptedMedia(messageContent, content, filename, fileMessage, video);
   }
 
   const reply = replyReferenceFromContent(content);
@@ -3486,7 +3888,11 @@ async function refreshMessages(options: { forceScrollToBottom?: boolean; initial
     else await renderMessageHistory({ scrollToBottom: true });
     scrollToLatest();
     if (currentUser) void writeCachedMessages(currentUser.id, conversationId, loadedMessages);
-     clearUnread({ clearMentionHighlights: false });
+    clearUnread({ clearMentionHighlights: false });
+    await waitForScrollSettled();
+    if (selection !== selectionToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    await detectUnreadMentions(newMessages, conversationId, activeCryptoClient);
+    updateMentionHighlights();
   } finally {
     messagesLoading = false;
   }
@@ -3638,8 +4044,12 @@ composer.addEventListener("submit", async (event) => {
   const stillHere = () => selection === selectionToken && selectedConversationId === conversationId && cryptoClient === activeCryptoClient;
   const activeEdit = editTarget;
   const text = replaceEmojiShortcodes(messageInput.value.trim());
-  const file = activeEdit ? undefined : photoInput.files?.[0];
-  if (!text && !file) return;
+  const attachmentsToSend = activeEdit ? [] : composerAttachments.filter((attachment) => attachment.status !== "uploading");
+  if (!text && attachmentsToSend.length === 0) return;
+  if (text.length > MAX_MESSAGE_TEXT_LENGTH) {
+    setStatus("Messages are limited to 4,000 characters. Long pasted text is sent as a text file.", true);
+    return;
+  }
   const blockedMention = blockedSpecialMentions(text);
   if (blockedMention) {
     setStatus(`You do not have permission to use ${blockedMention}.`, true);
@@ -3651,12 +4061,14 @@ composer.addEventListener("submit", async (event) => {
   hideMentionSuggestions();
   hideEmojiSuggestions();
   closeEmojiPicker();
-  const uploadController = file ? new AbortController() : undefined;
+  const uploadController = attachmentsToSend.length > 0 ? new AbortController() : undefined;
   uploadAbortController = uploadController;
   let textSent = false;
   let editSent = false;
   let queued = false;
   let deliveredMessageCount = 0;
+  let sentAttachmentCount = 0;
+  const failedAttachments: ComposerAttachment[] = [];
   try {
     if (activeEdit) {
       const embeds = extractEmbeds(text);
@@ -3701,38 +4113,48 @@ composer.addEventListener("submit", async (event) => {
         clearUnread();
       }
     }
-    if (file) {
-      const attachmentKind = file.type.startsWith("video/") ? "video" : file.type.startsWith("image/") ? "image" : "file";
-      if (stillHere()) {
-        attachmentLabel.textContent = `Preparing encrypted ${attachmentKind}…`;
-        uploadProgress.removeAttribute("value");
-        uploadProgress.hidden = false;
-      }
-      const result = await activeCryptoClient.sendMedia(conversationId, members, file, {
-        signal: uploadController?.signal,
-        onProgress: (loadedBytes, totalBytes) => {
-          if (!stillHere()) return;
-          const percent = totalBytes > 0 ? Math.round((loadedBytes / totalBytes) * 100) : 0;
-          attachmentLabel.textContent = totalBytes > 0 ? `Uploading encrypted ${attachmentKind} · ${percent}%` : `Uploading encrypted ${attachmentKind}…`;
-          if (totalBytes > 0) uploadProgress.value = percent;
-        },
-      });
-      queued = queued || result.delivery === "queued";
-      if (result.message) {
-        deliveredMessageCount += 1;
-        if (stillHere()) {
-          if (result.decrypted) optimisticDecryptedMessages.set(result.message.id, result.decrypted);
-          await appendOptimisticMessage(result.message);
+    for (const attachment of attachmentsToSend) {
+      if (!stillHere()) break;
+      attachment.status = "uploading";
+      attachment.error = undefined;
+      attachment.progress = 0;
+      renderComposerAttachments();
+      try {
+        const result = await activeCryptoClient.sendMedia(conversationId, members, attachment.file, {
+          signal: uploadController?.signal,
+          spoiler: attachment.spoiler,
+          onProgress: (loadedBytes, totalBytes) => {
+            if (!stillHere()) return;
+            setComposerAttachmentProgress(attachment, loadedBytes, totalBytes);
+          },
+        });
+        queued = queued || result.delivery === "queued";
+        sentAttachmentCount += 1;
+        if (result.message) {
+          deliveredMessageCount += 1;
+          if (stillHere()) {
+            if (result.decrypted) optimisticDecryptedMessages.set(result.message.id, result.decrypted);
+            await appendOptimisticMessage(result.message);
+          }
         }
-      }
-      if (stillHere()) {
-        photoInput.value = "";
-        attachmentPreview.hidden = true;
-        uploadProgress.hidden = true;
+        if (composerAttachments.includes(attachment)) removeComposerAttachment(attachment.id);
+      } catch (error) {
+        attachment.status = "error";
+        attachment.error = error instanceof Error && error.name === "AbortError" ? "Canceled" : readableError(error);
+        failedAttachments.push(attachment);
+        renderComposerAttachments();
+        if (error instanceof Error && error.name === "AbortError") break;
       }
     }
     if (stillHere()) {
-      if (queued) setStatus("Encrypted message queued on this device; it will retry automatically.");
+      const remainingFailures = failedAttachments.filter((attachment) => composerAttachments.includes(attachment));
+      if (remainingFailures.length > 0) {
+        setStatus(`${remainingFailures.length} attachment${remainingFailures.length === 1 ? "" : "s"} failed. Remove or retry them.`, true);
+      } else if (queued) {
+        setStatus("Encrypted message queued on this device; it will retry automatically.");
+      } else if (sentAttachmentCount > 0) {
+        setStatus(`${sentAttachmentCount} encrypted attachment${sentAttachmentCount === 1 ? "" : "s"} sent.`);
+      }
       if (deliveredMessageCount > 0) {
         void refreshMessages({ forceScrollToBottom: true }).catch((error) => {
           setStatus(`Message saved, but history could not refresh: ${readableError(error)}`, true);
@@ -3742,10 +4164,6 @@ composer.addEventListener("submit", async (event) => {
   } catch (error) {
     if (stillHere()) {
       setStatus(editSent ? `Edit ${queued ? "queued" : "sent"}, but history refresh failed: ${readableError(error)}` : textSent ? `Text ${queued ? "queued" : "sent"}, but attachment failed: ${readableError(error)}` : readableError(error), true);
-      if (file) {
-        attachmentLabel.textContent = `${file.name} · ${error instanceof Error && error.name === "AbortError" ? "canceled" : "retry to send"}`;
-        uploadProgress.hidden = true;
-      }
       if (textSent) void refreshMessages({ forceScrollToBottom: true }).catch(() => undefined);
     }
   } finally {
@@ -3775,24 +4193,24 @@ messageInput.addEventListener("input", () => {
   updateLocalTyping();
 });
 messageInput.addEventListener("input", renderInputSuggestions);
-
-photoInput.addEventListener("change", () => {
-  const file = photoInput.files?.[0];
-  attachmentPreview.hidden = !file;
-  uploadProgress.hidden = true;
-  uploadProgress.value = 0;
-  if (file) attachmentLabel.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB`;
-});
-
-clearAttachment.addEventListener("click", () => {
-  if (uploadAbortController) {
-    uploadAbortController.abort();
+messageInput.addEventListener("paste", (event) => {
+  const pastedText = event.clipboardData?.getData("text/plain") ?? "";
+  if (pastedText.length <= MAX_MESSAGE_TEXT_LENGTH) return;
+  event.preventDefault();
+  if (editTarget) {
+    setStatus("Long pasted text cannot be inserted while editing a message.", true);
     return;
   }
-  photoInput.value = "";
-  attachmentPreview.hidden = true;
-  uploadProgress.hidden = true;
-  uploadProgress.value = 0;
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const added = addComposerFiles([new File([pastedText], `pasted-text-${timestamp}.txt`, { type: "text/plain" })]);
+  if (added > 0) setStatus("Long pasted text was added as an encrypted text file.");
+});
+
+photoInput.addEventListener("change", () => addComposerFiles([...photoInput.files ?? []]));
+
+clearAttachment.addEventListener("click", () => {
+  uploadAbortController?.abort();
+  clearComposerAttachments();
 });
 
 cancelReply.addEventListener("click", clearReplyTarget);

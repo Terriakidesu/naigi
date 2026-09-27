@@ -4,6 +4,8 @@
 
 ### Changed
 
+- The encrypted composer now supports up to ten attachments per send, per-file previews, spoiler flags, progress and retry state, dedicated downloads, automatic near-viewport image loading, and safe plaintext previews for source, Markdown, and text files.
+- Unpasted messages are limited to 4,000 characters; pasted text over that limit is converted into an encrypted `.txt` attachment instead of being inserted into the composer.
 - Composer input now renders Unicode emoji with the bundled Twemoji artwork instead of platform emoji glyphs while preserving normal text editing and sending behavior.
 - Composer focus styling now highlights the complete input container instead of outlining only the textarea.
 - Conversation details now occupy a dedicated column beside the messages and composer instead of covering the composer width.

@@ -142,6 +142,8 @@ export type DecryptedMessage = {
   content: Record<string, unknown>;
 };
 
+export const MAX_MESSAGE_TEXT_LENGTH = 4_000;
+
 export type DecryptedMessageResult =
   | { messageId: string; decrypted: DecryptedMessage }
   | { messageId: string; error: unknown };
@@ -547,6 +549,7 @@ export class CryptoClient {
   }
 
   async sendText(conversationId: string, members: ConversationMember[], body: string, embeds: unknown[], replyTo?: ReplyReference, mentions: string[] = [], roleMentions: string[] = []) {
+    if (body.length > MAX_MESSAGE_TEXT_LENGTH) throw new Error("message_too_long");
     return this.sendContent(conversationId, members, {
       msgtype: "m.text",
       body,
@@ -571,6 +574,7 @@ export class CryptoClient {
   }
 
   async sendEdit(conversationId: string, members: ConversationMember[], messageId: string, body: string, embeds: unknown[], mentions: string[] = [], roleMentions: string[] = []) {
+    if (body.length > MAX_MESSAGE_TEXT_LENGTH) throw new Error("message_too_long");
     return this.sendContent(conversationId, members, {
       msgtype: "m.replace",
       replaces: messageId,
@@ -598,7 +602,7 @@ export class CryptoClient {
     });
   }
 
-  async sendMedia(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions = {}) {
+  async sendMedia(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions & { spoiler?: boolean } = {}) {
     options.signal?.throwIfAborted();
     const compressed = await prepareMedia(file);
     options.signal?.throwIfAborted();
@@ -638,13 +642,14 @@ export class CryptoClient {
           h: compressed.height || undefined,
         },
         file: mediaFile,
+        ...(options.spoiler ? { spoiler: true } : {}),
       }, attachment.attachment.id);
     } finally {
       encrypted.free();
     }
   }
 
-  async sendPhoto(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions = {}) {
+  async sendPhoto(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions & { spoiler?: boolean } = {}) {
     return this.sendMedia(conversationId, members, file, options);
   }
 

@@ -61,6 +61,20 @@
 .encrypted-media-button { display: inline-flex; align-items: center; gap: 0.55rem; max-width: 100%; margin-top: 0.4rem; padding: 0.75rem 0.9rem; border: 1px solid var(--line-soft); border-radius: 7px; color: var(--text); background: var(--bg-elevated); font-size: 0.78rem; text-align: left; }
 .encrypted-media-button::before { content: "◈"; display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 8px; color: #c2ceca; background: rgba(146, 170, 165, 0.16); font-size: 1rem; }
 .encrypted-media-button:hover { background: var(--bg-active); }
+.encrypted-media-card { display: grid; width: min(100%, 440px); gap: 0.45rem; margin-top: 0.55rem; padding: 0.65rem; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--bg-elevated); }
+.encrypted-media-card.encrypted-media-spoiler { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-soft)); background: #111214; }
+.encrypted-media-heading { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.encrypted-media-heading-icon { display: grid; place-items: center; flex: 0 0 31px; width: 31px; height: 31px; border-radius: 7px; color: #c2ceca; background: rgba(146, 170, 165, 0.16); font-size: 0.48rem; font-weight: 800; }
+.encrypted-media-heading-copy { display: grid; min-width: 0; gap: 0.1rem; }
+.encrypted-media-heading-copy strong, .encrypted-media-heading-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.encrypted-media-heading-copy strong { color: var(--text); font-size: 0.72rem; }
+.encrypted-media-heading-copy span { color: var(--text-faint); font-size: 0.59rem; }
+.encrypted-media-status { margin: 0; font-size: 0.63rem; }
+.encrypted-media-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+.encrypted-media-actions .secondary { padding: 0.35rem 0.5rem; font-size: 0.64rem; }
+.encrypted-media-card .media-preview { width: 100%; max-width: 420px; max-height: 420px; margin-top: 0; }
+.encrypted-media-card .media-preview.video { width: 100%; }
+.text-file-viewer { width: min(100%, 1100px); max-height: 100%; margin: 0; overflow: auto; padding: 1rem; border: 1px solid var(--line-soft); border-radius: 6px; color: #d8dee9; background: #0d1117; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.5; text-align: left; white-space: pre; tab-size: 2; }
 .spoiler { display: inline; padding: 0 0.25rem; border-radius: 3px; color: transparent; background: #111214; cursor: pointer; user-select: none; }
 .spoiler:hover, .spoiler:focus-visible { background: #18191c; }
 .spoiler.revealed { color: inherit; background: rgba(146, 170, 165, 0.16); user-select: text; }

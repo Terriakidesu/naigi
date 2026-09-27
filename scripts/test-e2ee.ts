@@ -206,6 +206,38 @@ try {
   await a.locator("#member-list .member-avatar img").waitFor({ state: "attached", timeout: 20_000 });
   await send(a, b, "Alice to Bob: decrypted through the real transport");
   assert.equal(await b.locator(".message").filter({ hasText: "Alice to Bob: decrypted through the real transport" }).getByRole("button", { name: "Edit", exact: true }).count(), 0);
+  assert.equal(await a.locator("#message-input").getAttribute("maxlength"), "4000");
+  await a.locator("#message-input").evaluate((element) => {
+    const transfer = new DataTransfer();
+    transfer.setData("text/plain", "long pasted source\n".repeat(300));
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: transfer }));
+  });
+  await a.locator(".attachment-item").filter({ hasText: "pasted-text" }).waitFor({ timeout: 20_000 });
+  await a.locator("#clear-attachment").click();
+  await a.locator("#photo-input").setInputFiles([
+    { name: "pixel.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) },
+    { name: "example.ts", mimeType: "text/plain", buffer: Buffer.from("const answer = 42;\n") },
+  ]);
+  assert.equal(await a.locator(".attachment-item").count(), 2);
+  await a.locator("#send-button").click();
+  const imageMessage = b.locator(".message").filter({ hasText: "pixel.png" }).last();
+  await imageMessage.waitFor({ timeout: 20_000 });
+  await imageMessage.locator(".media-preview").waitFor({ timeout: 20_000 });
+  assert.equal(await imageMessage.locator('a[download="pixel.png"]').count(), 1);
+  const sourceMessage = b.locator(".message").filter({ hasText: "example.ts" }).last();
+  await sourceMessage.waitFor({ timeout: 20_000 });
+  await sourceMessage.getByRole("button", { name: "Preview text", exact: true }).click();
+  await b.locator(".text-file-viewer").filter({ hasText: "const answer = 42;" }).waitFor({ timeout: 20_000 });
+  await b.locator("#media-viewer-close").click();
+  await a.locator("#photo-input").setInputFiles({ name: "spoiler.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) });
+  await a.locator(".attachment-item input[type=checkbox]").check();
+  await a.locator("#send-button").click();
+  const spoilerMessage = b.locator(".message").filter({ hasText: "Reveal image spoiler" }).last();
+  await spoilerMessage.waitFor({ timeout: 20_000 });
+  assert.equal(await spoilerMessage.locator(".media-preview").count(), 0);
+  await spoilerMessage.getByRole("button", { name: "Reveal image spoiler", exact: true }).click();
+  await b.locator(".message").filter({ hasText: "spoiler.png" }).last().locator(".media-preview").waitFor({ timeout: 20_000 });
+  await b.locator("#messages").evaluate((element) => { element.scrollTop = element.scrollHeight; });
   const mentionPrefix = users[1].username.slice(0, -1);
   await a.locator("#message-input").fill(`@${mentionPrefix}`);
   await a.locator("#mention-suggestions").waitFor({ state: "visible", timeout: 20_000 });
