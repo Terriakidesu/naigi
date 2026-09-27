@@ -2,11 +2,23 @@
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.13.0] - 2026-09-28
+
 ### Added
 
 - Room autocomplete now recognizes `#room` references in encrypted conversations, with room labels hydrated locally and clickable references that open the room.
 - X/Twitter status links, including supported rewrite domains such as FixupX, now use encrypted custom cards with post text, author details, timestamps, images, and videos when a configured preview provider can supply them.
 - YouTube links now render a privacy-hosted preview player without showing the external-visit warning when the video is played.
+
+### Changed
+
+- Direct and encrypted media previews now preserve their intrinsic dimensions without fixed letterboxing; Twitter cards retain their existing media presentation.
+
+### Security
+
+- X/Twitter preview requests are authenticated, restricted to allowlisted status URLs, sent only as numeric IDs to configured providers, and are not persisted or logged before the returned card is encrypted client-side.
 
 ## [0.12.0] - 2026-09-27
 
@@ -31,6 +43,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.13.0](docs/changelogs/0.13.0.md) — 2026-09-28
 - [0.12.0](docs/changelogs/0.12.0.md) — 2026-09-27
 - [0.11.0](docs/changelogs/0.11.0.md) — 2026-09-27
 - [0.10.0](docs/changelogs/0.10.0.md) — 2026-09-27

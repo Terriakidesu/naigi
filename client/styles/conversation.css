@@ -61,9 +61,11 @@
 .room-reference:hover, .room-reference:focus-visible { color: #e1ebf4; background: rgba(127, 160, 173, 0.4); }
 .message-mention { background: rgba(146, 170, 165, 0.1); box-shadow: inset 3px 0 0 var(--accent); }
 .encrypted-media-card { position: relative; overflow: hidden; margin-top: 0.45rem; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--bg-elevated); }
-.media-attachment-card { width: min(100%, 520px); aspect-ratio: 4 / 3; background: #11171a; }
-.media-attachment-card .media-preview { display: block; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; object-fit: contain; cursor: zoom-in; background: #11171a; }
-.media-attachment-card .media-preview.video { width: 100%; height: 100%; }
+.media-attachment-card { width: min(100%, 520px); min-height: 180px; background: transparent; }
+.media-attachment-card:not(.media-loaded) { aspect-ratio: 4 / 3; background: #11171a; }
+.media-attachment-card.media-loaded { min-height: 0; border: 0; }
+.media-attachment-card .media-preview { display: block; width: auto; height: auto; max-width: 100%; max-height: none; margin: 0; object-fit: initial; cursor: zoom-in; background: transparent; }
+.media-attachment-card .media-preview.video { width: auto; height: auto; max-width: 100%; }
 .media-placeholder { display: grid; place-items: center; align-content: center; gap: 0.5rem; width: 100%; height: 100%; color: var(--text-faint); background: linear-gradient(135deg, rgba(146, 170, 165, 0.12), rgba(11, 17, 26, 0.85)); font-size: 0.58rem; letter-spacing: 0.12em; }
 .media-placeholder > span:first-child { color: var(--text-muted); font-weight: 800; }
 .media-loading-label { letter-spacing: 0; text-transform: none; }
@@ -90,7 +92,7 @@
 .media-album { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; width: min(100%, 520px); margin-top: 0.45rem; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--line-soft); }
 .media-album-tile { position: relative; min-width: 0; aspect-ratio: 1 / 1; overflow: hidden; background: #11171a; }
 .media-album-tile .encrypted-media-card { width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0; }
-.media-album-tile .media-preview { object-fit: cover; }
+.media-album-tile .media-preview { width: 100%; height: 100%; object-fit: cover; }
 .media-album-tile-deleted { display: grid; place-items: center; color: var(--text-faint); font-size: 0.65rem; }
 .media-album-member { display: none; }
 .media-file-download { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: var(--text); background: var(--bg-active); font-size: 0.72rem; text-decoration: none; }

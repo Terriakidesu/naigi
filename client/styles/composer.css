@@ -72,12 +72,12 @@
 .embed-card { overflow: hidden; width: min(100%, 360px); margin-top: 0.55rem; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--bg-elevated); }
 .embed-link { display: block; color: var(--accent-hover); }
 .embed-link:hover { background: var(--bg-hover); }
-.embed-image { display: block; width: 100%; max-height: 220px; object-fit: cover; background: var(--bg-deep); }
+.embed-image { display: block; width: 100%; height: auto; }
 .embed-title { display: block; overflow: hidden; padding: 0.65rem; color: var(--text); font-size: 0.74rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .youtube-embed-frame { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #111214; }
 .embed-media-link { display: block; }
-.embed-media-image { display: block; width: 100%; max-height: 360px; object-fit: contain; background: var(--bg-deep); }
-.embed-media-video { display: block; width: 100%; max-height: 360px; background: #111214; }
+.embed-media-card { border: 0; background: transparent; }
+.embed-media-image, .embed-media-video { display: block; width: auto; height: auto; max-width: 100%; max-height: 360px; margin: 0 auto; }
 .twitter-embed-card { padding: 0.7rem; }
 .twitter-embed-header { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
 .twitter-embed-avatar { width: 2rem; height: 2rem; flex: 0 0 2rem; border-radius: 50%; object-fit: cover; background: var(--bg-deep); }

@@ -6,6 +6,7 @@
 - `bun run build:client` bundles `client/*.ts` and copies the HTML/CSS/WASM assets into ignored `public/`; edit `client/`, never generated `public/` files.
 - Verification commands are `bun run typecheck`, `bun test`, and `bun run test:e2ee`. The E2EE test builds the browser client, needs PostgreSQL/Redis and Playwright Chromium, and uses a temporary PostgreSQL schema.
 - Run one unit-test file with `bun test path/to/file.test.ts`; `bun run db:purge -- --yes` is destructive local cleanup and must not be used against production.
+- When a change is ready and the user requests it, stage all intended source and documentation changes, run the verification commands, and create one descriptive git commit; do not commit generated ignored `public/` files.
 
 ## Architecture and security
 
@@ -19,5 +20,5 @@
 ## Changelog and SemVer
 
 - Keep a `CHANGELOG.md` with an `## [Unreleased]` section and links to one Markdown release file per version in `docs/changelogs/`. Release files should use concise `Added`, `Changed`, `Fixed`, `Removed`, or `Security` entries for user-visible, API, schema, or crypto changes.
-- `package.json` is the authoritative application version (currently released `0.11.0`) and must follow SemVer: patch for compatible fixes, minor for backward-compatible features, and major for breaking API/protocol/schema/crypto changes. Keep unreleased work grouped under one version instead of bumping for every individual change.
-- At release time, move the Unreleased entries under the bumped version and date; there is no automatic changelog or release script.
+- `package.json` is the authoritative application version (currently released `0.13.0`) and must follow `MAJOR.MINOR.PATCH` SemVer: patch for compatible fixes, minor for backward-compatible features, and major for breaking API/protocol/schema/crypto changes. Keep unreleased work grouped under one version instead of bumping for every individual change.
+- For a backward-compatible feature release, increment `MINOR`, update the package/app version, move the `Unreleased` entries under the bumped version and date, and create `docs/changelogs/MAJOR.MINOR.PATCH.md` with concise `Added`, `Changed`, `Fixed`, `Removed`, or `Security` entries. Update the release list in `CHANGELOG.md`; there is no automatic changelog or release script.

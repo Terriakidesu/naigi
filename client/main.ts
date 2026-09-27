@@ -3579,6 +3579,7 @@ function appendEncryptedMedia(
 
   const renderPending = (failure?: string) => {
     card.replaceChildren();
+    card.classList.remove("media-loaded");
     card.classList.toggle("encrypted-media-spoiler", !revealed);
     mediaProgress = undefined;
     mediaStatus = undefined;
@@ -3703,6 +3704,7 @@ function appendEncryptedMedia(
         controller.blob = blob;
         const url = URL.createObjectURL(blob);
         card.dataset.mediaUrl = url;
+        card.classList.add("media-loaded");
         card.replaceChildren();
         card.classList.remove("encrypted-media-spoiler");
         if (isText || fileMessage && !isVisual) {
