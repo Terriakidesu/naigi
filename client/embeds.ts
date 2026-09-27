@@ -1,8 +1,9 @@
 import { confirmExternalLink, guardExternalLink } from "./external-link";
+import type { TwitterPreview } from "./api";
 
 export type SafeEmbed =
   | { kind: "youtube"; id: string; url: string; embedUrl: string }
-  | { kind: "social"; network: "x"; url: string; statusId: string }
+  | ({ kind: "social"; network: "x"; url: string; statusId: string } & Partial<TwitterPreview>)
   | { kind: "media"; mediaType: "image" | "video"; url: string }
   | { kind: "link"; url: string; title: string; imageUrl?: string };
 
@@ -12,11 +13,27 @@ export type LinkMetadata = {
 };
 
 const youtubeId = /^[A-Za-z0-9_-]{11}$/;
-const statusPath = /^\/(?:[^/]+\/)?status\/([0-9]+)(?:\/|$)/i;
+const statusPath = /^\/(?:[^/]+\/)?status\/(\d{2,20})(?:\/|$)/i;
 const imageExtension = /\.(?:avif|gif|jpe?g|png|webp)$/i;
 const videoExtension = /\.(?:m4v|mov|mp4|ogv|webm)$/i;
 const metadataLimit = 1_000_000;
 const linkMetadataCache = new Map<string, Promise<LinkMetadata>>();
+const twitterPreviewCache = new Map<string, Promise<TwitterPreview | null>>();
+const twitterMediaHosts = new Set(["pbs.twimg.com", "video.twimg.com", "abs.twimg.com"]);
+const twitterStatusHosts = new Set([
+  "x.com",
+  "www.x.com",
+  "twitter.com",
+  "www.twitter.com",
+  "fixupx.com",
+  "www.fixupx.com",
+  "fxtwitter.com",
+  "www.fxtwitter.com",
+  "vxtwitter.com",
+  "www.vxtwitter.com",
+  "fixvx.com",
+  "www.fixvx.com",
+]);
 
 function cleanUrl(value: string) {
   return value.replace(/[),.!?:;]+$/g, "");
@@ -70,7 +87,7 @@ export function parseSafeEmbed(value: string): SafeEmbed | null {
     };
   }
 
-  if (host === "x.com" || host === "www.x.com" || host === "twitter.com" || host === "www.twitter.com") {
+  if (twitterStatusHosts.has(host)) {
     const status = url.pathname.match(statusPath);
     if (status) return { kind: "social", network: "x", url: url.toString(), statusId: status[1] };
   }
@@ -92,7 +109,7 @@ export function extractEmbeds(text: string): SafeEmbed[] {
   for (const match of matches) {
     const parsed = parseSafeEmbed(match);
     if (!parsed) continue;
-    const embed = parsed.kind === "youtube" || parsed.kind === "social" ? asLinkEmbed(parsed) : parsed;
+    const embed = parsed;
     if (seen.has(embed.url)) continue;
     seen.add(embed.url);
     embeds.push(embed);
@@ -103,6 +120,45 @@ export function extractEmbeds(text: string): SafeEmbed[] {
 
 function storedText(value: unknown) {
   return typeof value === "string" ? cleanMetadataText(value) : undefined;
+}
+
+function safeTwitterUrl(value: unknown) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+    if (!twitterMediaHosts.has(url.hostname.toLowerCase())) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTwitterPreview(value: Record<string, unknown>) {
+  const text = typeof value.text === "string" && value.text.trim() ? value.text.slice(0, 12_000) : undefined;
+  const authorName = typeof value.authorName === "string" && value.authorName.trim() ? value.authorName.slice(0, 160) : undefined;
+  const authorHandle = typeof value.authorHandle === "string" && value.authorHandle.trim() ? value.authorHandle.slice(0, 80) : undefined;
+  const avatarUrl = safeTwitterUrl(value.avatarUrl);
+  const createdAt = typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt)) ? value.createdAt.slice(0, 100) : undefined;
+  const media = Array.isArray(value.media)
+    ? value.media.slice(0, 4).flatMap((candidate) => {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+      const item = candidate as Record<string, unknown>;
+      if (item.type !== "image" && item.type !== "video") return [];
+      const url = safeTwitterUrl(item.url);
+      if (!url) return [];
+      const thumbnailUrl = safeTwitterUrl(item.thumbnailUrl);
+      return [{ type: item.type, url, ...(thumbnailUrl ? { thumbnailUrl } : {}) } as { type: "image" | "video"; url: string; thumbnailUrl?: string }];
+    })
+    : [];
+  return {
+    ...(text ? { text } : {}),
+    ...(authorName ? { authorName } : {}),
+    ...(authorHandle ? { authorHandle } : {}),
+    ...(avatarUrl ? { avatarUrl } : {}),
+    ...(createdAt ? { createdAt } : {}),
+    media,
+  } satisfies Partial<TwitterPreview>;
 }
 
 export function normalizeStoredEmbeds(value: unknown): SafeEmbed[] {
@@ -116,7 +172,13 @@ export function normalizeStoredEmbeds(value: unknown): SafeEmbed[] {
     if (!parsed) continue;
     if (stored.kind === "media" && parsed.kind === "media" && stored.mediaType === parsed.mediaType) {
       embeds.push(parsed);
-    } else if (stored.kind === "link" && (parsed.kind === "link" || parsed.kind === "youtube" || parsed.kind === "social")) {
+    } else if (stored.kind === "social" && parsed.kind === "social") {
+      embeds.push({ ...parsed, ...normalizeTwitterPreview(stored) });
+    } else if (parsed.kind === "youtube" && (stored.kind === "youtube" || stored.kind === "link")) {
+      embeds.push(parsed);
+    } else if (stored.kind === "link" && parsed.kind === "social") {
+      embeds.push({ ...parsed, ...normalizeTwitterPreview(stored) });
+    } else if (stored.kind === "link" && parsed.kind === "link") {
       const link = asLinkEmbed(parsed);
       const image = typeof stored.imageUrl === "string" ? safeHttpUrl(stored.imageUrl) : null;
       embeds.push({
@@ -124,10 +186,6 @@ export function normalizeStoredEmbeds(value: unknown): SafeEmbed[] {
         ...(storedText(stored.title) ? { title: storedText(stored.title) } : {}),
         ...(image ? { imageUrl: image.toString() } : {}),
       });
-    } else if (stored.kind === "youtube" && parsed.kind === "youtube") {
-      embeds.push(parsed);
-    } else if (stored.kind === "social" && parsed.kind === "social") {
-      embeds.push(parsed);
     }
     if (embeds.length === 4) break;
   }
@@ -231,6 +289,27 @@ async function fetchLinkMetadata(url: string): Promise<LinkMetadata> {
   }
 }
 
+async function fetchTwitterPreview(url: string): Promise<TwitterPreview | null> {
+  try {
+    const response = await fetch("/v1/previews/twitter", {
+      method: "POST",
+      credentials: "include",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (!response.ok) return null;
+    const payload = await response.json() as { preview?: unknown };
+    const preview = payload.preview && typeof payload.preview === "object" && !Array.isArray(payload.preview)
+      ? normalizeTwitterPreview(payload.preview as Record<string, unknown>)
+      : {};
+    return Object.keys(preview).length > 0
+      ? { id: "", media: [], ...preview }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function loadLinkMetadata(url: string) {
   const cached = linkMetadataCache.get(url);
   if (cached) return cached;
@@ -240,9 +319,22 @@ function loadLinkMetadata(url: string) {
   return request;
 }
 
+function loadTwitterPreview(url: string) {
+  const cached = twitterPreviewCache.get(url);
+  if (cached) return cached;
+  const request = fetchTwitterPreview(url);
+  twitterPreviewCache.set(url, request);
+  if (twitterPreviewCache.size > 100) twitterPreviewCache.delete(twitterPreviewCache.keys().next().value as string);
+  return request;
+}
+
 export async function prepareEmbeds(text: string) {
   const embeds = extractEmbeds(text);
   return await Promise.all(embeds.map(async (embed) => {
+    if (embed.kind === "social") {
+      const preview = await loadTwitterPreview(embed.url);
+      return preview ? { ...embed, ...preview, id: embed.statusId } : embed;
+    }
     if (embed.kind !== "link") return embed;
     const metadata = await loadLinkMetadata(embed.url);
     return {
@@ -295,6 +387,123 @@ function confirmExternalMedia(url: string) {
   return confirmExternalLink(url);
 }
 
+function createExternalMediaAnchor(url: string, className?: string) {
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noreferrer noopener nofollow";
+  if (className) link.className = className;
+  return link;
+}
+
+function appendYoutubeEmbed(parent: HTMLElement, embed: Extract<SafeEmbed, { kind: "youtube" }>) {
+  const card = document.createElement("div");
+  card.className = "embed-card youtube-embed-card";
+  const frame = document.createElement("iframe");
+  frame.className = "youtube-embed-frame";
+  frame.src = `${embed.embedUrl}?rel=0&modestbranding=1&playsinline=1`;
+  frame.title = "YouTube video preview";
+  frame.loading = "lazy";
+  frame.referrerPolicy = "strict-origin-when-cross-origin";
+  frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation");
+  frame.setAttribute("allow", "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share");
+  card.append(frame);
+  parent.append(card);
+}
+
+function appendTwitterEmbed(parent: HTMLElement, source: Extract<SafeEmbed, { kind: "social" }>) {
+  const card = document.createElement("article");
+  card.className = "embed-card twitter-embed-card";
+
+  const render = (embed: Extract<SafeEmbed, { kind: "social" }>) => {
+    const mediaItems = embed.media ?? [];
+    card.replaceChildren();
+    const header = document.createElement("div");
+    header.className = "twitter-embed-header";
+    if (embed.avatarUrl) {
+      const avatar = document.createElement("img");
+      avatar.className = "twitter-embed-avatar";
+      avatar.src = embed.avatarUrl;
+      avatar.alt = embed.authorName ? `${embed.authorName} avatar` : "";
+      avatar.loading = "lazy";
+      avatar.referrerPolicy = "no-referrer";
+      avatar.addEventListener("error", () => avatar.remove(), { once: true });
+      header.append(avatar);
+    }
+    const author = document.createElement("div");
+    author.className = "twitter-embed-author";
+    const authorName = document.createElement("strong");
+    authorName.textContent = embed.authorName || "X post";
+    author.append(authorName);
+    if (embed.authorHandle) {
+      const handle = document.createElement("span");
+      handle.textContent = `@${embed.authorHandle.replace(/^@/, "")}`;
+      author.append(handle);
+    }
+    header.append(author);
+    const open = createExternalAnchor(embed.url, "twitter-embed-open");
+    open.textContent = "Open on X";
+    open.setAttribute("aria-label", "Open this post on X (external link)");
+    header.append(open);
+    card.append(header);
+
+    if (embed.text) {
+      const text = document.createElement("p");
+      text.className = "twitter-embed-text";
+      text.textContent = embed.text;
+      card.append(text);
+    }
+    if (embed.createdAt) {
+      const timeValue = new Date(embed.createdAt);
+      if (!Number.isNaN(timeValue.valueOf())) {
+        const time = document.createElement("time");
+        time.className = "twitter-embed-time";
+        time.dateTime = timeValue.toISOString();
+        time.textContent = timeValue.toLocaleString();
+        card.append(time);
+      }
+    }
+    if (mediaItems.length > 0) {
+      const media = document.createElement("div");
+      media.className = "twitter-embed-media";
+      for (const item of mediaItems) {
+        if (item.type === "image") {
+          const link = createExternalMediaAnchor(item.url, "twitter-embed-media-link");
+          link.setAttribute("aria-label", "Open image at full size");
+          const image = document.createElement("img");
+          image.src = item.url;
+          image.alt = "Post media";
+          image.loading = "lazy";
+          image.referrerPolicy = "no-referrer";
+          image.addEventListener("error", () => link.remove(), { once: true });
+          link.append(image);
+          media.append(link);
+        } else {
+          const link = document.createElement("div");
+          link.className = "twitter-embed-media-link";
+          const video = document.createElement("video");
+          video.controls = true;
+          video.preload = "metadata";
+          video.src = item.url;
+          video.setAttribute("referrerpolicy", "no-referrer");
+          if (item.thumbnailUrl) video.poster = item.thumbnailUrl;
+          link.append(video);
+          media.append(link);
+        }
+      }
+      card.append(media);
+    }
+  };
+
+  render(source);
+  parent.append(card);
+  if (!source.text && !source.authorName && (source.media?.length ?? 0) === 0) {
+    void loadTwitterPreview(source.url).then((preview) => {
+      if (preview) render({ ...source, ...preview, id: source.statusId });
+    });
+  }
+}
+
 function appendLinkEmbed(parent: HTMLElement, source: Extract<SafeEmbed, { kind: "link" }>) {
   const card = document.createElement("div");
   card.className = "embed-card";
@@ -332,5 +541,7 @@ function appendLinkEmbed(parent: HTMLElement, source: Extract<SafeEmbed, { kind:
 
 export function appendSafeEmbed(parent: HTMLElement, embed: SafeEmbed) {
   if (embed.kind === "media") appendMediaEmbed(parent, embed);
+  else if (embed.kind === "social") appendTwitterEmbed(parent, embed);
+  else if (embed.kind === "youtube") appendYoutubeEmbed(parent, embed);
   else appendLinkEmbed(parent, asLinkEmbed(embed));
 }

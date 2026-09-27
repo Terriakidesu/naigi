@@ -197,6 +197,16 @@ export type Device = {
   revokedAt: string | null;
 };
 
+export type TwitterPreview = {
+  id: string;
+  text?: string;
+  authorName?: string;
+  authorHandle?: string;
+  avatarUrl?: string;
+  createdAt?: string;
+  media: Array<{ type: "image" | "video"; url: string; thumbnailUrl?: string }>;
+};
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -271,6 +281,10 @@ export class ApiClient {
 
   delete<T>(path: string) {
     return this.request<T>(path, { method: "DELETE" });
+  }
+
+  twitterPreview(url: string) {
+    return this.post<{ preview: TwitterPreview | null }>("/v1/previews/twitter", { url });
   }
 
   async putBytes<T = { attachment: { id: string; sizeBytes: number; sha256: string; uploadedAt: string } }>(path: string, bytes: Uint8Array, options: UploadOptions = {}) {

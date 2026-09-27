@@ -32,6 +32,7 @@ import {
 } from "./profile-images";
 import { pingRedis, publishMessageCreated } from "./redis/client";
 import { createRealtimeConnection, type RealtimeConnection } from "./realtime";
+import { fetchTwitterPreview, parseTwitterStatusUrl } from "./twitter-preview";
 
 type UserRow = {
   id: string;
@@ -859,6 +860,17 @@ export function createApp() {
 
       if (!ready) set.status = 503;
       return response;
+    })
+    .post("/v1/previews/twitter", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const parsed = parseTwitterStatusUrl(body.url);
+      if (!parsed) return respondError(set, 400, "unsupported_twitter_url");
+      const preview = await fetchTwitterPreview(parsed.id);
+      set.headers["cache-control"] = "no-store";
+      return { preview };
+    }, {
+      body: t.Object({ url: t.String({ minLength: 1, maxLength: 2_048 }) }),
     })
     .post("/v1/auth/register", async ({ body, set }) => {
       const username = normalizeUsername(body.username);

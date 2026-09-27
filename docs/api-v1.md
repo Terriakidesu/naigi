@@ -29,6 +29,13 @@ WebP, and AVIF images are supported. `DELETE /v1/me/avatar` removes it. `GET
 accepts the current password and a new password; changing it revokes the account's other
 sessions.
 
+`POST /v1/previews/twitter` is the only server-side link-preview exception. It accepts an
+authenticated request containing an allowlisted `x.com`, `twitter.com`, or supported rewrite
+domain status URL and returns a normalized public-post preview. The server sends only the
+validated numeric status ID to the explicitly configured preview-provider chain; it does not
+persist or log the URL or returned preview. The browser encrypts any returned card data inside
+the message before sending it.
+
 ## Servers and channels
 
 Servers are invite-only. Server membership, roles, channel order, IDs, and timestamps are

@@ -5,6 +5,8 @@
 ### Added
 
 - Room autocomplete now recognizes `#room` references in encrypted conversations, with room labels hydrated locally and clickable references that open the room.
+- X/Twitter status links, including supported rewrite domains such as FixupX, now use encrypted custom cards with post text, author details, timestamps, images, and videos when a configured preview provider can supply them.
+- YouTube links now render a privacy-hosted preview player without showing the external-visit warning when the video is played.
 
 ## [0.12.0] - 2026-09-27
 

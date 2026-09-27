@@ -12,6 +12,39 @@ function integerEnvironment(name: string, fallback: number, min: number, max: nu
   return parsed;
 }
 
+type TwitterPreviewProvider = "fx" | "syndication";
+
+function twitterPreviewProviders() {
+  const value = Bun.env.TWITTER_PREVIEW_PROVIDERS;
+  if (value === undefined) return ["fx", "syndication"] as TwitterPreviewProvider[];
+
+  const providers = value.split(",").map((provider) => provider.trim()).filter(Boolean);
+  if (providers.length === 0 || providers.some((provider) => provider !== "fx" && provider !== "syndication")) {
+    throw new Error("TWITTER_PREVIEW_PROVIDERS must contain only fx or syndication");
+  }
+
+  return [...new Set(providers)] as TwitterPreviewProvider[];
+}
+
+function twitterPreviewApiUrl() {
+  const value = Bun.env.TWITTER_PREVIEW_API_URL ?? "https://api.fxtwitter.com/2/status";
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("TWITTER_PREVIEW_API_URL must be an absolute URL");
+  }
+
+  const localDevelopmentHost = new Set(["localhost", "127.0.0.1", "[::1]"]);
+  if (url.protocol !== "https:" && !(environment !== "production" && url.protocol === "http:" && localDevelopmentHost.has(url.hostname))) {
+    throw new Error("TWITTER_PREVIEW_API_URL must use HTTPS outside local development");
+  }
+  if (url.username || url.password) {
+    throw new Error("TWITTER_PREVIEW_API_URL must not contain credentials");
+  }
+  return value;
+}
+
 if (!["development", "test", "production"].includes(environment)) {
   throw new Error("NODE_ENV must be development, test, or production");
 }
@@ -24,6 +57,8 @@ export const config = {
   redisUrl: Bun.env.REDIS_URL ?? "redis://localhost:6379",
   attachmentsDirectory: Bun.env.ATTACHMENTS_DIR ?? "./data/attachments",
   profileImagesDirectory: Bun.env.PROFILE_IMAGES_DIR ?? "./data/profile-images",
+  twitterPreviewApiUrl: twitterPreviewApiUrl(),
+  twitterPreviewProviders: twitterPreviewProviders(),
   sessionTtlSeconds: integerEnvironment("SESSION_TTL_SECONDS", 60 * 60 * 24 * 30, 300, 60 * 60 * 24 * 365),
   maxProfileImageBytes: 5 * 1024 * 1024,
   maxEncryptedMessageBytes: integerEnvironment(

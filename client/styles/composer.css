@@ -74,9 +74,23 @@
 .embed-link:hover { background: var(--bg-hover); }
 .embed-image { display: block; width: 100%; max-height: 220px; object-fit: cover; background: var(--bg-deep); }
 .embed-title { display: block; overflow: hidden; padding: 0.65rem; color: var(--text); font-size: 0.74rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.youtube-embed-frame { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #111214; }
 .embed-media-link { display: block; }
 .embed-media-image { display: block; width: 100%; max-height: 360px; object-fit: contain; background: var(--bg-deep); }
 .embed-media-video { display: block; width: 100%; max-height: 360px; background: #111214; }
+.twitter-embed-card { padding: 0.7rem; }
+.twitter-embed-header { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
+.twitter-embed-avatar { width: 2rem; height: 2rem; flex: 0 0 2rem; border-radius: 50%; object-fit: cover; background: var(--bg-deep); }
+.twitter-embed-author { display: grid; min-width: 0; gap: 0.05rem; margin-right: auto; }
+.twitter-embed-author strong, .twitter-embed-author span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.twitter-embed-author strong { color: var(--text); font-size: 0.72rem; }
+.twitter-embed-author span, .twitter-embed-time { color: var(--text-faint); font-size: 0.62rem; }
+.twitter-embed-open { flex: 0 0 auto; color: var(--accent-hover); font-size: 0.62rem; }
+.twitter-embed-text { margin: 0.65rem 0 0; color: var(--text); font-size: 0.76rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.twitter-embed-time { display: block; margin-top: 0.45rem; }
+.twitter-embed-media { display: grid; gap: 0.35rem; margin-top: 0.65rem; overflow: hidden; border-radius: 5px; }
+.twitter-embed-media-link { display: block; overflow: hidden; background: var(--bg-deep); }
+.twitter-embed-media-link img, .twitter-embed-media-link video { display: block; width: 100%; max-height: 320px; object-fit: contain; background: #111214; }
 .load-older-button { display: block; width: min(100%, 900px); margin: 0 auto 0.7rem; padding: 0.45rem; border: 1px solid var(--line-soft); border-radius: 5px; color: var(--text-muted); background: var(--bg-elevated); font-size: 0.7rem; }
 .load-older-button:hover { color: var(--text); background: var(--bg-hover); }
 .jump-latest-button { position: absolute; z-index: 3; left: 50%; bottom: calc(100% + 0.45rem); display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.5rem 0.7rem; border: 1px solid rgba(170, 178, 255, 0.45); border-radius: 999px; color: #fff; background: var(--accent); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25); font-size: 0.7rem; white-space: nowrap; transform: translateX(-50%); }

@@ -50,6 +50,9 @@ try {
     users.push(response.body.user);
   }
 
+  const rejectedTwitterPreview = await request(a, "/v1/previews/twitter", { url: "https://example.com/status/1234567890" });
+  assert.equal(rejectedTwitterPreview.status, 400, JSON.stringify(rejectedTwitterPreview.body));
+
   const onePixelPng = Uint8Array.from([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
     0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,

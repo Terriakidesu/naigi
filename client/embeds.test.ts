@@ -43,6 +43,15 @@ describe("safe embeds", () => {
       url: "https://x.com/example/status/123",
       statusId: "123",
     });
+    expect(parseSafeEmbed("https://fixupx.com/i/status/123")).toMatchObject({ kind: "social", statusId: "123" });
+    expect(parseSafeEmbed("https://fxtwitter.com/example/status/123")).toMatchObject({ kind: "social", statusId: "123" });
+    expect(parseSafeEmbed("https://vxtwitter.com/example/status/123")).toMatchObject({ kind: "social", statusId: "123" });
+    expect(parseSafeEmbed("https://fixvx.com/example/status/123")).toMatchObject({ kind: "social", statusId: "123" });
+    expect(parseSafeEmbed("https://x.com/example/status/1")).toEqual({
+      kind: "link",
+      url: "https://x.com/example/status/1",
+      title: "x.com",
+    });
   });
 
   test("extracts at most four website previews", () => {
@@ -55,7 +64,7 @@ describe("safe embeds", () => {
     ].join(" "));
 
     expect(embeds).toHaveLength(4);
-    expect(embeds.map((embed) => embed.kind)).toEqual(["link", "link", "link", "link"]);
+    expect(embeds.map((embed) => embed.kind)).toEqual(["youtube", "social", "social", "youtube"]);
   });
 
   test("uses Twitter image metadata before Open Graph fallback", () => {
@@ -95,5 +104,42 @@ describe("safe embeds", () => {
         title: "example.com",
       },
     ]);
+  });
+
+  test("keeps encrypted X preview fields while rejecting unsafe media", () => {
+    expect(normalizeStoredEmbeds([{
+      kind: "social",
+      url: "https://fixupx.com/example/status/123",
+      text: "An encrypted preview",
+      authorName: "Example",
+      authorHandle: "example",
+      media: [
+        { type: "image", url: "https://pbs.twimg.com/media/image.jpg" },
+        { type: "video", url: "https://evil.example/video.mp4" },
+      ],
+    }])).toEqual([{
+      kind: "social",
+      network: "x",
+      url: "https://fixupx.com/example/status/123",
+      statusId: "123",
+      text: "An encrypted preview",
+      authorName: "Example",
+      authorHandle: "example",
+      media: [{ type: "image", url: "https://pbs.twimg.com/media/image.jpg" }],
+    }]);
+  });
+
+  test("restores YouTube players from legacy link cards", () => {
+    expect(normalizeStoredEmbeds([{
+      kind: "link",
+      url: "https://youtu.be/dQw4w9WgXcQ",
+      title: "YouTube",
+      imageUrl: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+    }])).toEqual([{
+      kind: "youtube",
+      id: "dQw4w9WgXcQ",
+      url: "https://youtu.be/dQw4w9WgXcQ",
+      embedUrl: "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+    }]);
   });
 });
