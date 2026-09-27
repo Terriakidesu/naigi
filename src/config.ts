@@ -23,7 +23,9 @@ export const config = {
   databaseUrl: Bun.env.DATABASE_URL ?? "postgres://localhost:5432/priv_chat",
   redisUrl: Bun.env.REDIS_URL ?? "redis://localhost:6379",
   attachmentsDirectory: Bun.env.ATTACHMENTS_DIR ?? "./data/attachments",
+  profileImagesDirectory: Bun.env.PROFILE_IMAGES_DIR ?? "./data/profile-images",
   sessionTtlSeconds: integerEnvironment("SESSION_TTL_SECONDS", 60 * 60 * 24 * 30, 300, 60 * 60 * 24 * 365),
+  maxProfileImageBytes: 5 * 1024 * 1024,
   maxEncryptedMessageBytes: integerEnvironment(
     "MAX_ENCRYPTED_MESSAGE_BYTES",
     256 * 1024,

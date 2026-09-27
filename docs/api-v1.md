@@ -22,8 +22,12 @@ Authorization: Bearer <session-token>
 All protected endpoints return `{ "error": "stable_error_code" }` on failure. Clients
 should branch on the HTTP status and error code rather than display server text.
 
-`PATCH /v1/me` changes the display name. `POST /v1/auth/password` accepts the current
-password and a new password; changing it revokes the account's other sessions.
+`PATCH /v1/me` changes the display name. `PUT /v1/me/avatar` replaces the authenticated
+user's profile image with a PNG, JPEG, GIF, WebP, or AVIF image up to 5 MiB; animated GIF,
+WebP, and AVIF images are supported. `DELETE /v1/me/avatar` removes it. `GET
+/v1/users/:userId/avatar` serves an authenticated user's image. `POST /v1/auth/password`
+accepts the current password and a new password; changing it revokes the account's other
+sessions.
 
 ## Servers and channels
 
@@ -51,7 +55,7 @@ the backend does not depend on that representation.
 | `DELETE` | `/v1/servers/:serverId/categories/:categoryId` | Archive a category and uncategorize its channels |
 | `GET` | `/v1/servers/:serverId/members` | List active members and roles |
 | `GET` | `/v1/servers/:serverId/invites` | List invite metadata (owner/admin) |
-| `POST` | `/v1/servers/:serverId/invites` | Create a hashed, expiring invite (owner/admin) |
+| `POST` | `/v1/servers/:serverId/invites` | Replace the current active invite with a hashed, expiring invite (owner/admin) |
 | `DELETE` | `/v1/servers/:serverId/invites/:inviteId` | Revoke an invite |
 | `POST` | `/v1/invites/:token/accept` | Join using a one-time-presented invite token |
 | `PATCH` | `/v1/servers/:serverId/members/:userId` | Owner changes `admin`/`member` role |
@@ -85,6 +89,7 @@ The existing conversation transport is used for both DMs/groups and server text 
 
 - `GET /v1/conversations/:conversationId/members`
 - `GET /v1/users/:userId`
+- `GET /v1/users/:userId/avatar`
 - `GET /v1/conversations/:conversationId/messages?limit=50&before=<sequence>`
 - `GET /v1/conversations/:conversationId/messages?limit=50&after=<sequence>`
 - `POST /v1/conversations/:conversationId/messages`
@@ -104,6 +109,9 @@ New server members are added to current channels but are not granted prior crypt
 history by this API. Removing a member stops future authorization and marks their channel
 memberships inactive; it cannot revoke plaintext or keys already obtained. Frontends must
 rotate room keys before sending further channel messages after membership changes.
+
+Profile images are account metadata rather than message attachments. They are stored separately
+from encrypted conversation media and are only served to authenticated users.
 
 ## Realtime
 

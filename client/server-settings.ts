@@ -1,6 +1,7 @@
 import {
   ApiClient,
   ApiError,
+  type ConversationMember,
   type CustomServerRole,
   type Server,
   type ServerCategory,
@@ -10,6 +11,7 @@ import {
   type ServerPermission,
   type ServerPermissionMap,
 } from "./api";
+import { renderAvatar } from "./avatar";
 import { CryptoClient, LocalCryptoStoreError } from "./crypto";
 import { renderIcons } from "./icons";
 import { showOneTimeToken } from "./ui-dialog";
@@ -59,6 +61,11 @@ let moderation: ServerModeration = { bans: [], timeouts: [] };
 let cryptoClient: CryptoClient | undefined;
 let metadataConversationId: string | undefined;
 let metadataMembers: Awaited<ReturnType<ApiClient["conversationMembers"]>>["members"] = [];
+let selectedRoleId: string | undefined;
+let roleSearchQuery = "";
+let roleEditorDirty = false;
+let metadataReady = false;
+let metadataHydrationVersion = 0;
 const categoryNames = new Map<string, string>();
 const channelNames = new Map<string, string>();
 const roleNames = new Map<string, string>();
@@ -175,12 +182,12 @@ async function ensureCrypto() {
   confirmLocalUnlock();
 }
 
-async function prepareConversation(conversationId: string) {
+async function prepareConversation(conversationId: string, sync = true, knownMembers?: ConversationMember[]) {
   if (!cryptoClient) throw new Error("crypto_not_initialized");
-  const result = await api.conversationMembers(conversationId);
-  await cryptoClient.prepareConversation(conversationId, result.members);
-  await cryptoClient.syncToDevice().catch(() => undefined);
-  return result.members;
+  const members = knownMembers ?? (await api.conversationMembers(conversationId)).members;
+  await cryptoClient.prepareConversation(conversationId, members);
+  if (sync) await cryptoClient.syncToDevice().catch(() => undefined);
+  return members;
 }
 
 async function decryptMetadata(conversationId: string, encryptedMetadata: string) {
@@ -308,12 +315,12 @@ function renderCategories() {
     position.className = "position-input";
     position.setAttribute("aria-label", "Category order");
     const canEditCategories = hasAnyPermission("manage_channels", "manage_categories");
-    name.disabled = !canEditCategories;
-    position.disabled = !canEditCategories;
+    name.disabled = !canEditCategories || !metadataReady;
+    position.disabled = !canEditCategories || !metadataReady;
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = "Save";
-    save.disabled = !canEditCategories;
+    save.disabled = !canEditCategories || !metadataReady;
     save.addEventListener("click", async () => {
       save.disabled = true;
       try {
@@ -384,8 +391,11 @@ function renderChannels() {
   for (const channel of channels) {
     const row = document.createElement("div");
     row.className = "settings-list-row channel-settings-row";
+    row.dataset.channelId = channel.id;
     const name = document.createElement("input");
-    name.value = channelName(channel);
+    const fallbackName = channelName(channel);
+    name.value = fallbackName;
+    name.dataset.fallbackName = fallbackName;
     name.maxLength = 80;
     name.setAttribute("aria-label", "Channel name");
     const category = document.createElement("select");
@@ -397,13 +407,13 @@ function renderChannels() {
     position.value = String(channel.position);
     position.className = "position-input";
     position.setAttribute("aria-label", "Channel order");
-    name.disabled = !hasAnyPermission("manage_channels", "edit_channels");
-    category.disabled = !hasAnyPermission("manage_channels", "edit_channels");
-    position.disabled = !hasAnyPermission("manage_channels", "reorder_channels");
+    name.disabled = !hasAnyPermission("manage_channels", "edit_channels") || !metadataReady;
+    category.disabled = !hasAnyPermission("manage_channels", "edit_channels") || !metadataReady;
+    position.disabled = !hasAnyPermission("manage_channels", "reorder_channels") || !metadataReady;
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = "Save";
-    save.disabled = !hasAnyPermission("manage_channels", "edit_channels", "reorder_channels");
+    save.disabled = !hasAnyPermission("manage_channels", "edit_channels", "reorder_channels") || !metadataReady;
     save.addEventListener("click", () => void saveChannel(channel, name, category, position, save));
     const archive = document.createElement("button");
     archive.className = "danger-button";
@@ -442,6 +452,18 @@ function renderRoles() {
     roleList.append(empty);
     return;
   }
+  const editableRoles = roles.filter((role) => role.systemKey !== "owner");
+  if (editableRoles.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted small";
+    empty.textContent = "No editable roles have been configured yet.";
+    roleList.append(empty);
+    return;
+  }
+  if (!selectedRoleId || !editableRoles.some((role) => role.id === selectedRoleId)) {
+    selectedRoleId = editableRoles[0].id;
+    roleEditorDirty = false;
+  }
   const canManageRoles = hasAnyPermission(
     "manage_roles",
     "delete_roles",
@@ -451,234 +473,317 @@ function renderRoles() {
     "manage_role_appearance",
     "manage_channel_access",
   );
-  for (const role of roles) {
-    const ownerRole = role.systemKey === "owner";
-    const everyoneRole = role.systemKey === "everyone";
-    const editableSystemRole = currentServer?.role === "owner" && role.systemKey !== "owner";
-    const canEditThisRole = !role.isSystem || editableSystemRole;
-    const canEditName = canEditThisRole && canEditRoleName();
-    const canEditAppearance = canEditThisRole && canEditRoleAppearance();
-    const canEditPermissions = canEditThisRole && canEditRolePermissions();
-    const canEditRolePosition = canEditThisRole && canReorderRoles();
-    const canEditChannelAccess = canEditThisRole && canManageRoleAccess();
-    const card = document.createElement("article");
-    card.className = "role-settings-card";
-    card.style.setProperty("--role-color", role.color);
+  const manager = roleList;
 
-    const heading = document.createElement("div");
-    heading.className = "role-card-heading";
-    const identity = document.createElement("div");
-    identity.className = "role-card-identity";
-    const swatch = document.createElement("span");
-    swatch.className = "role-color-swatch";
-    swatch.style.background = role.color;
-    const headingCopy = document.createElement("div");
-    const headingName = document.createElement("strong");
-    headingName.textContent = roleName(role);
-    const headingMeta = document.createElement("span");
-    headingMeta.textContent = role.isSystem
-      ? `System role · position ${role.position}`
-      : `Custom role · position ${role.position}`;
-    headingCopy.append(headingName, headingMeta);
-    identity.append(swatch, headingCopy);
-    heading.append(identity);
-    if (role.systemKey === "owner") {
-      const owner = members.find((member) => member.userId === currentServer?.ownerId);
-      const ownerLabel = document.createElement("span");
-      ownerLabel.className = "role-system-owner";
-      ownerLabel.textContent = owner ? `${owner.displayName} · cannot be pinged` : "Space owner · cannot be pinged";
-      heading.append(ownerLabel);
-    }
-    card.append(heading);
+  const listPanel = document.createElement("aside");
+  listPanel.className = "role-list-panel";
+  const listHeading = document.createElement("div");
+  listHeading.className = "role-list-heading";
+  const listTitle = document.createElement("strong");
+  listTitle.textContent = "Roles";
+  const listCount = document.createElement("span");
+  listCount.className = "muted small";
+  listCount.textContent = `${editableRoles.length} total`;
+  listHeading.append(listTitle, listCount);
+  const search = document.createElement("input");
+  search.type = "search";
+  search.className = "role-search";
+  search.placeholder = "Find a role";
+  search.setAttribute("aria-label", "Find a role");
+  search.value = roleSearchQuery;
+  const listItems = document.createElement("div");
+  listItems.className = "role-list-items";
+  listItems.setAttribute("role", "listbox");
+  listItems.setAttribute("aria-label", "Roles");
 
-    const form = document.createElement("div");
-    form.className = "role-card-form";
-    const name = document.createElement("input");
-    name.value = roleName(role);
-    name.maxLength = 80;
-    name.setAttribute("aria-label", `${roleName(role)} name`);
-    name.disabled = ownerRole || everyoneRole || !canEditName;
-    const color = document.createElement("input");
-    color.type = "color";
-    color.value = role.color;
-    color.setAttribute("aria-label", `${roleName(role)} color`);
-    color.disabled = ownerRole || everyoneRole || !canEditAppearance;
-    const position = document.createElement("input");
-    position.type = "number";
-    position.min = "0";
-    position.max = "1000000";
-    position.value = String(role.position);
-    position.className = "position-input";
-    position.setAttribute("aria-label", `${roleName(role)} position`);
-    position.disabled = ownerRole || everyoneRole || !canEditRolePosition;
-    form.append(name, color, position);
-    card.append(form);
-
-    const controls = document.createElement("div");
-    controls.className = "role-card-controls";
-    const mentionableLabel = document.createElement("label");
-    mentionableLabel.className = "checkbox-label role-toggle";
-    const mentionable = document.createElement("input");
-    mentionable.type = "checkbox";
-    mentionable.checked = role.mentionable;
-    mentionable.disabled = ownerRole || everyoneRole || !canEditAppearance;
-    const mentionableText = document.createElement("span");
-    mentionableText.textContent = "Mentionable role";
-    mentionableLabel.append(mentionable, mentionableText);
-    const viewAllLabel = document.createElement("label");
-    viewAllLabel.className = "checkbox-label role-toggle";
-    const viewAll = document.createElement("input");
-    viewAll.type = "checkbox";
-    viewAll.checked = role.viewAllChannels;
-    viewAll.disabled = ownerRole || !canEditChannelAccess;
-    const viewAllText = document.createElement("span");
-    viewAllText.textContent = "View every room";
-    viewAllLabel.append(viewAll, viewAllText);
-    controls.append(mentionableLabel, viewAllLabel);
-    card.append(controls);
-
-    const permissionsHeading = document.createElement("h3");
-    permissionsHeading.className = "role-card-subheading";
-    permissionsHeading.textContent = "Permissions";
-    card.append(permissionsHeading);
-    const permissionGrid = document.createElement("div");
-    permissionGrid.className = "role-permission-grid";
-    const permissionInputs = new Map<ServerPermission, HTMLInputElement>();
-    for (const definition of permissionDefinitions) {
-      const label = document.createElement("label");
-      label.className = "permission-option";
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.checked = role.permissions[definition.id];
-      checkbox.disabled = ownerRole || !canEditPermissions;
-      permissionInputs.set(definition.id, checkbox);
-      const copy = document.createElement("span");
-      const title = document.createElement("strong");
-      title.textContent = definition.label;
-      const description = document.createElement("small");
-      description.textContent = definition.description;
-      copy.append(title, description);
-      label.append(checkbox, copy);
-      permissionGrid.append(label);
-    }
-    card.append(permissionGrid);
-
-    const channelHeading = document.createElement("h3");
-    channelHeading.className = "role-card-subheading";
-    channelHeading.textContent = "Room access";
-    card.append(channelHeading);
-    const accessGrid = document.createElement("div");
-    accessGrid.className = "role-channel-access-grid";
-    const channelInputs = new Map<string, { view: HTMLInputElement; upload: HTMLInputElement }>();
-    for (const channel of channels) {
-      const access = role.channelAccess.find((item) => item.channelId === channel.id);
-      const row = document.createElement("div");
-      row.className = "role-channel-access-row";
-      const label = document.createElement("strong");
-      label.textContent = channelName(channel);
-      const viewLabel = document.createElement("label");
-      viewLabel.className = "checkbox-label";
-      const view = document.createElement("input");
-      view.type = "checkbox";
-      view.checked = Boolean(access?.canView || access?.canUpload);
-      view.disabled = ownerRole || !canEditChannelAccess || role.viewAllChannels;
-      const viewText = document.createElement("span");
-      viewText.textContent = "View";
-      viewLabel.append(view, viewText);
-      const uploadLabel = document.createElement("label");
-      uploadLabel.className = "checkbox-label";
-      const upload = document.createElement("input");
-      upload.type = "checkbox";
-      upload.checked = Boolean(access?.canUpload);
-      upload.disabled = ownerRole || !canEditChannelAccess || role.viewAllChannels || !role.permissions.upload_files;
-      upload.addEventListener("change", () => {
-        if (upload.checked) view.checked = true;
-      });
-      const uploadText = document.createElement("span");
-      uploadText.textContent = "Upload";
-      uploadLabel.append(upload, uploadText);
-      row.append(label, viewLabel, uploadLabel);
-      accessGrid.append(row);
-      channelInputs.set(channel.id, { view, upload });
-    }
-    if (channels.length === 0) {
+  const renderRoleList = () => {
+    listItems.replaceChildren();
+    const query = roleSearchQuery.trim().toLocaleLowerCase();
+    const visibleRoles = editableRoles.filter((role) => !query || roleName(role).toLocaleLowerCase().includes(query));
+    if (visibleRoles.length === 0) {
       const empty = document.createElement("p");
-      empty.className = "muted small";
-      empty.textContent = "Create a room before restricting this role.";
-      accessGrid.append(empty);
+      empty.className = "muted small role-list-empty";
+      empty.textContent = "No matching roles.";
+      listItems.append(empty);
+      return;
     }
-    card.append(accessGrid);
+    for (const role of visibleRoles) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "role-list-item";
+      item.setAttribute("role", "option");
+      item.setAttribute("aria-selected", String(role.id === selectedRoleId));
+      item.style.setProperty("--role-color", role.color);
+      const swatch = document.createElement("span");
+      swatch.className = "role-color-swatch";
+      swatch.style.background = role.color;
+      const copy = document.createElement("span");
+      copy.className = "role-list-copy";
+      const name = document.createElement("strong");
+      name.textContent = roleName(role);
+      const meta = document.createElement("span");
+      meta.textContent = role.isSystem ? `System · ${role.position}` : `Custom · ${role.position}`;
+      copy.append(name, meta);
+      item.append(swatch, copy);
+      item.addEventListener("click", () => {
+        if (role.id === selectedRoleId) return;
+        if (roleEditorDirty && !window.confirm("Discard unsaved role changes?")) return;
+        selectedRoleId = role.id;
+        roleEditorDirty = false;
+        renderRoles();
+      });
+      listItems.append(item);
+    }
+  };
+  search.addEventListener("input", () => {
+    roleSearchQuery = search.value;
+    renderRoleList();
+  });
+  listPanel.append(listHeading, search, listItems);
 
-    const actions = document.createElement("div");
-    actions.className = "role-card-actions";
-    const save = document.createElement("button");
-    save.type = "button";
-    save.textContent = "Save role";
-    save.disabled = ownerRole || !canManageRoles || !canEditThisRole;
-    save.addEventListener("click", async () => {
-      if (!currentServer || !metadataConversationId) return;
-      save.disabled = true;
+  const role = editableRoles.find((candidate) => candidate.id === selectedRoleId) ?? editableRoles[0];
+  const ownerRole = role.systemKey === "owner";
+  const everyoneRole = role.systemKey === "everyone";
+  const editableSystemRole = currentServer?.role === "owner" && role.systemKey !== "owner";
+  const canEditThisRole = !role.isSystem || editableSystemRole;
+  const canEditName = canEditThisRole && canEditRoleName();
+  const canEditAppearance = canEditThisRole && canEditRoleAppearance();
+  const canEditPermissions = canEditThisRole && canEditRolePermissions();
+  const canEditRolePosition = canEditThisRole && canReorderRoles();
+  const canEditChannelAccess = canEditThisRole && canManageRoleAccess();
+  const card = document.createElement("article");
+  card.className = "role-settings-card role-editor";
+  card.style.setProperty("--role-color", role.color);
+
+  const markDirty = () => {
+    roleEditorDirty = true;
+  };
+  const heading = document.createElement("div");
+  heading.className = "role-card-heading";
+  const identity = document.createElement("div");
+  identity.className = "role-card-identity";
+  const swatch = document.createElement("span");
+  swatch.className = "role-color-swatch";
+  swatch.style.background = role.color;
+  const headingCopy = document.createElement("div");
+  const headingName = document.createElement("strong");
+  headingName.textContent = roleName(role);
+  const headingMeta = document.createElement("span");
+  headingMeta.textContent = role.isSystem
+    ? `System role · position ${role.position}`
+    : `Custom role · position ${role.position}`;
+  headingCopy.append(headingName, headingMeta);
+  identity.append(swatch, headingCopy);
+  heading.append(identity);
+  if (role.systemKey === "owner") {
+    const owner = members.find((member) => member.userId === currentServer?.ownerId);
+    const ownerLabel = document.createElement("span");
+    ownerLabel.className = "role-system-owner";
+    ownerLabel.textContent = owner ? `${owner.displayName} · cannot be pinged` : "Space owner · cannot be pinged";
+    heading.append(ownerLabel);
+  }
+  card.append(heading);
+
+  const form = document.createElement("div");
+  form.className = "role-card-form";
+  const name = document.createElement("input");
+  name.value = roleName(role);
+  name.maxLength = 80;
+  name.setAttribute("aria-label", `${roleName(role)} name`);
+  name.disabled = ownerRole || everyoneRole || !canEditName || !metadataReady;
+  name.addEventListener("input", markDirty);
+  const color = document.createElement("input");
+  color.type = "color";
+  color.value = role.color;
+  color.setAttribute("aria-label", `${roleName(role)} color`);
+  color.disabled = ownerRole || everyoneRole || !canEditAppearance || !metadataReady;
+  color.addEventListener("change", markDirty);
+  const position = document.createElement("input");
+  position.type = "number";
+  position.min = "0";
+  position.max = "1000000";
+  position.value = String(role.position);
+  position.className = "position-input";
+  position.setAttribute("aria-label", `${roleName(role)} position`);
+  position.disabled = ownerRole || everyoneRole || !canEditRolePosition || !metadataReady;
+  position.addEventListener("input", markDirty);
+  form.append(name, color, position);
+  card.append(form);
+
+  const controls = document.createElement("div");
+  controls.className = "role-card-controls";
+  const mentionableLabel = document.createElement("label");
+  mentionableLabel.className = "checkbox-label role-toggle";
+  const mentionable = document.createElement("input");
+  mentionable.type = "checkbox";
+  mentionable.checked = role.mentionable;
+  mentionable.disabled = ownerRole || everyoneRole || !canEditAppearance || !metadataReady;
+  mentionable.addEventListener("change", markDirty);
+  const mentionableText = document.createElement("span");
+  mentionableText.textContent = "Mentionable role";
+  mentionableLabel.append(mentionable, mentionableText);
+  const viewAllLabel = document.createElement("label");
+  viewAllLabel.className = "checkbox-label role-toggle";
+  const viewAll = document.createElement("input");
+  viewAll.type = "checkbox";
+  viewAll.checked = role.viewAllChannels;
+  viewAll.disabled = ownerRole || !canEditChannelAccess || !metadataReady;
+  viewAll.addEventListener("change", markDirty);
+  const viewAllText = document.createElement("span");
+  viewAllText.textContent = "View every room";
+  viewAllLabel.append(viewAll, viewAllText);
+  controls.append(mentionableLabel, viewAllLabel);
+  card.append(controls);
+
+  const permissionsHeading = document.createElement("h3");
+  permissionsHeading.className = "role-card-subheading";
+  permissionsHeading.textContent = "Permissions";
+  card.append(permissionsHeading);
+  const permissionGrid = document.createElement("div");
+  permissionGrid.className = "role-permission-grid";
+  const permissionInputs = new Map<ServerPermission, HTMLInputElement>();
+  for (const definition of permissionDefinitions) {
+    const label = document.createElement("label");
+    label.className = "permission-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = role.permissions[definition.id];
+    checkbox.disabled = ownerRole || !canEditPermissions || !metadataReady;
+    checkbox.addEventListener("change", markDirty);
+    permissionInputs.set(definition.id, checkbox);
+    const copy = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = definition.label;
+    const description = document.createElement("small");
+    description.textContent = definition.description;
+    copy.append(title, description);
+    label.append(checkbox, copy);
+    permissionGrid.append(label);
+  }
+  card.append(permissionGrid);
+
+  const channelHeading = document.createElement("h3");
+  channelHeading.className = "role-card-subheading";
+  channelHeading.textContent = "Room access";
+  card.append(channelHeading);
+  const accessGrid = document.createElement("div");
+  accessGrid.className = "role-channel-access-grid";
+  const channelInputs = new Map<string, { view: HTMLInputElement; upload: HTMLInputElement }>();
+  for (const channel of channels) {
+    const access = role.channelAccess.find((item) => item.channelId === channel.id);
+    const row = document.createElement("div");
+    row.className = "role-channel-access-row";
+    row.dataset.channelId = channel.id;
+    const label = document.createElement("strong");
+    label.className = "role-channel-name";
+    label.textContent = channelName(channel);
+    const viewLabel = document.createElement("label");
+    viewLabel.className = "checkbox-label";
+    const view = document.createElement("input");
+    view.type = "checkbox";
+    view.checked = Boolean(access?.canView || access?.canUpload);
+    view.disabled = ownerRole || !canEditChannelAccess || role.viewAllChannels || !metadataReady;
+    view.addEventListener("change", markDirty);
+    const viewText = document.createElement("span");
+    viewText.textContent = "View";
+    viewLabel.append(view, viewText);
+    const uploadLabel = document.createElement("label");
+    uploadLabel.className = "checkbox-label";
+    const upload = document.createElement("input");
+    upload.type = "checkbox";
+    upload.checked = Boolean(access?.canUpload);
+    upload.disabled = ownerRole || !canEditChannelAccess || role.viewAllChannels || !role.permissions.upload_files || !metadataReady;
+    upload.addEventListener("change", () => {
+      markDirty();
+      if (upload.checked) view.checked = true;
+    });
+    const uploadText = document.createElement("span");
+    uploadText.textContent = "Upload";
+    uploadLabel.append(upload, uploadText);
+    row.append(label, viewLabel, uploadLabel);
+    accessGrid.append(row);
+    channelInputs.set(channel.id, { view, upload });
+  }
+  if (channels.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted small";
+    empty.textContent = "Create a room before restricting this role.";
+    accessGrid.append(empty);
+  }
+  card.append(accessGrid);
+
+  const actions = document.createElement("div");
+  actions.className = "role-card-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.textContent = "Save role";
+  save.disabled = ownerRole || !canManageRoles || !canEditThisRole || !metadataReady;
+  save.addEventListener("click", async () => {
+    if (!currentServer || !metadataConversationId) return;
+    save.disabled = true;
+    try {
+      const updates: Parameters<ApiClient["updateServerRole"]>[2] = {};
+      if (canEditName && !ownerRole && !everyoneRole) {
+        updates.encryptedMetadata = await encryptMetadata(metadataConversationId, { name: name.value.trim(), kind: "server-role" });
+      }
+      if (canEditAppearance && !ownerRole && !everyoneRole) {
+        updates.color = color.value;
+        updates.mentionable = mentionable.checked;
+      }
+      if (canEditRolePosition && !ownerRole && !everyoneRole) {
+        updates.position = Math.max(0, Number(position.value) || 0);
+      }
+      if (canEditPermissions && !ownerRole) {
+        updates.permissions = Object.fromEntries(permissionDefinitions.map((definition) => [
+          definition.id,
+          permissionInputs.get(definition.id)!.checked,
+        ])) as Partial<ServerPermissionMap>;
+      }
+      if (canEditChannelAccess && !ownerRole) updates.viewAllChannels = viewAll.checked;
+      if (Object.keys(updates).length === 0) return;
+      await api.updateServerRole(currentServer.id, role.id, updates);
+      for (const channel of channels) {
+        const inputs = channelInputs.get(channel.id);
+        if (!inputs || viewAll.checked || ownerRole || !canEditChannelAccess) continue;
+        if (!inputs.view.checked && !inputs.upload.checked) {
+          await api.removeServerRoleChannelAccess(currentServer.id, role.id, channel.id);
+        } else {
+          await api.updateServerRoleChannelAccess(currentServer.id, role.id, channel.id, inputs.view.checked, inputs.upload.checked);
+        }
+      }
+      roleEditorDirty = false;
+      await loadData();
+      setStatus("Role saved.");
+    } catch (error) {
+      setStatus(readableError(error), true);
+      save.disabled = false;
+    }
+  });
+  actions.append(save);
+  if (!role.isSystem) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger-button";
+    remove.textContent = "Delete role";
+    remove.disabled = !hasAnyPermission("manage_roles", "delete_roles") || !canEditThisRole;
+    remove.addEventListener("click", async () => {
+      if (!currentServer || !window.confirm(`Delete ${roleName(role)}? People will keep access only through their other roles.`)) return;
+      remove.disabled = true;
       try {
-        const updates: Parameters<ApiClient["updateServerRole"]>[2] = {};
-        if (canEditName && !ownerRole && !everyoneRole) {
-          updates.encryptedMetadata = await encryptMetadata(metadataConversationId, { name: name.value.trim(), kind: "server-role" });
-        }
-        if (canEditAppearance && !ownerRole && !everyoneRole) {
-          updates.color = color.value;
-          updates.mentionable = mentionable.checked;
-        }
-        if (canEditRolePosition && !ownerRole && !everyoneRole) {
-          updates.position = Math.max(0, Number(position.value) || 0);
-        }
-        if (canEditPermissions && !ownerRole) {
-          updates.permissions = Object.fromEntries(permissionDefinitions.map((definition) => [
-            definition.id,
-            permissionInputs.get(definition.id)!.checked,
-          ])) as Partial<ServerPermissionMap>;
-        }
-        if (canEditChannelAccess && !ownerRole) updates.viewAllChannels = viewAll.checked;
-        if (Object.keys(updates).length === 0) return;
-        await api.updateServerRole(currentServer.id, role.id, updates);
-        for (const channel of channels) {
-          const inputs = channelInputs.get(channel.id);
-          if (!inputs || viewAll.checked || ownerRole || !canEditChannelAccess) continue;
-          if (!inputs.view.checked && !inputs.upload.checked) {
-            await api.removeServerRoleChannelAccess(currentServer.id, role.id, channel.id);
-          } else {
-            await api.updateServerRoleChannelAccess(currentServer.id, role.id, channel.id, inputs.view.checked, inputs.upload.checked);
-          }
-        }
+        roleEditorDirty = false;
+        await api.deleteServerRole(currentServer.id, role.id);
         await loadData();
-        setStatus("Role saved.");
+        setStatus("Role deleted.");
       } catch (error) {
         setStatus(readableError(error), true);
-        save.disabled = false;
+        remove.disabled = false;
       }
     });
-    actions.append(save);
-    if (!role.isSystem) {
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "danger-button";
-      remove.textContent = "Delete role";
-      remove.disabled = !hasAnyPermission("manage_roles", "delete_roles") || !canEditThisRole;
-      remove.addEventListener("click", async () => {
-          if (!currentServer || !window.confirm(`Delete ${roleName(role)}? People will keep access only through their other roles.`)) return;
-        remove.disabled = true;
-        try {
-          await api.deleteServerRole(currentServer.id, role.id);
-          await loadData();
-          setStatus("Role deleted.");
-        } catch (error) {
-          setStatus(readableError(error), true);
-          remove.disabled = false;
-        }
-      });
-      actions.append(remove);
-    }
-    card.append(actions);
-    roleList.append(card);
+    actions.append(remove);
   }
+  card.append(actions);
+  manager.append(listPanel, card);
+  renderRoleList();
 }
 
 function renderMembers() {
@@ -686,6 +791,10 @@ function renderMembers() {
   for (const member of members) {
     const row = document.createElement("div");
     row.className = "settings-list-row member-settings-row";
+    const avatar = document.createElement("span");
+    avatar.className = "member-avatar";
+    renderAvatar(avatar, member.displayName, member.userId, member.avatarUrl);
+    avatar.setAttribute("aria-hidden", "true");
     const copy = document.createElement("div");
     copy.className = "settings-row-copy";
     const name = document.createElement("strong");
@@ -693,7 +802,7 @@ function renderMembers() {
     const username = document.createElement("span");
     username.textContent = `@${member.username} · ${member.role === "owner" ? "Owner" : "member"}`;
     copy.append(name, username);
-    row.append(copy);
+    row.append(avatar, copy);
     const assignedRoleIds = normalizeRoleIds(member.roleIds ?? roleAssignments.get(member.userId) ?? []);
     const roleSummary = document.createElement("div");
     roleSummary.className = "member-role-summary";
@@ -864,25 +973,29 @@ function renderModeration() {
 
 function renderInvites(invites: Awaited<ReturnType<ApiClient["serverInvites"]>>["invites"]) {
   inviteList.replaceChildren();
-  if (invites.length === 0) {
+  const active = invites
+    .filter((invite) => !invite.revokedAt)
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+  const history = invites.filter((invite) => invite.id !== active?.id);
+  createInvite.textContent = active ? "Regenerate link" : "Create invite";
+
+  if (!active) {
     const empty = document.createElement("p");
     empty.className = "muted small";
-    empty.textContent = "No invite links yet.";
+    empty.textContent = "No active invite link. Create one to invite people to this space.";
     inviteList.append(empty);
-    return;
-  }
-  for (const invite of invites) {
+  } else {
     const row = document.createElement("div");
-    row.className = "settings-list-row";
+    row.className = "settings-list-row invite-active-row";
     const copy = document.createElement("div");
     copy.className = "settings-row-copy";
     const name = document.createElement("strong");
-    name.textContent = invite.revokedAt ? "Revoked invite" : "Active invite";
+    name.textContent = "Active invite link";
     const details = document.createElement("span");
-    details.textContent = `${invite.uses}${invite.maxUses ? `/${invite.maxUses}` : " uses"} · ${invite.expiresAt ? `expires ${new Date(invite.expiresAt).toLocaleString()}` : "never expires"}`;
+    details.textContent = `${active.uses}${active.maxUses ? `/${active.maxUses}` : " uses"} · ${active.expiresAt ? `expires ${new Date(active.expiresAt).toLocaleString()}` : "never expires"}`;
     copy.append(name, details);
     row.append(copy);
-    if (!invite.revokedAt && hasAnyPermission("manage_invites", "revoke_invites")) {
+    if (hasAnyPermission("manage_invites", "revoke_invites")) {
       const revoke = document.createElement("button");
       revoke.className = "danger-button";
       revoke.type = "button";
@@ -890,7 +1003,7 @@ function renderInvites(invites: Awaited<ReturnType<ApiClient["serverInvites"]>>[
       revoke.addEventListener("click", async () => {
         revoke.disabled = true;
         try {
-          await api.revokeServerInvite(currentServer!.id, invite.id);
+          await api.revokeServerInvite(currentServer!.id, active.id);
           await loadData();
           setStatus("Invite revoked.");
         } catch (error) {
@@ -902,10 +1015,123 @@ function renderInvites(invites: Awaited<ReturnType<ApiClient["serverInvites"]>>[
     }
     inviteList.append(row);
   }
+  if (history.length > 0) {
+    const historyDetails = document.createElement("details");
+    historyDetails.className = "invite-history";
+    const summary = document.createElement("summary");
+    summary.textContent = `Previous links (${history.length})`;
+    const historyList = document.createElement("div");
+    historyList.className = "invite-history-list";
+    for (const invite of history) {
+      const row = document.createElement("div");
+      row.className = "settings-list-row invite-history-row";
+      const copy = document.createElement("div");
+      copy.className = "settings-row-copy";
+      const name = document.createElement("strong");
+      name.textContent = invite.revokedAt ? "Revoked invite link" : "Superseded invite link";
+      const details = document.createElement("span");
+      details.textContent = `${invite.uses}${invite.maxUses ? `/${invite.maxUses}` : " uses"} · created ${new Date(invite.createdAt).toLocaleString()}`;
+      copy.append(name, details);
+      row.append(copy);
+      historyList.append(row);
+    }
+    historyDetails.append(summary, historyList);
+    inviteList.append(historyDetails);
+  }
+}
+
+function updateSettingsControls() {
+  if (!currentServer) return;
+  saveServer.disabled = !currentServer.permissions.manage_server || !metadataReady;
+  deleteServer.hidden = currentServer.role !== "owner";
+  categoryForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_channels", "manage_categories") || !metadataReady);
+  channelForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_channels", "create_channels"));
+  roleForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_roles", "create_roles") || !metadataReady);
+  createInvite.disabled = !hasAnyPermission("manage_invites", "create_invites");
+}
+
+async function hydrateChannelMetadata(version: number, channelSnapshot: ServerChannel[]) {
+  if (!cryptoClient || !metadataConversationId) return;
+  const metadataConversation = metadataConversationId;
+  try {
+    const channelsToPrepare = channelSnapshot.filter((channel) => channel.conversationId !== metadataConversation);
+    const memberResults = await Promise.all(channelsToPrepare.map((channel) => api.conversationMembers(channel.conversationId)));
+    for (let index = 0; index < channelsToPrepare.length; index += 1) {
+      await prepareConversation(channelsToPrepare[index].conversationId, false, memberResults[index].members);
+    }
+    await cryptoClient.syncToDevice().catch(() => undefined);
+    const channelMetadata = await Promise.all(channelSnapshot.map((channel) => decryptMetadata(channel.conversationId, channel.encryptedMetadata)));
+    if (version !== metadataHydrationVersion || metadataConversationId !== metadataConversation) return;
+    for (let index = 0; index < channelSnapshot.length; index += 1) {
+      const metadata = channelMetadata[index];
+      if (typeof metadata.name === "string" && metadata.name.trim()) channelNames.set(channelSnapshot[index].id, metadata.name.trim().slice(0, 80));
+    }
+
+    for (const channel of channelSnapshot) {
+      const name = channelNames.get(channel.id);
+      if (!name) continue;
+      const channelRow = [...channelList.querySelectorAll<HTMLElement>(".channel-settings-row")]
+        .find((row) => row.dataset.channelId === channel.id);
+      const channelInput = channelRow?.querySelector<HTMLInputElement>("input");
+      if (channelInput && channelInput.value === channelInput.dataset.fallbackName) channelInput.value = name;
+      for (const roleRow of roleList.querySelectorAll<HTMLElement>(".role-channel-access-row")) {
+        if (roleRow.dataset.channelId === channel.id) roleRow.querySelector<HTMLElement>(".role-channel-name")!.textContent = name;
+      }
+    }
+  } catch (error) {
+    console.warn("encrypted room metadata hydration failed", error);
+  }
+}
+
+async function hydrateMetadata(version: number, channelSnapshot: ServerChannel[]) {
+  const conversationId = metadataConversationId;
+  if (!conversationId || !cryptoClient) {
+    metadataReady = true;
+    updateSettingsControls();
+    renderCategories();
+    renderChannels();
+    renderRoles();
+    return;
+  }
+  try {
+    metadataMembers = await prepareConversation(conversationId);
+    const [metadata, roleMetadata, categoryMetadata] = await Promise.all([
+      decryptMetadata(conversationId, currentServer!.encryptedMetadata),
+      Promise.all(roles.map((role) => decryptMetadata(conversationId, role.encryptedMetadata))),
+      Promise.all(categories.map((category) => decryptMetadata(conversationId, category.encryptedMetadata))),
+    ]);
+    if (version !== metadataHydrationVersion || metadataConversationId !== conversationId) return;
+    serverName.value = typeof metadata.name === "string" ? metadata.name : "";
+    serverDescription.value = typeof metadata.description === "string" ? metadata.description : "";
+    for (let index = 0; index < roles.length; index += 1) {
+      const name = roleMetadata[index].name;
+      if (typeof name === "string" && name.trim()) roleNames.set(roles[index].id, name.trim().slice(0, 80));
+    }
+    for (let index = 0; index < categories.length; index += 1) {
+      const name = categoryMetadata[index].name;
+      if (typeof name === "string" && name.trim()) categoryNames.set(categories[index].id, name.trim().slice(0, 80));
+    }
+    metadataReady = true;
+    updateSettingsControls();
+    renderCategories();
+    renderChannels();
+    renderRoles();
+    renderMembers();
+    if (status.textContent === "Loading encrypted settings…") setStatus("");
+    void hydrateChannelMetadata(version, channelSnapshot);
+  } catch (error) {
+    if (version !== metadataHydrationVersion) return;
+    updateSettingsControls();
+    setStatus("Encrypted settings are still loading. Try again in a moment.", true);
+    console.warn("encrypted settings metadata hydration failed", error);
+  }
 }
 
 async function loadData() {
   if (!serverId) throw new Error("server_not_selected");
+  const version = ++metadataHydrationVersion;
+  metadataReady = false;
+  metadataMembers = [];
   const [serverResult, channelResult, categoryResult, memberResult, roleResult, moderationResult, inviteResult] = await Promise.all([
     api.server(serverId),
     api.serverChannels(serverId),
@@ -928,53 +1154,39 @@ async function loadData() {
   roles = roleResult.roles;
   roleAssignments = new Map(roleResult.assignments.map((assignment) => [assignment.userId, normalizeRoleIds(assignment.roleIds)]));
   moderation = moderationResult;
+  roleNames.clear();
+  categoryNames.clear();
+  channelNames.clear();
   title.textContent = "Space settings";
   roleLabel.textContent = `${currentServer.role} · ${channels.length} encrypted room${channels.length === 1 ? "" : "s"}`;
-  saveServer.disabled = !currentServer.permissions.manage_server;
-  deleteServer.hidden = currentServer.role !== "owner";
-  categoryForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_channels", "manage_categories"));
-  channelForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_channels", "create_channels"));
-  roleForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_roles", "create_roles"));
-  createInvite.disabled = !hasAnyPermission("manage_invites", "create_invites");
   backToServer.href = destination(channels[0]?.id);
 
   const metadataChannel = roleResult.metadataConversationId
     ? channels.find((channel) => channel.conversationId === roleResult.metadataConversationId)
     : [...channels].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))[0];
   metadataConversationId = roleResult.metadataConversationId ?? metadataChannel?.conversationId;
-  if (metadataConversationId) {
-    metadataMembers = await prepareConversation(metadataConversationId);
-    const metadata = await decryptMetadata(metadataConversationId, currentServer.encryptedMetadata);
-    serverName.value = typeof metadata.name === "string" ? metadata.name : "";
-    serverDescription.value = typeof metadata.description === "string" ? metadata.description : "";
-    roleNames.clear();
-    for (const role of roles) {
-      const roleMetadata = await decryptMetadata(metadataConversationId, role.encryptedMetadata);
-      if (typeof roleMetadata.name === "string" && roleMetadata.name.trim()) roleNames.set(role.id, roleMetadata.name.trim().slice(0, 80));
-    }
-    for (const category of categories) {
-      const categoryMetadata = await decryptMetadata(metadataConversationId, category.encryptedMetadata);
-      if (typeof categoryMetadata.name === "string") categoryNames.set(category.id, categoryMetadata.name);
-    }
-    for (const channel of channels) {
-      const channelMembers = await prepareConversation(channel.conversationId);
-      const channelMetadata = await decryptMetadata(channel.conversationId, channel.encryptedMetadata);
-      if (typeof channelMetadata.name === "string") channelNames.set(channel.id, channelMetadata.name);
-      // Ensure newly-created rooms have their current member devices prepared before they are edited.
-      if (channelMembers.length === 0) channelNames.delete(channel.id);
-    }
-  }
+  updateSettingsControls();
   renderCategories();
   renderChannels();
   renderRoles();
   renderMembers();
   renderModeration();
   renderInvites(inviteResult.invites);
+  if (metadataConversationId) {
+    setStatus("Loading encrypted settings…");
+    void hydrateMetadata(version, channels.slice());
+  } else {
+    metadataReady = true;
+    updateSettingsControls();
+    renderCategories();
+    renderChannels();
+    renderRoles();
+  }
 }
 
 serverForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!currentServer || !metadataConversationId) return;
+  if (!currentServer || !metadataConversationId || !metadataReady) return;
   saveServer.disabled = true;
   try {
     const encryptedMetadata = await encryptMetadata(metadataConversationId, {
@@ -987,7 +1199,7 @@ serverForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
-    saveServer.disabled = !currentServer.permissions.manage_server;
+    saveServer.disabled = !currentServer.permissions.manage_server || !metadataReady;
   }
 });
 
@@ -1007,7 +1219,7 @@ deleteServer.addEventListener("click", async () => {
 
 categoryForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!currentServer || !metadataConversationId || !newCategoryName.value.trim()) return;
+  if (!currentServer || !metadataConversationId || !metadataReady || !newCategoryName.value.trim()) return;
   const button = categoryForm.querySelector<HTMLButtonElement>("button");
   if (button) button.disabled = true;
   try {
@@ -1020,7 +1232,7 @@ categoryForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
-    if (button) button.disabled = !hasAnyPermission("manage_channels", "manage_categories");
+    if (button) button.disabled = !hasAnyPermission("manage_channels", "manage_categories") || !metadataReady;
   }
 });
 
@@ -1049,26 +1261,28 @@ channelForm.addEventListener("submit", async (event) => {
 
 roleForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!currentServer || !metadataConversationId || !newRoleName.value.trim()) return;
+  if (!currentServer || !metadataConversationId || !metadataReady || !newRoleName.value.trim()) return;
   const button = roleForm.querySelector<HTMLButtonElement>("button");
   if (button) button.disabled = true;
   try {
     const name = newRoleName.value.trim();
     const encryptedMetadata = await encryptMetadata(metadataConversationId, { name, kind: "server-role" });
-    await api.createServerRole(currentServer.id, {
+    const result = await api.createServerRole(currentServer.id, {
       encryptedMetadata,
       color: newRoleColor.value,
       permissions: defaultRolePermissions(),
       mentionable: false,
       viewAllChannels: true,
     });
+    selectedRoleId = result.role.id;
+    roleEditorDirty = false;
     newRoleName.value = "";
     await loadData();
     setStatus("Role created.");
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
-    if (button) button.disabled = !hasAnyPermission("manage_roles", "create_roles");
+    if (button) button.disabled = !hasAnyPermission("manage_roles", "create_roles") || !metadataReady;
   }
 });
 

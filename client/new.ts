@@ -1,4 +1,5 @@
 import { ApiClient, ApiError, type Server, type ServerMember, type User } from "./api";
+import { renderAvatar } from "./avatar";
 import { iconElement, renderIcons } from "./icons";
 
 const api = new ApiClient();
@@ -23,18 +24,10 @@ function setStatus(message: string, error = false) {
   status.classList.toggle("error", error);
 }
 
-function avatarColor(seed: string) {
-  const colors = ["#92aaa5", "#7fa0ad", "#a28f99", "#8e99ad", "#9f9a7d", "#759b9c", "#8d9aa4"];
-  let hash = 0;
-  for (const character of seed) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  return colors[hash % colors.length];
-}
-
 function createAvatar(user: User, className: string) {
   const avatar = document.createElement("span");
   avatar.className = className;
-  avatar.textContent = user.displayName.slice(0, 1).toUpperCase();
-  avatar.style.setProperty("--avatar-color", avatarColor(user.id));
+  renderAvatar(avatar, user.displayName, user.id, user.avatarUrl);
   avatar.setAttribute("aria-hidden", "true");
   return avatar;
 }
@@ -128,6 +121,7 @@ function memberToUser(member: ServerMember): User {
     username: member.username,
     displayName: member.displayName,
     createdAt: member.joinedAt,
+    avatarUrl: member.avatarUrl,
   };
 }
 

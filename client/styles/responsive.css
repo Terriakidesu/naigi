@@ -1,0 +1,107 @@
+@media (max-width: 1120px) {
+  .details-panel { position: absolute; z-index: 6; top: 0; right: 0; bottom: 0; display: none; width: min(280px, 86vw); box-shadow: -12px 0 28px rgba(0, 0, 0, 0.25); }
+  .chat-layout.details-open .details-panel { display: block; }
+  .details-close { display: grid; }
+}
+
+@media (max-width: 820px) {
+  .chat-layout { grid-template-columns: 64px 235px minmax(0, 1fr); }
+  .rail-button, .space-rail-button { width: 42px; height: 42px; }
+  .topbar { padding: 0 0.9rem; }
+  .tag { display: none; }
+}
+
+@media (max-width: 620px) {
+  .chat-layout { grid-template-columns: 220px minmax(0, 1fr); }
+  .workspace-rail { display: none; }
+  .chat-header { padding: 0 0.8rem; }
+  .chat-actions .icon-button:nth-child(-n+2) { display: grid; }
+  .messages { padding: 0.8rem 0.55rem 1rem; }
+  .composer { margin: 0 0.55rem 0.65rem; }
+  .composer-actions { font-size: 0.58rem; }
+  .desktop-composer-hint { display: none; }
+  .mobile-composer-hint { display: inline; }
+}
+
+@media (max-width: 700px) {
+  .role-manager { grid-template-columns: 1fr; }
+  .role-list-panel { position: static; }
+  .role-list-items { max-height: 220px; }
+  .settings-layout, .server-settings-layout { grid-template-columns: 1fr; width: min(100% - 1rem, 560px); margin: 1rem auto; }
+  .settings-nav { top: 0; z-index: 3; grid-template-columns: repeat(4, 1fr); align-items: center; }
+  .settings-nav .eyebrow { grid-column: 1 / -1; margin-bottom: 0; }
+  .server-settings-nav { grid-template-columns: repeat(5, 1fr); }
+  .settings-nav-item { flex-direction: column; justify-content: center; padding: 0.55rem 0.2rem; text-align: center; }
+  .settings-section { scroll-margin-top: 7rem; }
+}
+
+@media (max-width: 620px) {
+  .inline-settings-form { align-items: stretch; flex-direction: column; }
+  .inline-settings-form button, .inline-settings-form select { width: 100%; }
+  .settings-list-row { align-items: stretch; flex-wrap: wrap; }
+  .settings-list-row > input:first-child { flex-basis: calc(100% - 0.1rem); }
+  .settings-list-row select { flex: 1 1 130px; }
+  .role-permission-grid { grid-template-columns: 1fr; }
+  .role-card-heading { align-items: flex-start; flex-direction: column; }
+  .role-system-owner { text-align: left; }
+  .role-channel-access-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .role-channel-access-row > label:last-child { grid-column: 2; }
+  .member-role-select { flex: 1 1 100%; }
+  .channel-settings-row .position-input { flex: 0 0 62px !important; }
+  .compact-connection-status .status { display: none; }
+  .compact-connection-status { margin-right: 0; }
+  .profile-card { align-items: flex-start; flex-wrap: wrap; }
+  .profile-image-actions { width: 100%; justify-content: flex-start; margin-left: 3.4rem; }
+  .jump-latest-button { right: 0.6rem; }
+}
+
+@media (max-width: 480px) {
+  .topbar { padding: 0 0.75rem; }
+  .connection-status { display: none; }
+  .chat-actions .connection-status { display: flex; }
+  .auth-panel { padding: 1.5rem; }
+  .settings-section { padding: 1rem; }
+  .topbar-links { gap: 0.65rem; }
+}
+
+@media (max-width: 760px) {
+  .chat-layout { display: block; }
+  .workspace-rail { display: none; }
+  .sidebar { position: absolute; z-index: 10; inset: 0 auto 0 0; width: min(86vw, 320px); transform: translateX(-105%); box-shadow: 12px 0 28px rgba(0, 0, 0, 0.28); transition: transform 160ms ease; }
+  .chat-layout.mobile-sidebar-open .sidebar { transform: translateX(0); }
+  .mobile-sidebar-backdrop { position: absolute; z-index: 9; inset: 0; display: none; width: 100%; height: 100%; padding: 0; border-radius: 0; background: rgba(0, 0, 0, 0.5); }
+  .chat-layout.mobile-sidebar-open .mobile-sidebar-backdrop { display: block; }
+  .mobile-server-switcher { display: block; margin: 0.65rem 0.75rem 0.35rem; }
+  .mobile-workspace-actions { display: flex; gap: 0.45rem; margin: 0.2rem 0.75rem 0.4rem; }
+  .mobile-workspace-actions button { flex: 1; min-height: 38px; padding: 0.4rem 0.3rem; font-size: 0.75rem; }
+  .mobile-sidebar-close { display: grid; }
+  .chat-main { width: 100%; height: 100%; }
+  .mobile-sidebar-toggle { display: grid; }
+  .chat-header { padding: 0 0.8rem; }
+  .chat-header-main { gap: 0.55rem; }
+  .channel-heading { gap: 0.5rem; }
+  .message-search { position: absolute; z-index: 2; top: 12px; right: 52px; left: 52px; min-width: 0; }
+  .messages { padding: 0.8rem 0.55rem 1rem; }
+  .composer { margin: 0 0.55rem 0.65rem; }
+  .composer-actions { font-size: 0.58rem; }
+  .composer-actions kbd { display: none; }
+  .outbox-notice { margin: 0.45rem 0.55rem; }
+  .emoji-picker { right: 0.55rem; bottom: 5.2rem; width: min(300px, calc(100% - 1.1rem)); }
+  .media-zoom-control { gap: 0.1rem; }
+  .media-zoom-control input { width: min(72px, 18vw); }
+  .media-viewer-toolbar { padding: 0.5rem; }
+  .media-viewer-toolbar strong { font-size: 0.72rem; }
+}
+
+@media (hover: none), (pointer: coarse), (max-width: 760px) {
+  .conversation-delete { opacity: 1; }
+  .message-actions { opacity: 1; pointer-events: auto; }
+  .message-action-menu { display: grid; }
+  .message:not(.message-actions-open) .message-actions .message-action:not(.message-action-menu) { display: none; }
+  .message .message-content { padding-right: 1.9rem; }
+  .message-actions-open .message-actions { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}

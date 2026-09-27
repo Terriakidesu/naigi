@@ -1,0 +1,13 @@
+.profile-image-editor { width: min(500px, calc(100% - 1.5rem)); }
+.profile-image-editor form { display: grid; gap: 0.9rem; }
+.profile-image-editor h2 { margin-bottom: 0; }
+.profile-image-editor-description { margin: 0 !important; }
+.profile-crop-stage { position: relative; width: min(360px, 100%); aspect-ratio: 1; margin: 0 auto; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 12px; background-color: #202a30; background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%), linear-gradient(-45deg, rgba(255, 255, 255, 0.06) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.06) 75%), linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.06) 75%); background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-size: 16px 16px; cursor: grab; touch-action: none; }
+.profile-crop-stage:active { cursor: grabbing; }
+.profile-crop-stage::after { position: absolute; inset: 0; border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 12px; pointer-events: none; content: ""; }
+.profile-crop-image { position: absolute; max-width: none; user-select: none; pointer-events: none; }
+.profile-image-editor-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 0.75rem; }
+.profile-image-editor-controls label { gap: 0.35rem; font-size: 0.72rem; }
+.profile-image-editor-controls select { padding: 0.55rem; font-size: 0.74rem; }
+.profile-image-editor-controls input[type="range"] { width: 100%; padding: 0.55rem 0; accent-color: var(--accent); }
+.profile-image-editor-status { margin: 0; }

@@ -1,6 +1,7 @@
 import { password } from "bun";
 import { config } from "../config";
 import { db } from "../db/client";
+import { profileImageUrl } from "../profile-images";
 
 type UserRow = {
   id: string;
@@ -8,6 +9,7 @@ type UserRow = {
   display_name: string;
   password_hash: string;
   created_at: Date;
+  profile_image_storage_key?: string | null;
 };
 
 type SessionRow = {
@@ -18,6 +20,7 @@ export type AuthenticatedUser = {
   id: string;
   username: string;
   displayName: string;
+  avatarUrl: string | null;
 };
 
 export function normalizeUsername(username: string) {
@@ -71,7 +74,7 @@ export async function authenticate(
 
   const tokenHash = await hashSessionToken(token);
   const [user] = await db<UserRow[]>`
-    select u.id, u.username, u.display_name, u.password_hash, u.created_at
+    select u.id, u.username, u.display_name, u.password_hash, u.created_at, u.profile_image_storage_key
     from sessions s
     join users u on u.id = s.user_id
     where s.token_hash = ${tokenHash} and s.expires_at > now()
@@ -80,7 +83,12 @@ export async function authenticate(
   if (!user) return null;
 
   await db`update sessions set last_used_at = now() where token_hash = ${tokenHash}`;
-  return { id: user.id, username: user.username, displayName: user.display_name };
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.display_name,
+    avatarUrl: profileImageUrl(user.id, user.profile_image_storage_key),
+  };
 }
 
 export async function deleteSession(token: string | undefined) {

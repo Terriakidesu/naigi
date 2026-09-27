@@ -1,5 +1,6 @@
-import { ApiClient, ApiError, type User } from "./api";
+import { ApiClient, ApiError } from "./api";
 import { iconElement, renderIcons } from "./icons";
+import { setupProfileSettings } from "./profile-settings";
 import { clearSessionPassphrase, forgetRememberedPassphrase, lockLocalSession } from "./unlock-vault";
 
 type Device = {
@@ -18,6 +19,8 @@ const status = document.getElementById("settings-status") as HTMLElement;
 const logout = document.getElementById("logout-button") as HTMLButtonElement;
 const profileForm = document.getElementById("profile-form") as HTMLFormElement;
 const displayNameInput = document.getElementById("settings-display-name") as HTMLInputElement;
+const profileImageInput = document.getElementById("profile-image-input") as HTMLInputElement;
+const removeProfileImage = document.getElementById("remove-profile-image") as HTMLButtonElement;
 const passwordForm = document.getElementById("password-form") as HTMLFormElement;
 const currentPassword = document.getElementById("current-password") as HTMLInputElement;
 const newPassword = document.getElementById("new-password") as HTMLInputElement;
@@ -30,13 +33,6 @@ let currentUserId: string | undefined;
 function setStatus(message: string, error = false) {
   status.textContent = message;
   status.classList.toggle("error", error);
-}
-
-function renderProfile(user: User) {
-  name.textContent = user.displayName;
-  avatar.textContent = user.displayName.slice(0, 1).toUpperCase();
-  username.textContent = `@${user.username}`;
-  displayNameInput.value = user.displayName;
 }
 
 function renderDevices(devices: Device[]) {
@@ -108,6 +104,16 @@ window.addEventListener("hashchange", syncSettingsNav);
 syncSettingsNav();
 renderIcons();
 
+const profileSettings = setupProfileSettings(api, {
+  name,
+  avatar,
+  username,
+  profileForm,
+  displayNameInput,
+  profileImageInput,
+  removeProfileImage,
+}, setStatus);
+
 async function loadDevices() {
   renderDevices((await api.devices()).devices as Device[]);
 }
@@ -116,30 +122,13 @@ async function boot() {
   try {
     const result = await api.me();
     currentUserId = result.user.id;
-    renderProfile(result.user);
+    profileSettings.renderProfile(result.user);
     await loadDevices();
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) window.location.assign("/");
     else setStatus(error instanceof Error ? error.message : "Unable to load settings.", true);
   }
 }
-
-profileForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const value = displayNameInput.value.trim();
-  if (!value) return;
-  const button = profileForm.querySelector<HTMLButtonElement>("button[type=submit]");
-  if (button) button.disabled = true;
-  try {
-    const result = await api.updateProfile(value);
-    renderProfile(result.user);
-    setStatus("Profile saved.");
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Unable to save profile.", true);
-  } finally {
-    if (button) button.disabled = false;
-  }
-});
 
 passwordForm.addEventListener("submit", async (event) => {
   event.preventDefault();

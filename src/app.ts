@@ -21,6 +21,15 @@ import {
 import { config } from "./config";
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "./encoding";
 import { db, pingDatabase } from "./db/client";
+import {
+  ProfileImageInvalidError,
+  profileImageMetadata,
+  profileImagePath,
+  profileImageUrl,
+  removeProfileImage,
+  storeProfileImage,
+  validProfileImageBytes,
+} from "./profile-images";
 import { pingRedis, publishMessageCreated } from "./redis/client";
 import { createRealtimeConnection, type RealtimeConnection } from "./realtime";
 
@@ -30,6 +39,9 @@ type UserRow = {
   display_name: string;
   password_hash: string;
   created_at: Date;
+  profile_image_storage_key?: string | null;
+  profile_image_mime_type?: string | null;
+  profile_image_size_bytes?: number | string | null;
 };
 
 type MessageRow = {
@@ -72,12 +84,13 @@ function isUniqueViolation(error: unknown) {
   return error instanceof Error && "code" in error && (error as { code?: string }).code === "23505";
 }
 
-function toPublicUser(user: Pick<UserRow, "id" | "username" | "display_name" | "created_at">) {
+function toPublicUser(user: Pick<UserRow, "id" | "username" | "display_name" | "created_at"> & Partial<Pick<UserRow, "profile_image_storage_key">>) {
   return {
     id: user.id,
     username: user.username,
     displayName: user.display_name,
     createdAt: user.created_at,
+    avatarUrl: profileImageUrl(user.id, user.profile_image_storage_key),
   };
 }
 
@@ -733,7 +746,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.9.0" };
+         ?? { name: "Naigi", version: "0.10.0" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -856,7 +869,7 @@ export function createApp() {
         const [user] = await db<UserRow[]>`
           insert into users (username, username_normalized, password_hash, display_name)
           values (${body.username}, ${username}, ${passwordHash}, ${displayName})
-          returning id, username, display_name, password_hash, created_at
+          returning id, username, display_name, password_hash, created_at, profile_image_storage_key
         `;
         const session = await createSession(user.id);
         setSessionCookie(set, session.token);
@@ -869,7 +882,7 @@ export function createApp() {
     }, { body: userBody })
     .post("/v1/auth/login", async ({ body, set }) => {
       const [user] = await db<UserRow[]>`
-        select id, username, display_name, password_hash, created_at
+        select id, username, display_name, password_hash, created_at, profile_image_storage_key
         from users
         where username_normalized = ${normalizeUsername(body.username)}
       `;
@@ -900,7 +913,7 @@ export function createApp() {
         update users
         set display_name = ${displayName}, updated_at = now()
         where id = ${user.id}
-        returning id, username, display_name, password_hash, created_at
+        returning id, username, display_name, password_hash, created_at, profile_image_storage_key
       `;
       return { user: toPublicUser(updated) };
     }, {
@@ -910,7 +923,7 @@ export function createApp() {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
       const [record] = await db<UserRow[]>`
-        select id, username, display_name, password_hash, created_at
+        select id, username, display_name, password_hash, created_at, profile_image_storage_key
         from users where id = ${user.id}
       `;
       if (!await verifyPassword(record, body.currentPassword)) return respondError(set, 400, "current_password_incorrect");
@@ -933,11 +946,110 @@ export function createApp() {
         newPassword: t.String({ minLength: 12, maxLength: 128 }),
       }),
     })
+    .get("/v1/users/:userId/avatar", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [profile] = await db<{ profile_image_storage_key: string | null; profile_image_mime_type: string | null }[]>`
+        select profile_image_storage_key, profile_image_mime_type
+        from users
+        where id = ${params.userId}
+      `;
+      if (!profile?.profile_image_storage_key || !profile.profile_image_mime_type) {
+        return respondError(set, 404, "profile_image_not_found");
+      }
+      const path = profileImagePath(profile.profile_image_storage_key);
+      if (!(await Bun.file(path).exists())) return respondError(set, 404, "profile_image_not_found");
+      return new Response(Bun.file(path), {
+        headers: {
+          "cache-control": "private, max-age=3600",
+          "content-type": profile.profile_image_mime_type,
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+    })
+    .put("/v1/me/avatar", async ({ headers, request, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const metadata = profileImageMetadata(headers["content-type"]);
+      if (!metadata) return respondError(set, 400, "unsupported_profile_image_type");
+
+      const storageKey = `${crypto.randomUUID()}.${metadata.extension}`;
+      let stored: { size: number };
+      try {
+        stored = await storeProfileImage(
+          request,
+          storageKey,
+          config.maxProfileImageBytes,
+          (bytes) => validProfileImageBytes(bytes, metadata.mimeType),
+        );
+      } catch (error) {
+        if (error instanceof AttachmentTooLargeError) return respondError(set, 413, "profile_image_too_large");
+        if (error instanceof ProfileImageInvalidError) return respondError(set, 400, "invalid_profile_image");
+        throw error;
+      }
+
+      let previousStorageKey: string | null = null;
+      try {
+        const updated = await db.begin(async (transaction) => {
+          const [current] = await transaction<{ profile_image_storage_key: string | null }[]>`
+            select profile_image_storage_key
+            from users
+            where id = ${user.id}
+            for update
+          `;
+          if (!current) return null;
+          const [next] = await transaction<UserRow[]>`
+            update users
+            set profile_image_storage_key = ${storageKey},
+              profile_image_mime_type = ${metadata.mimeType},
+              profile_image_size_bytes = ${stored.size}
+            where id = ${user.id}
+            returning id, username, display_name, created_at, profile_image_storage_key
+          `;
+          previousStorageKey = current.profile_image_storage_key;
+          return next;
+        });
+        if (!updated) {
+          await removeProfileImage(storageKey);
+          return respondError(set, 404, "user_not_found");
+        }
+        if (previousStorageKey && previousStorageKey !== storageKey) await removeProfileImage(previousStorageKey);
+        return { user: toPublicUser(updated) };
+      } catch (error) {
+        await removeProfileImage(storageKey);
+        throw error;
+      }
+    })
+    .delete("/v1/me/avatar", async ({ headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const deleted = await db.begin(async (transaction) => {
+        const [current] = await transaction<{ profile_image_storage_key: string | null }[]>`
+          select profile_image_storage_key
+          from users
+          where id = ${user.id}
+          for update
+        `;
+        if (!current) return null;
+        await transaction`
+          update users
+          set profile_image_storage_key = null,
+            profile_image_mime_type = null,
+            profile_image_size_bytes = null
+          where id = ${user.id}
+        `;
+        return current.profile_image_storage_key;
+      });
+      if (deleted) await removeProfileImage(deleted);
+      return { deleted: Boolean(deleted) };
+    })
     .get("/v1/users/:userId", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
       const [profile] = await db<UserRow[]>`
-        select id, username, display_name, created_at
+        select id, username, display_name, created_at, profile_image_storage_key
         from users
         where id = ${params.userId}
       `;
@@ -1561,18 +1673,19 @@ export function createApp() {
         id: string;
         username: string;
         display_name: string;
+        profile_image_storage_key: string | null;
         role: "owner" | "admin" | "member";
         role_ids: string[];
         joined_at: Date;
       }[]>`
-        select u.id, u.username, u.display_name, sm.role,
+        select u.id, u.username, u.display_name, u.profile_image_storage_key, sm.role,
           coalesce(array_agg(smr.role_id order by smr.assigned_at asc) filter (where smr.role_id is not null), array[]::uuid[]) as role_ids,
           sm.joined_at
         from server_members sm
         join users u on u.id = sm.user_id
         left join server_member_roles smr on smr.server_id = sm.server_id and smr.user_id = sm.user_id
         where sm.server_id = ${params.serverId} and sm.left_at is null
-        group by u.id, u.username, u.display_name, sm.role, sm.joined_at
+        group by u.id, u.username, u.display_name, u.profile_image_storage_key, sm.role, sm.joined_at
         order by sm.joined_at asc
       `;
       return {
@@ -1580,6 +1693,7 @@ export function createApp() {
           userId: member.id,
           username: member.username,
           displayName: member.display_name,
+          avatarUrl: profileImageUrl(member.id, member.profile_image_storage_key),
           role: member.role,
           roleIds: stringArray(member.role_ids),
           joinedAt: member.joined_at,
@@ -2120,18 +2234,25 @@ export function createApp() {
 
       const token = newInviteToken();
       const tokenHash = await hashInviteToken(token);
-      const [invite] = await db<{
-        id: string;
-        expires_at: Date | null;
-        max_uses: number;
-      }[]>`
-        insert into server_invites (server_id, created_by, token_hash, max_uses, expires_at)
-        values (
-          ${params.serverId}, ${user.id}, ${tokenHash}, ${body.maxUses ?? 0},
-          ${body.expiresInSeconds ? db`now() + make_interval(secs => ${body.expiresInSeconds})` : null}
-        )
-        returning id, expires_at, max_uses
-      `;
+      const [invite] = await db.begin(async (transaction) => {
+        await transaction`
+          update server_invites
+          set revoked_at = coalesce(revoked_at, now())
+          where server_id = ${params.serverId} and revoked_at is null
+        `;
+        return transaction<{
+          id: string;
+          expires_at: Date | null;
+          max_uses: number;
+        }[]>`
+          insert into server_invites (server_id, created_by, token_hash, max_uses, expires_at)
+          values (
+            ${params.serverId}, ${user.id}, ${tokenHash}, ${body.maxUses ?? 0},
+            ${body.expiresInSeconds ? transaction`now() + make_interval(secs => ${body.expiresInSeconds})` : null}
+          )
+          returning id, expires_at, max_uses
+        `;
+      });
       set.status = 201;
       return { invite: { id: invite.id, token, maxUses: invite.max_uses, expiresAt: invite.expires_at } };
     }, {
@@ -3064,15 +3185,15 @@ export function createApp() {
       `;
       if (!membership) return respondError(set, 403, "not_a_conversation_member");
 
-      const members = await db<{ id: string; username: string; display_name: string; role_ids: string[] }[]>`
-        select u.id, u.username, u.display_name,
+      const members = await db<{ id: string; username: string; display_name: string; profile_image_storage_key: string | null; role_ids: string[] }[]>`
+        select u.id, u.username, u.display_name, u.profile_image_storage_key,
           coalesce(array_agg(smr.role_id order by smr.assigned_at asc) filter (where smr.role_id is not null), array[]::uuid[]) as role_ids
         from conversation_members m
         join users u on u.id = m.user_id
         left join channels c on c.conversation_id = m.conversation_id
         left join server_member_roles smr on smr.server_id = c.server_id and smr.user_id = m.user_id
         where m.conversation_id = ${params.conversationId} and m.left_at is null
-        group by u.id, u.username, u.display_name, m.joined_at
+        group by u.id, u.username, u.display_name, u.profile_image_storage_key, m.joined_at
         order by m.joined_at asc
       `;
       return {
@@ -3081,6 +3202,7 @@ export function createApp() {
           matrixUserId: matrixUserId(member.id),
             username: member.username,
             displayName: member.display_name,
+            avatarUrl: profileImageUrl(member.id, member.profile_image_storage_key),
             roleIds: stringArray(member.role_ids),
           })),
       };

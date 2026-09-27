@@ -21,7 +21,17 @@ for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "s
 for (const page of ["index", "register", "unlock", "chat", "new", "settings", "server-settings"]) {
   await Bun.write(`public/${page}.html`, Bun.file(`client/${page}.html`));
 }
-await Bun.write("public/app.css", Bun.file("client/styles.css"));
+const styleSheets = [
+  "base.css",
+  "navigation.css",
+  "conversation.css",
+  "composer.css",
+  "profile-editor.css",
+  "pages.css",
+  "responsive.css",
+];
+const bundledStyles = (await Promise.all(styleSheets.map((sheet) => Bun.file(`client/styles/${sheet}`).text()))).join("");
+await Bun.write("public/app.css", bundledStyles);
 await Bun.write("public/favicon.svg", Bun.file("client/favicon.svg"));
 await Bun.write(
   "public/assets/matrix_sdk_crypto_wasm_bg.wasm",

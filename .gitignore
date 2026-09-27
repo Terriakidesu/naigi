@@ -34,6 +34,7 @@ yarn-error.log*
 
 # local encrypted attachment files
 /data/attachments/
+/data/profile-images/
 
 # vercel
 .vercel

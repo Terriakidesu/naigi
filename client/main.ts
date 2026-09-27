@@ -22,6 +22,7 @@ import {
   emojiShortcodes,
   replaceEmojiShortcodes,
 } from "./emoji";
+import { renderAvatar, setAvatarStyle } from "./avatar";
 import type { EmojiCategory } from "./emoji-data";
 import { appendMarkdown } from "./markdown";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
@@ -882,15 +883,14 @@ async function openUserProfile(userId: string) {
   profileModalName.textContent = "Loading profile…";
   profileModalUsername.textContent = "";
   profileModalCreated.textContent = "";
-  profileModalAvatar.textContent = "?";
+  renderAvatar(profileModalAvatar, "?", userId, null);
   profileModalEdit.hidden = true;
   showDialog(profileModal, profileModalClose);
   try {
     const result = await api.user(userId);
     if (request !== profileRequest || profileModal.hidden) return;
     const user = result.user;
-    profileModalAvatar.textContent = user.displayName.slice(0, 1).toUpperCase();
-    setAvatarStyle(profileModalAvatar, user.id);
+    renderAvatar(profileModalAvatar, user.displayName, user.id, user.avatarUrl, user.displayName);
     profileModalName.textContent = user.displayName;
     profileModalUsername.textContent = `@${user.username}`;
     profileModalCreated.textContent = `Joined ${new Date(user.createdAt).toLocaleDateString()}`;
@@ -1582,8 +1582,7 @@ async function startCrypto() {
   connectRealtime();
   const outbox = await cryptoClient.flushPendingMessages().catch(() => ({ sent: 0, pending: 0, failed: 0 }));
   userLabel.textContent = `${currentUser.displayName} (@${currentUser.username})`;
-  selfAvatar.textContent = currentUser.displayName.slice(0, 1).toUpperCase();
-  setAvatarStyle(selfAvatar, currentUser.id);
+  renderAvatar(selfAvatar, currentUser.displayName, currentUser.id, currentUser.avatarUrl);
   await refreshServers();
   await refreshConversations();
   await refreshOutboxNotice().catch(() => undefined);
@@ -1710,17 +1709,6 @@ function subscribeRealtime(conversationId: string) {
 
 function subscribeKnownConversations() {
   for (const conversationId of knownConversationIds()) subscribeRealtime(conversationId);
-}
-
-function avatarColor(seed: string) {
-  const colors = ["#92aaa5", "#7fa0ad", "#a28f99", "#8e99ad", "#9f9a7d", "#759b9c", "#8d9aa4"];
-  let hash = 0;
-  for (const character of seed) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  return colors[hash % colors.length];
-}
-
-function setAvatarStyle(element: HTMLElement, seed: string) {
-  element.style.setProperty("--avatar-color", avatarColor(seed));
 }
 
 function conversationDisplayName(conversation: Conversation) {
@@ -2327,10 +2315,14 @@ function renderMembers(members: ConversationMember[]) {
       presence.className = "member-presence-dot";
       presence.dataset.state = state;
       presence.setAttribute("aria-hidden", "true");
+      const avatar = document.createElement("span");
+      avatar.className = "member-avatar";
+      renderAvatar(avatar, memberName, member.userId, member.avatarUrl);
+      avatar.setAttribute("aria-hidden", "true");
       const name = document.createElement("span");
       name.className = "compact-member-name";
       name.textContent = member.userId === currentUser?.id ? `${memberName} · you` : memberName;
-      row.append(presence, name);
+      row.append(avatar, presence, name);
       memberList.append(row);
     }
   }
@@ -2874,9 +2866,11 @@ function renderMessage(
   article.dataset.groupBreak = String(messageBreaksGrouping(decrypted));
   const avatar = document.createElement("div");
   avatar.className = "message-avatar";
-  avatar.textContent = senderIdentity.slice(0, 1).toUpperCase();
   avatar.setAttribute("aria-hidden", "true");
-  setAvatarStyle(avatar, senderKey(message, decrypted));
+  const senderMember = message.senderUserId === currentUser?.id
+    ? currentUser
+    : message.senderUserId ? selectedMembers.find((member) => member.userId === message.senderUserId) : undefined;
+  renderAvatar(avatar, senderIdentity, senderKey(message, decrypted), senderMember?.avatarUrl);
   const messageContent = document.createElement("div");
   messageContent.className = "message-content";
   const header = document.createElement("header");

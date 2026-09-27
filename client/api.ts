@@ -3,6 +3,7 @@ export type User = {
   username: string;
   displayName: string;
   createdAt: string;
+  avatarUrl: string | null;
 };
 
 export type Conversation = {
@@ -93,6 +94,7 @@ export type ServerMember = {
   userId: string;
   username: string;
   displayName: string;
+  avatarUrl: string | null;
   role: ServerRole;
   roleIds: string[];
   joinedAt: string;
@@ -103,6 +105,7 @@ export type ConversationMember = {
   matrixUserId: string;
   username: string;
   displayName: string;
+  avatarUrl: string | null;
   roleIds?: string[];
 };
 
@@ -209,6 +212,7 @@ export class ApiError extends Error {
 export type UploadOptions = {
   signal?: AbortSignal;
   onProgress?: (loadedBytes: number, totalBytes: number) => void;
+  contentType?: string;
 };
 
 export type DownloadOptions = {
@@ -269,12 +273,10 @@ export class ApiClient {
     return this.request<T>(path, { method: "DELETE" });
   }
 
-  async putBytes(path: string, bytes: Uint8Array, options: UploadOptions = {}) {
+  async putBytes<T = { attachment: { id: string; sizeBytes: number; sha256: string; uploadedAt: string } }>(path: string, bytes: Uint8Array, options: UploadOptions = {}) {
     const body = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(body).set(bytes);
-    return await new Promise<{
-      attachment: { id: string; sizeBytes: number; sha256: string; uploadedAt: string };
-    }>((resolve, reject) => {
+    return await new Promise<T>((resolve, reject) => {
       const request = new XMLHttpRequest();
       let settled = false;
       const finish = (callback: () => void) => {
@@ -286,7 +288,7 @@ export class ApiClient {
       const abort = () => request.abort();
       request.open("PUT", path);
       request.withCredentials = true;
-      request.setRequestHeader("content-type", "application/octet-stream");
+      request.setRequestHeader("content-type", options.contentType ?? "application/octet-stream");
       request.upload.addEventListener("progress", (event) => {
         if (event.lengthComputable) options.onProgress?.(event.loaded, event.total);
       });
@@ -377,6 +379,17 @@ export class ApiClient {
 
   updateProfile(displayName: string) {
     return this.patch<{ user: User }>("/v1/me", { displayName });
+  }
+
+  async uploadProfileImage(file: File, options: UploadOptions = {}) {
+    return this.putBytes<{ user: User }>("/v1/me/avatar", new Uint8Array(await file.arrayBuffer()), {
+      ...options,
+      contentType: file.type,
+    });
+  }
+
+  removeProfileImage() {
+    return this.delete<{ deleted: boolean }>("/v1/me/avatar");
   }
 
   updatePassword(currentPassword: string, newPassword: string) {

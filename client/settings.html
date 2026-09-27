@@ -25,7 +25,15 @@
          <section id="profile" class="settings-section panel" data-settings-view>
            <p class="eyebrow">PROFILE</p>
            <h1>Your account</h1>
-            <div class="profile-card"><div id="settings-avatar" class="large-avatar">N</div><div><strong id="settings-name">Loading…</strong><span id="settings-username" class="muted"></span></div></div>
+             <div class="profile-card">
+               <div id="settings-avatar" class="large-avatar" aria-hidden="true">N</div>
+               <div class="profile-card-copy"><strong id="settings-name">Loading…</strong><span id="settings-username" class="muted"></span></div>
+               <div class="profile-image-actions">
+                 <label id="profile-image-button" class="profile-image-button">Choose image<input id="profile-image-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif"></label>
+                 <button id="remove-profile-image" class="secondary" type="button" hidden>Remove</button>
+               </div>
+             </div>
+            <p class="muted small profile-image-help">PNG, JPG, GIF, WebP, or AVIF · up to 5 MB · animated GIFs supported</p>
            <form id="profile-form" class="settings-form">
              <label for="settings-display-name">Display name<input id="settings-display-name" maxlength="80" required></label>
              <button type="submit">Save profile</button>

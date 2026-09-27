@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { SQL } from "bun";
+import { applyPalette, GIFEncoder, quantize } from "gifenc";
 import { chromium, type Page } from "playwright";
 
 // I have nothing but my burger and I want nothing more
@@ -49,6 +50,79 @@ try {
     users.push(response.body.user);
   }
 
+  const onePixelPng = Uint8Array.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+    0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+    0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99,
+    0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+  ]);
+  function animatedGif() {
+    const gif = GIFEncoder();
+    for (const color of [[238, 120, 130, 255], [120, 180, 160, 255]]) {
+      const data = new Uint8ClampedArray(4 * 4 * 4);
+      for (let index = 0; index < data.length; index += 4) data.set(color, index);
+      const palette = quantize(data, 256);
+      gif.writeFrame(applyPalette(data, palette), 4, 4, { palette, delay: 100, repeat: 0 });
+    }
+    gif.finish();
+    const bytes = gif.bytes();
+    const output = new Uint8Array(bytes.byteLength);
+    output.set(bytes);
+    return output;
+  }
+
+  await a.goto(`${origin}/settings`);
+  await a.locator("#profile-image-input").setInputFiles({ name: "avatar.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) });
+  const editor = a.locator(".profile-image-editor");
+  await editor.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(await editor.locator("input[type=range]").isVisible(), true);
+  assert.equal(await editor.locator("select").isVisible(), true);
+  const pngUpload = a.waitForResponse((response) => response.url().endsWith("/v1/me/avatar") && response.request().method() === "PUT" && response.status() === 200);
+  await a.getByRole("button", { name: "Use this image", exact: true }).click();
+  await pngUpload;
+  await a.locator("#settings-status").filter({ hasText: "Profile image updated." }).waitFor({ timeout: 20_000 });
+  await a.locator("#settings-avatar img").waitFor({ timeout: 20_000 });
+  assert.equal(await a.locator("#settings-avatar").evaluate((element) => getComputedStyle(element).backgroundColor), "rgba(0, 0, 0, 0)");
+  const avatarUpload = await request(a, `/v1/me?check=${Date.now()}`);
+  assert.equal(avatarUpload.status, 200, JSON.stringify(avatarUpload.body));
+  assert.match(avatarUpload.body.user.avatarUrl, /^\/v1\/users\/[0-9a-f-]+\/avatar\?/);
+  const avatarFetch = await a.evaluate(async (path) => {
+    const response = await fetch(path, { credentials: "include" });
+    return { status: response.status, contentType: response.headers.get("content-type") };
+  }, avatarUpload.body.user.avatarUrl);
+  assert.deepEqual(avatarFetch, { status: 200, contentType: "image/png" });
+  await a.locator("#profile-image-input").setInputFiles({ name: "animated.gif", mimeType: "image/gif", buffer: Buffer.from(animatedGif()) });
+  await editor.waitFor({ state: "visible", timeout: 20_000 });
+  const gifUpload = a.waitForResponse((response) => response.url().endsWith("/v1/me/avatar") && response.request().method() === "PUT" && response.status() === 200);
+  await a.getByRole("button", { name: "Use this image", exact: true }).click();
+  await gifUpload;
+  await a.locator("#settings-status").filter({ hasText: "Profile image updated." }).waitFor({ timeout: 20_000 });
+  await a.locator("#settings-avatar img").waitFor({ timeout: 20_000 });
+  const animatedAvatar = await request(a, `/v1/me?check=${Date.now()}`);
+  const animatedFetch = await a.evaluate(async (path) => {
+    const response = await fetch(path, { credentials: "include" });
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return { status: response.status, contentType: response.headers.get("content-type"), frames: bytes.filter((byte) => byte === 0x2c).length };
+  }, animatedAvatar.body.user.avatarUrl);
+  assert.equal(animatedFetch.status, 200);
+  assert.equal(animatedFetch.contentType, "image/gif");
+  assert.ok(animatedFetch.frames >= 2, "edited GIF should retain animation frames");
+  const oversizedAvatar = await a.evaluate(async () => {
+    const response = await fetch("/v1/me/avatar", {
+      method: "PUT",
+      credentials: "include",
+      headers: { "content-type": "image/png" },
+      body: new Uint8Array(5 * 1024 * 1024 + 1),
+    });
+    return response.status;
+  });
+  assert.equal(oversizedAvatar, 413);
+
   const createdServer = await request(a, "/v1/servers", {});
   assert.equal(createdServer.status, 201, JSON.stringify(createdServer.body));
   const invite = await request(a, `/v1/servers/${createdServer.body.server.id}/invites`, { maxUses: 1 });
@@ -63,6 +137,9 @@ try {
   assert.equal(blockedConversation.status, 403, JSON.stringify(blockedConversation.body));
   const secondInvite = await request(a, `/v1/servers/${createdServer.body.server.id}/invites`, { maxUses: 1 });
   assert.equal(secondInvite.status, 201, JSON.stringify(secondInvite.body));
+  const listedInvites = await request(a, `/v1/servers/${createdServer.body.server.id}/invites`);
+  assert.equal(listedInvites.status, 200, JSON.stringify(listedInvites.body));
+  assert.equal(listedInvites.body.invites.filter((item: { revokedAt: string | null }) => !item.revokedAt).length, 1);
   const rejoined = await request(b, `/v1/invites/${encodeURIComponent(secondInvite.body.invite.token)}/accept`, {});
   assert.equal(rejoined.status, 200, JSON.stringify(rejoined.body));
 
@@ -126,6 +203,7 @@ try {
 
   await a.goto(`${origin}/channels/@me/${room}`);
   await a.locator("#message-input:enabled").waitFor({ timeout: 20_000 });
+  await a.locator("#member-list .member-avatar img").waitFor({ state: "attached", timeout: 20_000 });
   await send(a, b, "Alice to Bob: decrypted through the real transport");
   assert.equal(await b.locator(".message").filter({ hasText: "Alice to Bob: decrypted through the real transport" }).getByRole("button", { name: "Edit", exact: true }).count(), 0);
   const mentionPrefix = users[1].username.slice(0, -1);
