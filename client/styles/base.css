@@ -43,7 +43,7 @@ kbd { border: 1px solid #45606a; border-bottom-width: 2px; border-radius: 4px; p
 
 .shell { display: flex; flex-direction: column; width: 100%; height: 100%; }
 .topbar { display: flex; flex: 0 0 58px; align-items: center; justify-content: space-between; gap: 1rem; padding: 0 1.25rem; border-bottom: 1px solid var(--line); background: var(--bg-deep); }
-.brand-lockup, .connection-status, .chat-actions, .channel-heading, .composer-actions, .sidebar-heading, .sidebar-search, .section-heading, .sidebar-user, .privacy-card, .details-heading { display: flex; align-items: center; }
+.brand-lockup, .connection-status, .chat-actions, .channel-heading, .sidebar-heading, .sidebar-search, .section-heading, .sidebar-user, .privacy-card, .details-heading { display: flex; align-items: center; }
 .brand-lockup { gap: 0.7rem; }
 .brand-lockup strong { display: block; font-size: 0.95rem; letter-spacing: 0.01em; }
 .brand-mark, .auth-mark { display: grid; place-items: center; color: #172127; background: #c2ceca; box-shadow: 0 4px 12px rgba(146, 170, 165, 0.12); font-weight: 900; }

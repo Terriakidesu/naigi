@@ -94,6 +94,17 @@ type ComposerAttachment = {
   progressElement?: HTMLProgressElement;
   statusElement?: HTMLElement;
 };
+type MediaAlbumInfo = { id: string; index: number; total: number };
+type MediaCardController = {
+  filename: string;
+  video: boolean;
+  spoiler: boolean;
+  blob?: Blob;
+  isRevealed: () => boolean;
+  reveal: () => void;
+  load: () => Promise<Blob | undefined>;
+};
+type MediaViewerItem = MediaCardController;
 type ReactionOption = { emoji: string; code: string; label: string };
 type TwemojiOption = { emoji: string; code: string };
 const reactionOptions: ReactionOption[] = [
@@ -257,10 +268,17 @@ const mediaZoomOut = byId<HTMLButtonElement>("media-zoom-out");
 const mediaZoomIn = byId<HTMLButtonElement>("media-zoom-in");
 const mediaZoomReset = byId<HTMLButtonElement>("media-zoom-reset");
 const mediaViewerCopy = byId<HTMLButtonElement>("media-viewer-copy");
+const mediaViewerPrevious = byId<HTMLButtonElement>("media-viewer-previous");
+const mediaViewerNext = byId<HTMLButtonElement>("media-viewer-next");
+const mediaViewerCount = byId<HTMLElement>("media-viewer-count");
+const mediaViewerDownload = byId<HTMLAnchorElement>("media-viewer-download");
 const mediaViewerClose = byId<HTMLButtonElement>("media-viewer-close");
 let mediaViewerUrl: string | undefined;
 let mediaViewerElement: HTMLElement | undefined;
 let mediaViewerText: string | undefined;
+let mediaViewerItems: MediaViewerItem[] = [];
+let mediaViewerIndex = 0;
+let mediaViewerRenderToken = 0;
 const profileModal = byId<HTMLElement>("profile-modal");
 const profileModalClose = byId<HTMLButtonElement>("profile-modal-close");
 const profileModalAvatar = byId<HTMLElement>("profile-modal-avatar");
@@ -274,6 +292,7 @@ let modalReturnFocus: HTMLElement | null = null;
 let activeSuggestionIndex = -1;
 let composerAttachments: ComposerAttachment[] = [];
 let composerAttachmentSequence = 0;
+const mediaCardControllers = new WeakMap<HTMLElement, MediaCardController>();
 const autoMediaLoadTargets = new Map<HTMLElement, () => Promise<void>>();
 const autoMediaLoadQueue: Array<() => Promise<void>> = [];
 let autoMediaLoadsInFlight = 0;
@@ -896,11 +915,19 @@ async function refreshOutboxNotice() {
 }
 
 function closeMediaViewer() {
+  mediaViewerRenderToken += 1;
   if (mediaViewerUrl) URL.revokeObjectURL(mediaViewerUrl);
   mediaViewerUrl = undefined;
   mediaViewerElement = undefined;
   mediaViewerText = undefined;
+  mediaViewerItems = [];
+  mediaViewerIndex = 0;
   mediaViewerCopy.hidden = true;
+  mediaViewerPrevious.hidden = true;
+  mediaViewerNext.hidden = true;
+  mediaViewerCount.hidden = true;
+  mediaViewerDownload.hidden = true;
+  mediaViewerDownload.removeAttribute("href");
   mediaViewerStage.replaceChildren();
   mediaViewerZoom.value = "1";
   mediaZoomReset.textContent = "100%";
@@ -914,24 +941,98 @@ function setMediaZoom(value: number) {
   if (mediaViewerElement) mediaViewerElement.style.transform = `scale(${zoom})`;
 }
 
-function openMediaViewer(blob: Blob, filename: string, video: boolean) {
-  closeMediaViewer();
+function clearMediaViewerMedia() {
+  if (mediaViewerUrl) URL.revokeObjectURL(mediaViewerUrl);
+  mediaViewerUrl = undefined;
+  mediaViewerElement = undefined;
+  mediaViewerDownload.hidden = true;
+  mediaViewerDownload.removeAttribute("href");
+  mediaViewerStage.replaceChildren();
+}
+
+async function renderMediaViewerItem(index: number) {
+  if (mediaViewerItems.length === 0) return;
+  const item = mediaViewerItems[(index + mediaViewerItems.length) % mediaViewerItems.length];
+  mediaViewerIndex = (index + mediaViewerItems.length) % mediaViewerItems.length;
+  const token = ++mediaViewerRenderToken;
+  clearMediaViewerMedia();
+  mediaViewerCopy.hidden = true;
+  mediaViewerTitle.textContent = item.filename || (item.video ? "Video" : "Image");
+  mediaViewerCount.hidden = mediaViewerItems.length < 2;
+  mediaViewerCount.textContent = `${mediaViewerIndex + 1} / ${mediaViewerItems.length}`;
+  mediaViewerPrevious.hidden = mediaViewerItems.length < 2;
+  mediaViewerNext.hidden = mediaViewerItems.length < 2;
+  setMediaZoom(1);
+
+  if (!item.isRevealed()) {
+    const spoiler = document.createElement("div");
+    spoiler.className = "media-viewer-spoiler";
+    const label = document.createElement("strong");
+    label.textContent = "Spoiler media";
+    const reveal = document.createElement("button");
+    reveal.type = "button";
+    reveal.className = "secondary";
+    reveal.textContent = "Reveal";
+    reveal.addEventListener("click", () => {
+      item.reveal();
+      void renderMediaViewerItem(mediaViewerIndex);
+    });
+    spoiler.append(label, reveal);
+    mediaViewerStage.append(spoiler);
+    return;
+  }
+
+  let blob = item.blob;
+  if (!blob) {
+    const loading = document.createElement("span");
+    loading.className = "media-viewer-loading";
+    loading.textContent = "Loading media…";
+    mediaViewerStage.append(loading);
+    blob = await item.load();
+    if (token !== mediaViewerRenderToken || mediaViewer.hidden) return;
+    if (!blob) {
+      loading.textContent = "Media unavailable";
+      return;
+    }
+    item.blob = blob;
+  }
+  if (token !== mediaViewerRenderToken || mediaViewer.hidden) return;
+
   mediaViewerUrl = URL.createObjectURL(blob);
-  const element = document.createElement(video ? "video" : "img");
-  element.className = video ? "media-viewer-video" : "media-viewer-image";
+  const element = document.createElement(item.video ? "video" : "img");
+  element.className = item.video ? "media-viewer-video" : "media-viewer-image";
   element.src = mediaViewerUrl;
-  if (video) {
+  if (item.video) {
     const player = element as HTMLVideoElement;
     player.controls = true;
+    player.playsInline = true;
     player.preload = "metadata";
   } else {
-    (element as HTMLImageElement).alt = filename || "Encrypted media";
+    (element as HTMLImageElement).alt = item.filename || "Encrypted media";
   }
   mediaViewerElement = element;
-  mediaViewerTitle.textContent = filename || (video ? "Video viewer" : "Image viewer");
+  mediaViewerDownload.href = mediaViewerUrl;
+  mediaViewerDownload.download = item.filename || "encrypted-media";
+  mediaViewerDownload.hidden = false;
   mediaViewerStage.append(element);
-  showDialog(mediaViewer, mediaViewerClose);
   setMediaZoom(1);
+}
+
+function openMediaViewer(blob: Blob, filename: string, video: boolean, items: MediaViewerItem[] = []) {
+  closeMediaViewer();
+  const fallback: MediaViewerItem = {
+    filename,
+    video,
+    spoiler: false,
+    isRevealed: () => true,
+    reveal: () => undefined,
+    load: async () => blob,
+    blob,
+  };
+  mediaViewerItems = items.length > 0 ? items : [fallback];
+  const initialIndex = mediaViewerItems.findIndex((item) => item.blob === blob);
+  showDialog(mediaViewer, mediaViewerClose);
+  void renderMediaViewerItem(initialIndex >= 0 ? initialIndex : 0);
 }
 
 async function openTextViewer(blob: Blob, filename: string, mimeType: string) {
@@ -951,6 +1052,24 @@ async function openTextViewer(blob: Blob, filename: string, mimeType: string) {
   } catch (error) {
     setStatus(`Text preview unavailable: ${readableError(error)}`, true);
   }
+}
+
+function mediaViewerItemsForCard(card: HTMLElement) {
+  const album = card.closest<HTMLElement>(".media-album");
+  const cards = album
+    ? [...album.querySelectorAll<HTMLElement>(".encrypted-media-card")]
+    : [card];
+  return cards
+    .map((candidate) => mediaCardControllers.get(candidate))
+    .filter((controller): controller is MediaViewerItem => Boolean(controller));
+}
+
+async function openMediaViewerForCard(card: HTMLElement) {
+  const controller = mediaCardControllers.get(card);
+  if (!controller || !controller.isRevealed()) return;
+  const blob = controller.blob ?? await controller.load();
+  if (!blob) return;
+  openMediaViewer(blob, controller.filename, controller.video, mediaViewerItemsForCard(card));
 }
 
 function closeProfileModal() {
@@ -988,6 +1107,8 @@ mediaViewerZoom.addEventListener("input", () => {
 mediaZoomOut.addEventListener("click", () => setMediaZoom(Number(mediaViewerZoom.value) - 0.1));
 mediaZoomIn.addEventListener("click", () => setMediaZoom(Number(mediaViewerZoom.value) + 0.1));
 mediaZoomReset.addEventListener("click", () => setMediaZoom(1));
+mediaViewerPrevious.addEventListener("click", () => void renderMediaViewerItem(mediaViewerIndex - 1));
+mediaViewerNext.addEventListener("click", () => void renderMediaViewerItem(mediaViewerIndex + 1));
 mediaViewerCopy.addEventListener("click", async () => {
   if (mediaViewerText === undefined) return;
   try {
@@ -2681,7 +2802,7 @@ function renderComposerAttachments() {
   for (const attachment of composerAttachments) {
     const kind = composerAttachmentKind(attachment.file);
     const row = document.createElement("article");
-    row.className = `attachment-item${attachment.status === "error" ? " attachment-item-error" : ""}`;
+    row.className = `attachment-item attachment-item-${kind}${kind === "image" || kind === "video" ? " attachment-item-media" : ""}${attachment.status === "error" ? " attachment-item-error" : ""}`;
     row.dataset.attachmentId = attachment.id;
     attachment.row = row;
 
@@ -2724,7 +2845,7 @@ function renderComposerAttachments() {
     status.className = "attachment-item-status";
     status.textContent = attachment.status === "uploading"
       ? `Uploading · ${Math.round(attachment.progress)}%`
-      : attachment.error ?? (attachment.status === "error" ? "Upload failed" : "Ready to send");
+      : attachment.error ?? (attachment.status === "error" ? "Upload failed" : "");
     attachment.statusElement = status;
     copy.append(name, meta, status);
 
@@ -3102,8 +3223,16 @@ function groupStateFromArticle(article: HTMLElement | undefined): MessageGroupSt
 }
 
 function findMessageArticle(messageId: string) {
-  return [...messagesPanel.querySelectorAll<HTMLElement>(".message")]
+  const article = [...messagesPanel.querySelectorAll<HTMLElement>(".message")]
     .find((candidate) => candidate.dataset.messageId === messageId);
+  if (article?.classList.contains("media-album-member")) {
+    const albumId = article.dataset.mediaAlbumId;
+    return albumId
+      ? [...messagesPanel.querySelectorAll<HTMLElement>(`.message[data-media-album-id="${CSS.escape(albumId)}"]`)]
+        .find((candidate) => !candidate.classList.contains("media-album-member")) ?? article
+      : article;
+  }
+  return article;
 }
 
 function messageTargetFromHash() {
@@ -3146,6 +3275,19 @@ async function scrollToMessage(messageId: string) {
 
 function markMessageDeleted(messageId: string) {
   messageContextTargets.delete(messageId);
+  const mediaTile = [...messagesPanel.querySelectorAll<HTMLElement>(".media-album-tile")]
+    .find((tile) => tile.dataset.messageId === messageId);
+  if (mediaTile) {
+    releaseMediaResources(mediaTile);
+    mediaTile.replaceChildren();
+    const deleted = document.createElement("span");
+    deleted.className = "message-deleted muted";
+    deleted.textContent = "Deleted";
+    mediaTile.append(deleted);
+    mediaTile.classList.add("media-album-tile-deleted");
+    mediaTile.querySelector<HTMLElement>(".message-actions")?.remove();
+    return;
+  }
   const article = [...messagesPanel.querySelectorAll<HTMLElement>(".message")]
     .find((candidate) => candidate.dataset.messageId === messageId);
   const content = article?.querySelector<HTMLElement>(".message-content");
@@ -3233,7 +3375,9 @@ messagesPanel.addEventListener("click", (event) => {
 
 messagesPanel.addEventListener("contextmenu", (event) => {
   const target = event.target instanceof Element ? event.target.closest<HTMLElement>(".message") : null;
-  const contextTarget = target?.dataset.messageId ? messageContextTargets.get(target.dataset.messageId) : undefined;
+  const tile = event.target instanceof Element ? event.target.closest<HTMLElement>(".media-album-tile") : null;
+  const messageId = tile?.dataset.messageId ?? target?.dataset.messageId;
+  const contextTarget = messageId ? messageContextTargets.get(messageId) : undefined;
   if (!contextTarget) return;
   event.preventDefault();
   openMessageContextMenu(contextTarget, event.clientX, event.clientY);
@@ -3287,66 +3431,139 @@ function appendDownloadButton(parent: HTMLElement, url: string, filename: string
   download.className = "media-file-download";
   download.href = url;
   download.download = filename || "encrypted-file.bin";
-  download.textContent = `Download ${filename || "file"}`;
+  download.title = `Download ${filename || "file"}`;
+  download.setAttribute("aria-label", `Download ${filename || "file"}`);
+  download.append(iconElement("download"));
+  renderIcons(download);
   parent.append(download);
 }
 
-function appendEncryptedMedia(parent: HTMLElement, content: Record<string, unknown>, filename: string, fileMessage: boolean, videoMessage: boolean) {
+function mediaAlbumFromContent(content: Record<string, unknown>): MediaAlbumInfo | undefined {
+  const value = content.album;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const album = value as Record<string, unknown>;
+  if (typeof album.id !== "string" || album.id.length === 0 || album.id.length > 120) return undefined;
+  if (!Number.isInteger(album.index) || !Number.isInteger(album.total)) return undefined;
+  const index = album.index as number;
+  const total = album.total as number;
+  if (index < 0 || total < 2 || index >= total || total > 20) return undefined;
+  return { id: album.id, index, total };
+}
+
+function appendEncryptedMedia(
+  parent: HTMLElement,
+  content: Record<string, unknown>,
+  filename: string,
+  fileMessage: boolean,
+  videoMessage: boolean,
+  album?: MediaAlbumInfo,
+) {
   const info = content.info && typeof content.info === "object" && !Array.isArray(content.info) ? content.info as Record<string, unknown> : {};
   const mimeType = typeof info.mimetype === "string" ? info.mimetype : "application/octet-stream";
   const isText = isPlaintextAttachment(filename, mimeType);
   const isVideo = !isText && (videoMessage || mimeType.toLowerCase().startsWith("video/"));
   const isImage = !isText && !isVideo && (content.msgtype === "m.image" || mimeType.toLowerCase().startsWith("image/"));
+  const isVisual = isImage || isVideo;
   const isSpoiler = content.spoiler === true;
   const kindLabel = isText ? "text file" : fileMessage ? "file" : isVideo ? "video" : "image";
   const size = typeof info.size === "number" && Number.isFinite(info.size) ? ` · ${fileSizeLabel(info.size)}` : "";
   const card = document.createElement("div");
-  card.className = `encrypted-media-card${isSpoiler ? " encrypted-media-spoiler" : ""}`;
+  card.className = `encrypted-media-card ${isVisual ? "media-attachment-card" : "file-attachment-card"}`;
+  card.dataset.mediaFilename = filename;
+  if (album) {
+    card.dataset.mediaAlbumId = album.id;
+    card.dataset.mediaAlbumIndex = String(album.index);
+  }
   let revealed = !isSpoiler;
-  let loadPromise: Promise<void> | undefined;
+  let loadedBlob: Blob | undefined;
+  let loadPromise: Promise<Blob | undefined> | undefined;
   let mediaProgress: HTMLProgressElement | undefined;
   let mediaStatus: HTMLElement | undefined;
+  let openTextAfterLoad = false;
 
   const renderPending = (failure?: string) => {
     card.replaceChildren();
     card.classList.toggle("encrypted-media-spoiler", !revealed);
-    const heading = document.createElement("div");
-    heading.className = "encrypted-media-heading";
-    const icon = document.createElement("span");
-    icon.className = "encrypted-media-heading-icon";
-    icon.textContent = isText ? "TXT" : isVideo ? "VID" : isImage ? "IMG" : "FILE";
+    mediaProgress = undefined;
+    mediaStatus = undefined;
+
+    if (isVisual) {
+      if (!revealed) {
+        const reveal = document.createElement("button");
+        reveal.type = "button";
+        reveal.className = "media-spoiler-cover";
+        reveal.setAttribute("aria-label", `Reveal ${kindLabel} spoiler`);
+        const label = document.createElement("span");
+        label.textContent = "Spoiler";
+        reveal.append(label);
+        reveal.addEventListener("click", () => {
+          revealed = true;
+          renderPending();
+          void loadMedia();
+        });
+        card.append(reveal);
+        return;
+      }
+      const placeholder = document.createElement("div");
+      placeholder.className = "media-placeholder";
+      const mark = document.createElement("span");
+      mark.textContent = isVideo ? "VIDEO" : "IMAGE";
+      placeholder.append(mark);
+      mediaStatus = document.createElement("span");
+      mediaStatus.className = "media-loading-label";
+      mediaStatus.textContent = failure ? `Unavailable · ${failure}` : "Loading…";
+      placeholder.append(mediaStatus);
+      card.append(placeholder);
+      if (failure) {
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "media-retry-button";
+        retry.textContent = "Retry";
+        retry.addEventListener("click", () => void loadMedia());
+        card.append(retry);
+      }
+      mediaProgress = document.createElement("progress");
+      mediaProgress.className = "media-load-progress";
+      mediaProgress.max = 100;
+      mediaProgress.removeAttribute("value");
+      mediaProgress.hidden = true;
+      card.append(mediaProgress);
+      return;
+    }
+
+    const row = document.createElement("div");
+    row.className = "file-attachment-row";
+    const mark = document.createElement("span");
+    mark.className = "file-attachment-mark";
+    mark.textContent = isText ? "TXT" : "FILE";
     const copy = document.createElement("div");
-    copy.className = "encrypted-media-heading-copy";
+    copy.className = "file-attachment-copy";
     const title = document.createElement("strong");
     title.textContent = revealed ? (filename || `Encrypted ${kindLabel}`) : "Spoiler attachment";
     const meta = document.createElement("span");
-    meta.textContent = revealed ? `${kindLabel}${size}` : "Reveal to view";
+    meta.textContent = revealed ? `${isText ? textLanguage(filename, mimeType) : kindLabel}${size}` : "Hidden until revealed";
     copy.append(title, meta);
-    heading.append(icon, copy);
-    card.append(heading);
-    mediaStatus = document.createElement("p");
-    mediaStatus.className = "encrypted-media-status muted";
-    mediaStatus.textContent = failure ? `Unavailable: ${failure}` : revealed && isImage ? "Loading encrypted image…" : revealed ? "Encrypted attachment" : "Hidden until revealed";
-    card.append(mediaStatus);
+    row.append(mark, copy);
+    card.append(row);
     const actions = document.createElement("div");
-    actions.className = "encrypted-media-actions";
+    actions.className = "file-attachment-actions";
     if (!revealed) {
       const reveal = document.createElement("button");
       reveal.type = "button";
       reveal.className = "secondary";
-      reveal.textContent = `Reveal ${kindLabel} spoiler`;
+      reveal.textContent = "Reveal";
       reveal.addEventListener("click", () => {
         revealed = true;
         renderPending();
         void loadMedia();
       });
       actions.append(reveal);
-    } else if (!isImage) {
+    } else {
       const load = document.createElement("button");
       load.type = "button";
       load.className = "secondary";
-      load.textContent = isText ? "Preview text" : isVideo ? "Load video" : "Prepare download";
-      load.addEventListener("click", () => void loadMedia());
+      load.textContent = isText ? "Preview" : "Prepare";
+      load.addEventListener("click", () => void loadMedia(isText));
       actions.append(load);
     }
     if (failure) {
@@ -3354,110 +3571,113 @@ function appendEncryptedMedia(parent: HTMLElement, content: Record<string, unkno
       retry.type = "button";
       retry.className = "secondary";
       retry.textContent = "Retry";
-      retry.addEventListener("click", () => void loadMedia());
+      retry.addEventListener("click", () => void loadMedia(isText));
       actions.append(retry);
     }
-    if (actions.childElementCount > 0) card.append(actions);
-    mediaProgress = document.createElement("progress");
-    mediaProgress.className = "media-load-progress";
-    mediaProgress.max = 100;
-    mediaProgress.removeAttribute("value");
-    mediaProgress.hidden = true;
-    card.append(mediaProgress);
+    card.append(actions);
   };
 
-  const loadMedia = () => {
+  const loadMedia = (openText = false): Promise<Blob | undefined> => {
+    openTextAfterLoad ||= openText;
     if (loadPromise) return loadPromise;
-    if (!card.isConnected) return Promise.resolve();
+    if (!card.isConnected) return Promise.resolve(undefined);
     const activeCryptoClient = cryptoClient;
-    if (!activeCryptoClient) return Promise.resolve();
-    const preserveLatestPosition = isImage && isAtLatestMessage();
-    const controller = new AbortController();
-    pendingMediaLoads.set(card, controller);
-    if (mediaStatus) mediaStatus.textContent = `Loading encrypted ${kindLabel}…`;
+    if (!activeCryptoClient) return Promise.resolve(undefined);
+    const preserveLatestPosition = isVisual && isAtLatestMessage();
+    const requestController = new AbortController();
+    pendingMediaLoads.set(card, requestController);
+    if (mediaStatus) mediaStatus.textContent = "Loading…";
     if (mediaProgress) mediaProgress.hidden = false;
     for (const button of card.querySelectorAll<HTMLButtonElement>("button")) button.disabled = true;
     loadPromise = (async () => {
       try {
         const blob = await activeCryptoClient.decryptMedia(content, {
-          signal: controller.signal,
+          signal: requestController.signal,
           onProgress: (loadedBytes, totalBytes) => {
-            if (!card.isConnected || controller.signal.aborted) return;
+            if (!card.isConnected || requestController.signal.aborted) return;
             if (mediaStatus) mediaStatus.textContent = totalBytes > 0
-              ? `Loading encrypted ${kindLabel} · ${Math.round((loadedBytes / totalBytes) * 100)}%`
-              : `Loading encrypted ${kindLabel}…`;
+              ? `Loading · ${Math.round((loadedBytes / totalBytes) * 100)}%`
+              : "Loading…";
             if (mediaProgress && totalBytes > 0) mediaProgress.value = Math.round((loadedBytes / totalBytes) * 100);
           },
         });
         if (!blob) throw new Error("crypto_not_initialized");
-        if (!card.isConnected || controller.signal.aborted) return;
+        if (!card.isConnected || requestController.signal.aborted) return undefined;
+        loadedBlob = blob;
+        controller.blob = blob;
         const url = URL.createObjectURL(blob);
         card.dataset.mediaUrl = url;
         card.replaceChildren();
         card.classList.remove("encrypted-media-spoiler");
-        if (isText) {
-          const label = document.createElement("div");
-          label.className = "encrypted-media-heading";
+        if (isText || fileMessage && !isVisual) {
+          const row = document.createElement("div");
+          row.className = "file-attachment-row";
+          const mark = document.createElement("span");
+          mark.className = "file-attachment-mark";
+          mark.textContent = isText ? "TXT" : "FILE";
           const copy = document.createElement("div");
-          copy.className = "encrypted-media-heading-copy";
-          const title = document.createElement("strong");
-          title.textContent = filename || "Text file";
-          const meta = document.createElement("span");
-          meta.textContent = `Plaintext · ${textLanguage(filename, mimeType)}${size}`;
-          copy.append(title, meta);
-          label.append(copy);
-          const actions = document.createElement("div");
-          actions.className = "encrypted-media-actions";
-          const preview = document.createElement("button");
-          preview.type = "button";
-          preview.className = "secondary";
-          preview.textContent = "Preview text";
-          preview.addEventListener("click", () => void openTextViewer(blob, filename, mimeType));
-          actions.append(preview);
-          appendDownloadButton(actions, url, filename);
-          card.append(label, actions);
-          void openTextViewer(blob, filename, mimeType);
-        } else if (isImage || isVideo) {
-          const preview = document.createElement(isVideo ? "video" : "img");
-          preview.className = `media-preview${isVideo ? " video" : ""}`;
-          preview.src = url;
-          if (isVideo) {
-            const player = preview as HTMLVideoElement;
-            player.controls = true;
-            player.preload = "metadata";
-          } else {
-            (preview as HTMLImageElement).alt = filename || "Encrypted image";
-            (preview as HTMLImageElement).loading = "eager";
-            preview.addEventListener("click", () => openMediaViewer(blob, filename, false));
-          }
-          const actions = document.createElement("div");
-          actions.className = "encrypted-media-actions";
-          const view = document.createElement("button");
-          view.type = "button";
-          view.className = "secondary";
-          view.textContent = `Open ${isVideo ? "video" : "image"}`;
-          view.addEventListener("click", () => openMediaViewer(blob, filename, isVideo));
-          actions.append(view);
-          appendDownloadButton(actions, url, filename);
-          card.append(preview, actions);
-        } else {
-          const copy = document.createElement("div");
-          copy.className = "encrypted-media-heading-copy";
+          copy.className = "file-attachment-copy";
           const title = document.createElement("strong");
           title.textContent = filename || "Encrypted file";
           const meta = document.createElement("span");
-          meta.textContent = `Encrypted file${size}`;
+          meta.textContent = `${isText ? textLanguage(filename, mimeType) : "File"}${size}`;
           copy.append(title, meta);
           const actions = document.createElement("div");
-          actions.className = "encrypted-media-actions";
+          actions.className = "file-attachment-actions";
+          if (isText) {
+            const preview = document.createElement("button");
+            preview.type = "button";
+            preview.className = "secondary";
+            preview.textContent = "Preview";
+            preview.addEventListener("click", () => void openTextViewer(blob, filename, mimeType));
+            actions.append(preview);
+          }
           appendDownloadButton(actions, url, filename);
-          card.append(copy, actions);
+          row.append(mark, copy, actions);
+          card.append(row);
+          if (openTextAfterLoad && isText) void openTextViewer(blob, filename, mimeType);
+        } else {
+          const preview = document.createElement(isVideo ? "video" : "img");
+          preview.className = `media-preview${isVideo ? " video" : ""}`;
+          preview.src = url;
+          preview.tabIndex = 0;
+          preview.setAttribute("role", "button");
+          preview.setAttribute("aria-label", `Open ${isVideo ? "video" : "image"}${filename ? ` ${filename}` : ""}`);
+          const open = () => void openMediaViewerForCard(card);
+          preview.addEventListener("click", open);
+          preview.addEventListener("keydown", (event) => {
+            const keyboardEvent = event as KeyboardEvent;
+            if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
+            keyboardEvent.preventDefault();
+            open();
+          });
+          if (isVideo) {
+            const player = preview as HTMLVideoElement;
+            player.muted = true;
+            player.playsInline = true;
+            player.preload = "metadata";
+            const playMark = document.createElement("span");
+            playMark.className = "media-play-mark";
+            playMark.setAttribute("aria-hidden", "true");
+            playMark.textContent = "▶";
+            card.append(preview, playMark);
+          } else {
+            (preview as HTMLImageElement).alt = filename || "Encrypted image";
+            (preview as HTMLImageElement).loading = "eager";
+            card.append(preview);
+          }
+          const actions = document.createElement("div");
+          actions.className = "media-card-actions";
+          appendDownloadButton(actions, url, filename);
+          card.append(actions);
         }
         if (preserveLatestPosition) scrollToLatest();
+        return blob;
       } catch (error) {
-        if (!card.isConnected || controller.signal.aborted) return;
+        if (!card.isConnected || requestController.signal.aborted) return undefined;
         loadPromise = undefined;
         renderPending(readableError(error));
+        return undefined;
       } finally {
         pendingMediaLoads.delete(card);
       }
@@ -3465,9 +3685,88 @@ function appendEncryptedMedia(parent: HTMLElement, content: Record<string, unkno
     return loadPromise;
   };
 
+  const controller: MediaCardController = {
+    filename,
+    video: isVideo,
+    spoiler: isSpoiler,
+    isRevealed: () => revealed,
+    reveal: () => {
+      if (revealed) return;
+      revealed = true;
+      renderPending();
+      void loadMedia();
+    },
+    load: () => loadMedia(),
+    get blob() {
+      return loadedBlob;
+    },
+    set blob(value: Blob | undefined) {
+      loadedBlob = value;
+    },
+  };
+  mediaCardControllers.set(card, controller);
   renderPending();
   parent.append(card);
-  if (isImage && revealed) registerAutoMediaLoad(card, () => loadMedia());
+  if (isVisual && revealed) registerAutoMediaLoad(card, async () => { await loadMedia(); });
+  return card;
+}
+
+function collapseMediaAlbums() {
+  const groups = new Map<string, HTMLElement[]>();
+  for (const article of messagesPanel.querySelectorAll<HTMLElement>(".message[data-media-album-id]")) {
+    const albumId = article.dataset.mediaAlbumId;
+    if (!albumId) continue;
+    const group = groups.get(albumId) ?? [];
+    group.push(article);
+    groups.set(albumId, group);
+  }
+
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const ordered = [...group].sort((left, right) => Number(left.dataset.mediaAlbumIndex) - Number(right.dataset.mediaAlbumIndex));
+    const root = ordered.find((article) => !article.classList.contains("media-album-member")) ?? ordered[0];
+    const content = root.querySelector<HTMLElement>(".message-content");
+    const header = content?.querySelector<HTMLElement>(".message-meta");
+    if (!content || !root || !header) continue;
+    let album = content.querySelector<HTMLElement>(":scope > .media-album");
+    if (!album) {
+      album = document.createElement("div");
+      album.className = "media-album";
+      album.dataset.mediaAlbumId = root.dataset.mediaAlbumId ?? "";
+      header.insertAdjacentElement("afterend", album);
+    }
+
+    const filenames: string[] = [];
+    for (const source of ordered) {
+      const messageId = source.dataset.messageId;
+      if (!messageId) continue;
+      const existingTile = [...album.querySelectorAll<HTMLElement>(".media-album-tile")]
+        .find((tile) => tile.dataset.messageId === messageId);
+      const cards = [...source.querySelectorAll<HTMLElement>(".encrypted-media-card")]
+        .filter((card) => card.closest(".media-album") !== album);
+      const card = cards[0];
+      const action = source.querySelector<HTMLElement>(":scope > .message-actions");
+      const tile = existingTile ?? document.createElement("div");
+      tile.className = "media-album-tile";
+      tile.dataset.messageId = messageId;
+      tile.dataset.albumIndex = source.dataset.mediaAlbumIndex ?? "0";
+      if (card && !tile.contains(card)) tile.append(card);
+      if (action && !tile.contains(action)) tile.append(action);
+      if (!existingTile) album.append(tile);
+      const filename = source.querySelector<HTMLElement>(".encrypted-media-card")?.dataset.mediaFilename;
+      if (filename) filenames.push(filename);
+      if (source !== root) {
+        source.classList.add("media-album-member");
+        source.replaceChildren();
+      }
+    }
+    for (const tile of [...album.querySelectorAll<HTMLElement>(":scope > .media-album-tile")]
+      .sort((left, right) => Number(left.dataset.albumIndex) - Number(right.dataset.albumIndex))) {
+      album.append(tile);
+    }
+    root.classList.add("media-album-root");
+    root.dataset.search = [root.dataset.search, ...filenames].filter(Boolean).join(" ");
+  }
 }
 
 function renderMessage(
@@ -3565,6 +3864,7 @@ function renderMessage(
   }
   if (redactedMessageIds.has(message.id)) appendDeletedMessage(messageContent);
   const mediaMessage = content.msgtype === "m.image" || content.msgtype === "m.video" || content.msgtype === "m.file";
+  const mediaAlbum = mediaMessage ? mediaAlbumFromContent(content) : undefined;
   article.classList.toggle("message-emoji-only", !mediaMessage && isEmojiOnlyMessage(body));
   const mentionNames = new Set(selectedMembers.filter((member) => effectiveMentions.includes(member.userId)).map((member) => member.username.toLowerCase()));
   const mentionRoleNames = new Set(effectiveRoleMentions
@@ -3603,7 +3903,12 @@ function renderMessage(
     const fileMessage = content.msgtype === "m.file";
     const video = content.msgtype === "m.video";
     const filename = typeof content.filename === "string" ? content.filename : "";
-    appendEncryptedMedia(messageContent, content, filename, fileMessage, video);
+    if (mediaAlbum && (content.msgtype === "m.image" || content.msgtype === "m.video")) {
+      article.dataset.mediaAlbumId = mediaAlbum.id;
+      article.dataset.mediaAlbumIndex = String(mediaAlbum.index);
+      article.dataset.mediaAlbumTotal = String(mediaAlbum.total);
+    }
+    appendEncryptedMedia(messageContent, content, filename, fileMessage, video, mediaAlbum);
   }
 
   const reply = replyReferenceFromContent(content);
@@ -3707,6 +4012,7 @@ async function renderMessageHistoryInternal(options: { scrollAnchor?: ScrollAnch
     }
     if (offset + batch.length < loadedMessages.length) await yieldToBrowser();
   }
+  collapseMediaAlbums();
   applyMessageSearch();
   if (options.scrollAnchor) {
     restoreScrollAnchor(options.scrollAnchor);
@@ -3772,6 +4078,7 @@ async function appendNewMessagesInternal(messages: MessageEnvelope[], conversati
     }
     if (offset + batch.length < newMessages.length) await yieldToBrowser();
   }
+  collapseMediaAlbums();
   applyMessageSearch();
 }
 
@@ -4069,6 +4376,11 @@ composer.addEventListener("submit", async (event) => {
   let deliveredMessageCount = 0;
   let sentAttachmentCount = 0;
   const failedAttachments: ComposerAttachment[] = [];
+  const albumAttachments = attachmentsToSend.filter((attachment) => {
+    const kind = composerAttachmentKind(attachment.file);
+    return kind === "image" || kind === "video";
+  });
+  const albumId = albumAttachments.length > 1 ? globalThis.crypto.randomUUID() : undefined;
   try {
     if (activeEdit) {
       const embeds = extractEmbeds(text);
@@ -4115,6 +4427,7 @@ composer.addEventListener("submit", async (event) => {
     }
     for (const attachment of attachmentsToSend) {
       if (!stillHere()) break;
+      const albumIndex = albumId ? albumAttachments.indexOf(attachment) : -1;
       attachment.status = "uploading";
       attachment.error = undefined;
       attachment.progress = 0;
@@ -4123,6 +4436,9 @@ composer.addEventListener("submit", async (event) => {
         const result = await activeCryptoClient.sendMedia(conversationId, members, attachment.file, {
           signal: uploadController?.signal,
           spoiler: attachment.spoiler,
+          album: albumId && albumIndex >= 0
+            ? { id: albumId, index: albumIndex, total: albumAttachments.length }
+            : undefined,
           onProgress: (loadedBytes, totalBytes) => {
             if (!stillHere()) return;
             setComposerAttachmentProgress(attachment, loadedBytes, totalBytes);
@@ -4264,6 +4580,14 @@ document.addEventListener("keydown", (event) => {
         (event.shiftKey ? last : first).focus();
       }
     } else if (dialog === mediaViewer && !event.altKey && !event.ctrlKey && !event.metaKey && document.activeElement !== mediaViewerZoom) {
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        void renderMediaViewerItem(mediaViewerIndex - 1);
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        void renderMediaViewerItem(mediaViewerIndex + 1);
+      }
       if (event.key === "+" || event.key === "=") setMediaZoom(Number(mediaViewerZoom.value) + 0.1);
       if (event.key === "-") setMediaZoom(Number(mediaViewerZoom.value) - 0.1);
       if (event.key === "0") setMediaZoom(1);

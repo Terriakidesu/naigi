@@ -602,7 +602,10 @@ export class CryptoClient {
     });
   }
 
-  async sendMedia(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions & { spoiler?: boolean } = {}) {
+  async sendMedia(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions & {
+    spoiler?: boolean;
+    album?: { id: string; index: number; total: number };
+  } = {}) {
     options.signal?.throwIfAborted();
     const compressed = await prepareMedia(file);
     options.signal?.throwIfAborted();
@@ -643,13 +646,17 @@ export class CryptoClient {
         },
         file: mediaFile,
         ...(options.spoiler ? { spoiler: true } : {}),
+        ...(options.album ? { album: options.album } : {}),
       }, attachment.attachment.id);
     } finally {
       encrypted.free();
     }
   }
 
-  async sendPhoto(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions & { spoiler?: boolean } = {}) {
+  async sendPhoto(conversationId: string, members: ConversationMember[], file: File, options: UploadOptions & {
+    spoiler?: boolean;
+    album?: { id: string; index: number; total: number };
+  } = {}) {
     return this.sendMedia(conversationId, members, file, options);
   }
 

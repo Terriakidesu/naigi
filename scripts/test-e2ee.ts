@@ -216,27 +216,36 @@ try {
   await a.locator("#clear-attachment").click();
   await a.locator("#photo-input").setInputFiles([
     { name: "pixel.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) },
+    { name: "second-pixel.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) },
     { name: "example.ts", mimeType: "text/plain", buffer: Buffer.from("const answer = 42;\n") },
   ]);
-  assert.equal(await a.locator(".attachment-item").count(), 2);
+  assert.equal(await a.locator(".attachment-item").count(), 3);
   await a.locator("#send-button").click();
-  const imageMessage = b.locator(".message").filter({ hasText: "pixel.png" }).last();
-  await imageMessage.waitFor({ timeout: 20_000 });
-  await imageMessage.locator(".media-preview").waitFor({ timeout: 20_000 });
-  assert.equal(await imageMessage.locator('a[download="pixel.png"]').count(), 1);
+  const mediaAlbum = b.locator(".media-album").last();
+  await mediaAlbum.waitFor({ timeout: 20_000 });
+  await mediaAlbum.locator(".media-preview").first().waitFor({ timeout: 20_000 });
+  assert.equal(await mediaAlbum.locator(".media-album-tile").count(), 2);
+  assert.equal(await mediaAlbum.locator(".media-preview").count(), 2);
+  assert.equal(await mediaAlbum.locator("a[download]").count(), 2);
+  await mediaAlbum.locator(".media-preview").first().click();
+  await b.locator("#media-viewer").waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(await b.locator("#media-viewer-count").textContent(), "1 / 2");
+  await b.locator("#media-viewer-next").click();
+  assert.equal(await b.locator("#media-viewer-count").textContent(), "2 / 2");
+  await b.locator("#media-viewer-close").click();
   const sourceMessage = b.locator(".message").filter({ hasText: "example.ts" }).last();
   await sourceMessage.waitFor({ timeout: 20_000 });
-  await sourceMessage.getByRole("button", { name: "Preview text", exact: true }).click();
+  await sourceMessage.getByRole("button", { name: "Preview", exact: true }).click();
   await b.locator(".text-file-viewer").filter({ hasText: "const answer = 42;" }).waitFor({ timeout: 20_000 });
   await b.locator("#media-viewer-close").click();
   await a.locator("#photo-input").setInputFiles({ name: "spoiler.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) });
   await a.locator(".attachment-item input[type=checkbox]").check();
   await a.locator("#send-button").click();
-  const spoilerMessage = b.locator(".message").filter({ hasText: "Reveal image spoiler" }).last();
+  const spoilerMessage = b.locator(".message:has(.media-spoiler-cover)").last();
   await spoilerMessage.waitFor({ timeout: 20_000 });
   assert.equal(await spoilerMessage.locator(".media-preview").count(), 0);
-  await spoilerMessage.getByRole("button", { name: "Reveal image spoiler", exact: true }).click();
-  await b.locator(".message").filter({ hasText: "spoiler.png" }).last().locator(".media-preview").waitFor({ timeout: 20_000 });
+  await spoilerMessage.locator(".media-spoiler-cover").click();
+  await b.locator(".message .media-preview").last().waitFor({ timeout: 20_000 });
   await b.locator("#messages").evaluate((element) => { element.scrollTop = element.scrollHeight; });
   const mentionPrefix = users[1].username.slice(0, -1);
   await a.locator("#message-input").fill(`@${mentionPrefix}`);
