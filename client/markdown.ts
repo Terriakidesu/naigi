@@ -10,6 +10,13 @@ export type MarkdownBlock =
   | { kind: "paragraph" | "heading" | "quote" | "unordered-list" | "ordered-list"; value: string | string[]; level?: number }
   | { kind: "code-block"; value: string; language?: string };
 
+export type MarkdownRenderOptions = {
+  mentionUsernames?: Set<string>;
+  mentionRoleNames?: Set<string>;
+  roomReferences?: Map<string, string>;
+  onRoomReference?: (channelId: string) => void;
+};
+
 function safeLinkUrl(value: string) {
   try {
     const url = new URL(value);
@@ -138,13 +145,17 @@ function appendTextChunk(parent: HTMLElement, value: string) {
   });
 }
 
-function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<string>, mentionRoleNames?: Set<string>) {
+function appendText(parent: HTMLElement, value: string, options: MarkdownRenderOptions = {}) {
   const pattern = /@&([A-Za-z0-9_.-]+)|@([A-Za-z0-9_.-]+)/g;
+  const roomPattern = /(^|[^A-Za-z0-9_.-])#([A-Za-z0-9_.-]+)/g;
   let offset = 0;
   while (offset < value.length) {
     pattern.lastIndex = offset;
+    roomPattern.lastIndex = offset;
     const mentionMatch = pattern.exec(value);
+    const roomMatch = roomPattern.exec(value);
     const mentionIndex = mentionMatch?.index ?? Number.POSITIVE_INFINITY;
+    const roomIndex = roomMatch ? (roomMatch.index ?? offset) + roomMatch[1].length : Number.POSITIVE_INFINITY;
     let emojiIndex = Number.POSITIVE_INFINITY;
     let emojiMatch: ReturnType<typeof emojiEntryAt> = undefined;
     for (let index = offset; index < value.length; index += Math.max(1, value.codePointAt(index)! > 0xffff ? 2 : 1)) {
@@ -155,7 +166,7 @@ function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<s
         break;
       }
     }
-    if (emojiMatch && emojiIndex < mentionIndex) {
+    if (emojiMatch && emojiIndex < mentionIndex && emojiIndex < roomIndex) {
       appendTextChunk(parent, value.slice(offset, emojiIndex));
       const image = document.createElement("img");
       image.className = "twemoji inline-twemoji";
@@ -167,12 +178,12 @@ function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<s
       offset = emojiIndex + emojiMatch.text.length;
       continue;
     }
-    if (mentionMatch) {
+    if (mentionMatch && mentionIndex <= roomIndex) {
       const index = mentionMatch.index ?? offset;
       appendTextChunk(parent, value.slice(offset, index));
       const roleName = mentionMatch[1]?.toLowerCase();
       const username = mentionMatch[2]?.toLowerCase();
-      if ((roleName && mentionRoleNames?.has(roleName)) || (username && mentionUsernames?.has(username))) {
+      if ((roleName && options.mentionRoleNames?.has(roleName)) || (username && options.mentionUsernames?.has(username))) {
         const mention = document.createElement("span");
         mention.className = roleName ? "role-mention" : "user-mention";
         mention.textContent = mentionMatch[0];
@@ -183,15 +194,36 @@ function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<s
       offset = index + mentionMatch[0].length;
       continue;
     }
+    if (roomMatch) {
+      const index = roomIndex;
+      const slug = roomMatch[2].toLowerCase();
+      const token = `#${roomMatch[2]}`;
+      appendTextChunk(parent, value.slice(offset, index));
+      const channelId = options.roomReferences?.get(slug);
+      if (channelId && options.onRoomReference) {
+        const room = document.createElement("button");
+        room.type = "button";
+        room.className = "room-reference";
+        room.textContent = token;
+        room.title = `Open ${token}`;
+        room.setAttribute("aria-label", `Open ${token}`);
+        room.addEventListener("click", () => options.onRoomReference?.(channelId));
+        parent.append(room);
+      } else {
+        parent.append(document.createTextNode(token));
+      }
+      offset = index + token.length;
+      continue;
+    }
     appendTextChunk(parent, value.slice(offset));
     break;
   }
 }
 
-function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set<string>, mentionRoleNames?: Set<string>) {
+function appendInline(parent: HTMLElement, value: string, options: MarkdownRenderOptions = {}) {
   for (const token of parseInlineMarkdown(value)) {
     if (token.kind === "text") {
-      appendText(parent, token.value, mentionUsernames, mentionRoleNames);
+      appendText(parent, token.value, options);
       continue;
     }
     if (token.kind === "link") {
@@ -200,7 +232,7 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
       link.target = "_blank";
       link.rel = "noreferrer noopener nofollow";
       guardExternalLink(link, token.url);
-      appendText(link, token.label, mentionUsernames, mentionRoleNames);
+      appendText(link, token.label, options);
       parent.append(link);
       continue;
     }
@@ -210,7 +242,7 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
       spoiler.tabIndex = 0;
       spoiler.setAttribute("role", "button");
       spoiler.setAttribute("aria-label", "Reveal spoiler");
-      appendText(spoiler, token.value, mentionUsernames, mentionRoleNames);
+      appendText(spoiler, token.value, options);
       const reveal = () => {
         spoiler.classList.toggle("revealed");
         spoiler.setAttribute("aria-label", spoiler.classList.contains("revealed") ? "Hide spoiler" : "Reveal spoiler");
@@ -227,12 +259,12 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
     }
     const element = document.createElement(token.kind === "strong" ? "strong" : token.kind === "emphasis" ? "em" : token.kind === "strike" ? "del" : "code");
     if (token.kind === "code") element.textContent = token.value;
-    else appendText(element, token.value, mentionUsernames, mentionRoleNames);
+    else appendText(element, token.value, options);
     parent.append(element);
   }
 }
 
-export function appendMarkdown(parent: HTMLElement, value: string, options: { mentionUsernames?: Set<string>; mentionRoleNames?: Set<string> } = {}) {
+export function appendMarkdown(parent: HTMLElement, value: string, options: MarkdownRenderOptions = {}) {
   const markdown = document.createElement("div");
   markdown.className = "markdown-body";
   for (const block of parseMarkdown(value)) {
@@ -247,13 +279,13 @@ export function appendMarkdown(parent: HTMLElement, value: string, options: { me
     }
     if (block.kind === "heading") {
       const heading = document.createElement(block.level && block.level <= 2 ? "h3" : "h4");
-      appendInline(heading, block.value as string, options.mentionUsernames, options.mentionRoleNames);
+      appendInline(heading, block.value as string, options);
       markdown.append(heading);
       continue;
     }
     if (block.kind === "quote") {
       const quote = document.createElement("blockquote");
-      appendInline(quote, (block.value as string[]).join("\n"), options.mentionUsernames, options.mentionRoleNames);
+      appendInline(quote, (block.value as string[]).join("\n"), options);
       markdown.append(quote);
       continue;
     }
@@ -261,14 +293,14 @@ export function appendMarkdown(parent: HTMLElement, value: string, options: { me
       const list = document.createElement(block.kind === "unordered-list" ? "ul" : "ol");
       for (const item of block.value as string[]) {
         const listItem = document.createElement("li");
-         appendInline(listItem, item, options.mentionUsernames, options.mentionRoleNames);
+         appendInline(listItem, item, options);
         list.append(listItem);
       }
       markdown.append(list);
       continue;
     }
     const paragraph = document.createElement("p");
-    appendInline(paragraph, block.value as string, options.mentionUsernames, options.mentionRoleNames);
+    appendInline(paragraph, block.value as string, options);
     markdown.append(paragraph);
   }
   parent.append(markdown);

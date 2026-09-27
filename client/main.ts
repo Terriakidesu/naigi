@@ -29,6 +29,7 @@ import { appendMarkdown } from "./markdown";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { isEmojiOnlyMessage } from "./message-format";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
+import { roomReferenceSlug, roomReferenceToken } from "./room-reference";
 import { isPlaintextAttachment, readTextPreview, textLanguage } from "./text-file";
 import { confirmLocalUnlock, lockLocalSession, resolveLocalPassphrase } from "./unlock-vault";
 import { iconElement, renderIcons } from "./icons";
@@ -685,7 +686,12 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
     .map((roleId) => serverRoles.find((role) => role.id === roleId))
     .filter((role): role is CustomServerRole => role !== undefined && role.systemKey !== "owner")
     .map(serverRoleSlug));
-  if (body) appendMarkdown(content, body, { mentionUsernames: mentionNames, mentionRoleNames });
+  if (body) appendMarkdown(content, body, {
+    mentionUsernames: mentionNames,
+    mentionRoleNames,
+    roomReferences: roomReferenceMap(),
+    onRoomReference: (channelId) => void selectChannel(channelId),
+  });
   for (const embed of embeds) appendSafeEmbed(content, embed);
   article.classList.toggle("message-emoji-only", isEmojiOnlyMessage(body));
   if (reply) article.insertBefore(reply, article.querySelector(".message-avatar") ?? content);
@@ -1218,6 +1224,15 @@ function blockedSpecialMentions(body: string) {
 function mentionToken() {
   const cursor = messageInput.selectionStart ?? messageInput.value.length;
   const before = messageInput.value.slice(0, cursor);
+  const roomMatch = roomReferenceToken(messageInput.value, cursor);
+  if (roomMatch) {
+    return {
+      kind: "room" as const,
+      query: roomMatch.query,
+      start: roomMatch.start,
+      end: roomMatch.end,
+    };
+  }
   const roleMatch = before.match(/(^|\s)@&([A-Za-z0-9_.-]*)$/);
   if (roleMatch) {
     return {
@@ -1452,34 +1467,45 @@ function renderMentionSuggestions() {
     hideMentionSuggestions();
     return;
   }
-  const candidates = token.kind === "role"
-    ? (selectedServerId && hasActiveServerPermission("mention_roles") ? serverRoles : [])
-      .filter((role) => role.mentionable && role.systemKey !== "owner")
-      .filter((role) => !token.query || serverRoleSlug(role).startsWith(token.query))
+  const candidates = token.kind === "room"
+    ? channels
+      .filter((channel) => channel.canView !== false)
+      .filter((channel) => !token.query || roomMentionSlug(channel).startsWith(token.query))
+      .filter((channel, index, visible) => visible.findIndex((candidate) => roomMentionSlug(candidate) === roomMentionSlug(channel)) === index)
       .slice(0, 8)
-    : selectedMembers
-      .filter((member) => !token.query || member.username.toLowerCase().startsWith(token.query))
-      .slice(0, 8);
+    : token.kind === "role"
+      ? (selectedServerId && hasActiveServerPermission("mention_roles") ? serverRoles : [])
+        .filter((role) => role.mentionable && role.systemKey !== "owner")
+        .filter((role) => !token.query || serverRoleSlug(role).startsWith(token.query))
+        .slice(0, 8)
+      : selectedMembers
+        .filter((member) => !token.query || member.username.toLowerCase().startsWith(token.query))
+        .slice(0, 8);
   activeSuggestionIndex = -1;
   mentionSuggestions.replaceChildren();
   if (candidates.length === 0) {
     hideMentionSuggestions();
     return;
   }
+  mentionSuggestions.setAttribute("aria-label", token.kind === "room" ? "Room suggestions" : "Mention suggestions");
   for (const candidate of candidates) {
     const option = document.createElement("button");
     option.type = "button";
     option.className = "mention-suggestion";
     option.setAttribute("role", "option");
     option.setAttribute("aria-selected", "false");
-    option.textContent = token.kind === "role"
-      ? `@&${serverRoleSlug(candidate as CustomServerRole)} · ${serverRoleName(candidate as CustomServerRole)}`
-      : `@${(candidate as ConversationMember).username} · ${(candidate as ConversationMember).displayName || (candidate as ConversationMember).username}`;
+    option.textContent = token.kind === "room"
+      ? `#${roomMentionSlug(candidate as ServerChannel)} · ${channelDisplayName(candidate as ServerChannel)}`
+      : token.kind === "role"
+        ? `@&${serverRoleSlug(candidate as CustomServerRole)} · ${serverRoleName(candidate as CustomServerRole)}`
+        : `@${(candidate as ConversationMember).username} · ${(candidate as ConversationMember).displayName || (candidate as ConversationMember).username}`;
     option.addEventListener("mousedown", (event) => event.preventDefault());
     option.addEventListener("click", () => {
-      const replacement = token.kind === "role"
-        ? `@&${serverRoleSlug(candidate as CustomServerRole)} `
-        : `@${(candidate as ConversationMember).username} `;
+      const replacement = token.kind === "room"
+        ? `#${roomMentionSlug(candidate as ServerChannel)} `
+        : token.kind === "role"
+          ? `@&${serverRoleSlug(candidate as CustomServerRole)} `
+          : `@${(candidate as ConversationMember).username} `;
       messageInput.value = `${messageInput.value.slice(0, token.start)}${replacement}${messageInput.value.slice(token.end)}`;
       const nextCursor = token.start + replacement.length;
       messageInput.setSelectionRange(nextCursor, nextCursor);
@@ -2098,6 +2124,19 @@ function channelDisplayName(channel: ServerChannel) {
   return channelLabels.get(channel.id) || (channel.position === 0 ? "lobby" : `room-${channel.position + 1}`);
 }
 
+function roomMentionSlug(channel: ServerChannel) {
+  return roomReferenceSlug(channelDisplayName(channel), `room-${channel.position + 1}`);
+}
+
+function roomReferenceMap() {
+  const references = new Map<string, string>();
+  for (const channel of channels) {
+    const slug = roomMentionSlug(channel);
+    if (!references.has(slug)) references.set(slug, channel.id);
+  }
+  return references;
+}
+
 function categoryDisplayName(category: ServerCategory) {
   const index = categories.findIndex((item) => item.id === category.id);
   return categoryLabels.get(category.id) || `Category ${index + 1}`;
@@ -2506,7 +2545,10 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
     renderServers();
     const requested = requestedChannelId && channels.find((channel) => channel.id === requestedChannelId);
     const channel = requested ?? channels[0];
-    if (channel) await selectChannel(channel.id);
+    if (channel) {
+      await selectChannel(channel.id);
+      void hydrateChannelLabels(serverId, channels.slice(), token);
+    }
     else {
       conversationTitle.textContent = serverNameForId(serverId);
       conversationSubtitle.textContent = "Create an encrypted room to start chatting";
@@ -2525,6 +2567,43 @@ async function selectChannel(channelId: string) {
   if (!channel) return;
   selectedChannelId = channel.id;
   await selectConversation(channel.conversationId, channel);
+}
+
+async function hydrateChannelLabels(serverId: string, snapshot: ServerChannel[], token: number) {
+  const activeCrypto = cryptoClient;
+  if (!activeCrypto || selectedServerId !== serverId) return;
+  const targets = snapshot.filter((channel) => channel.encryptedMetadata && !channelLabels.has(channel.id));
+  if (targets.length === 0) return;
+  const prepared = (await Promise.all(targets.map(async (channel) => {
+    try {
+      const members = (await api.conversationMembers(channel.conversationId)).members;
+      await activeCrypto.prepareConversation(channel.conversationId, members);
+      return channel;
+    } catch {
+      return undefined;
+    }
+  }))).filter((channel): channel is ServerChannel => Boolean(channel));
+  if (serverSelectionToken !== token || selectedServerId !== serverId || cryptoClient !== activeCrypto || prepared.length === 0) return;
+  await activeCrypto.syncToDevice().catch(() => undefined);
+  const metadata = await Promise.all(prepared.map(async (channel) => {
+    try {
+      return await activeCrypto.decryptMetadata(channel.conversationId, channel.encryptedMetadata);
+    } catch {
+      return undefined;
+    }
+  }));
+  if (serverSelectionToken !== token || selectedServerId !== serverId || cryptoClient !== activeCrypto) return;
+  for (const [index, value] of metadata.entries()) {
+    if (typeof value?.name === "string" && value.name.trim()) {
+      channelLabels.set(prepared[index].id, value.name.trim().slice(0, 80));
+    }
+  }
+  const scrollAnchor = captureScrollAnchor();
+  renderChannels();
+  renderInputSuggestions();
+  if (loadedMessages.length > 0) {
+    await renderMessageHistory({ scrollAnchor: scrollAnchor ?? undefined, scrollToBottom: false });
+  }
 }
 
 async function openDirectMessage(conversationId: string) {
@@ -3910,7 +3989,12 @@ function renderMessage(
     }
   }
   if (!redactedMessageIds.has(message.id) && (!mediaMessage || body) && (content.msgtype === "m.text" || content.msgtype === "m.notice" || body)) {
-    appendMarkdown(messageContent, body, { mentionUsernames: mentionNames, mentionRoleNames });
+    appendMarkdown(messageContent, body, {
+      mentionUsernames: mentionNames,
+      mentionRoleNames,
+      roomReferences: roomReferenceMap(),
+      onRoomReference: (channelId) => void selectChannel(channelId),
+    });
     for (const embed of effectiveEmbeds) appendSafeEmbed(messageContent, embed);
   }
   if (edited) {

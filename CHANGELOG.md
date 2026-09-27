@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Added
+
+- Room autocomplete now recognizes `#room` references in encrypted conversations, with room labels hydrated locally and clickable references that open the room.
 
 ## [0.12.0] - 2026-09-27
 

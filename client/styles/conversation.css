@@ -57,6 +57,8 @@
 .markdown-body a:hover { color: #d5e0dc; }
 .user-mention, .role-mention { padding: 0 0.15rem; border-radius: 4px; color: #d1dfdb; background: rgba(146, 170, 165, 0.24); font-weight: 650; }
 .role-mention { color: #c9d6d1; background: rgba(150, 160, 130, 0.24); }
+.room-reference { padding: 0 0.15rem; border: 0; border-radius: 4px; color: #cbd8e6; background: rgba(127, 160, 173, 0.24); font: inherit; font-weight: 650; cursor: pointer; }
+.room-reference:hover, .room-reference:focus-visible { color: #e1ebf4; background: rgba(127, 160, 173, 0.4); }
 .message-mention { background: rgba(146, 170, 165, 0.1); box-shadow: inset 3px 0 0 var(--accent); }
 .encrypted-media-card { position: relative; overflow: hidden; margin-top: 0.45rem; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--bg-elevated); }
 .media-attachment-card { width: min(100%, 520px); aspect-ratio: 4 / 3; background: #11171a; }
