@@ -91,6 +91,8 @@
   .media-zoom-control input { width: min(72px, 18vw); }
   .media-viewer-toolbar { padding: 0.5rem; }
   .media-viewer-toolbar strong { font-size: 0.72rem; }
+  .message-meta { padding-right: 2.75rem; }
+  .reply-context { padding-right: 2.75rem; }
 }
 
 @media (hover: none), (pointer: coarse), (max-width: 760px) {

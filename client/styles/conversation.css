@@ -25,7 +25,7 @@
 .message-avatar { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 11px; color: #fff; background: var(--avatar-color, #3f6870); font-size: 0.9rem; font-weight: 700; }
 .message-compact .message-avatar { height: 0; visibility: hidden; }
 .message-content { min-width: 0; }
-.message-meta { display: flex; align-items: baseline; gap: 0.5rem; margin: 0 0 0.22rem; overflow-wrap: anywhere; color: var(--text-muted); font-size: 0.73rem; }
+.message-meta { display: flex; align-items: baseline; gap: 0.5rem; margin: 0 0 0.22rem; padding-right: 8.5rem; overflow-wrap: anywhere; color: var(--text-muted); font-size: 0.73rem; }
 .message-meta strong, .message-sender-link { color: var(--role-color, var(--text)); font-size: 0.82rem; }
 .message-sender-link { padding: 0; border-radius: 2px; background: transparent; font-weight: 700; }
 .message-sender-link:hover { color: var(--accent-hover); background: transparent; }
@@ -68,13 +68,13 @@
 .spoiler.revealed .inline-twemoji { visibility: visible; }
 .spoiler:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .message > .message-content > button { margin-top: 0.55rem; }
-.reply-context { display: flex; grid-column: 1 / -1; align-items: center; gap: 0.4rem; width: min(100%, 620px); max-width: 100%; margin: 0 0 0.35rem; overflow: hidden; padding: 0.38rem 0.55rem; border-left: 3px solid var(--accent); border-radius: 5px; color: var(--text-muted); background: rgba(146, 170, 165, 0.09); font-size: 0.72rem; text-align: left; white-space: nowrap; }
+.reply-context { display: flex; grid-column: 1 / -1; align-items: center; gap: 0.4rem; width: min(100%, 620px); max-width: 100%; margin: 0 0 0.35rem; overflow: hidden; padding: 0.38rem 8.5rem 0.38rem 0.55rem; border-left: 3px solid var(--accent); border-radius: 5px; color: var(--text-muted); background: rgba(146, 170, 165, 0.09); font-size: 0.72rem; text-align: left; white-space: nowrap; }
 .reply-context > svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--accent); }
 .reply-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reply-context:hover { color: var(--text); background: rgba(146, 170, 165, 0.17); }
 .edit-preview { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; min-width: 0; padding: 0.45rem 0.55rem 0.45rem 0.7rem; border-left: 3px solid #a8a47e; border-radius: 4px; color: #c4c9b3; background: rgba(168, 164, 126, 0.09); font-size: 0.7rem; }
 .edit-preview span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.message-actions { display: flex; grid-column: 1 / -1; align-items: center; justify-content: flex-end; gap: 0.2rem; min-height: 1.65rem; margin: -0.35rem -0.05rem 0.3rem; padding: 0; opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.message-actions { position: absolute; z-index: 2; top: 0.35rem; right: 0.55rem; display: flex; align-items: center; justify-content: flex-end; gap: 0.2rem; margin: 0; padding: 0.15rem; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg-elevated); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22); opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
 .message:hover .message-actions, .message:focus-within .message-actions, .message-actions-open .message-actions { opacity: 1; pointer-events: auto; }
 .message-action { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.2rem 0.35rem; border-radius: 3px; color: var(--text-faint); background: transparent; font-size: 0.65rem; }
 .message-action > svg { width: 0.85rem; height: 0.85rem; }
@@ -82,6 +82,8 @@
 .message-delete-action { color: #ffb3b5; }
 .message-delete-action:hover { color: #fff; background: rgba(242, 63, 66, 0.3); }
 .message-action-menu { display: grid; min-width: 32px; min-height: 28px; font-size: 1.25rem; line-height: 0.6; }
+.message-compact .message-actions { top: 0.1rem; right: auto; left: 0.65rem; }
+.message-compact .message-actions .message-action:not(.message-action-menu) { display: none; }
 .message-reactions { display: flex; flex-wrap: wrap; gap: 0.28rem; margin-top: 0.5rem; }
 .message-reaction { display: inline-flex; align-items: center; gap: 0.25rem; min-height: 28px; padding: 0.18rem 0.42rem; border: 1px solid var(--line-soft); border-radius: 8px; color: var(--text-muted); background: rgba(28, 42, 53, 0.72); font-size: 0.7rem; }
 .message-reaction:hover, .message-reaction[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 85%, transparent); color: var(--text); background: rgba(146, 170, 165, 0.2); }
