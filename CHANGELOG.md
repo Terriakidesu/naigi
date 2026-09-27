@@ -5,6 +5,7 @@
 ### Changed
 
 - Composer input now renders Unicode emoji with the bundled Twemoji artwork instead of platform emoji glyphs while preserving normal text editing and sending behavior.
+- Composer focus styling now highlights the complete input container instead of outlining only the textarea.
 
 Released versions are maintained as one Markdown file per version under
 [`docs/changelogs/`](docs/changelogs/).

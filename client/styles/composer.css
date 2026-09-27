@@ -27,7 +27,7 @@
 .composer textarea { position: relative; z-index: 1; display: block; min-height: 25px; max-height: 180px; resize: none; padding: 0.15rem 0; border: 0; color: transparent; overflow-wrap: anywhere; word-break: break-word; -webkit-text-fill-color: transparent; caret-color: var(--text); background: transparent; line-height: 1.4; }
 .composer textarea::placeholder { color: transparent; -webkit-text-fill-color: transparent; }
 .composer textarea::selection { color: transparent; background: rgba(146, 170, 165, 0.3); }
-.composer textarea:focus { border: 0; }
+.composer textarea:focus, .composer textarea:focus-visible { border: 0; outline: none; }
 .composer textarea:disabled { cursor: not-allowed; opacity: 0.6; }
 .composer-icon-button { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; padding: 0; border-radius: 8px; color: var(--text-muted); background: transparent; font-size: 1.1rem; }
 .composer-icon-button:hover, .composer-icon-button[aria-expanded="true"] { color: var(--text); background: var(--bg-active); }
