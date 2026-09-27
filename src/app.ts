@@ -426,25 +426,6 @@ export function createApp() {
         newPassword: t.String({ minLength: 12, maxLength: 128 }),
       }),
     })
-    .get("/v1/users/search", async ({ headers, query, set }) => {
-      const user = await authenticate(headers.authorization, headers.cookie);
-      if (!user) return respondError(set, 401, "unauthorized");
-
-      const search = query.q.trim();
-      if (search.length < 2) return { users: [] };
-      const pattern = `%${search.toLowerCase()}%`;
-      const users = await db<UserRow[]>`
-        select id, username, display_name, created_at
-        from users
-        where id <> ${user.id}
-          and (username_normalized like ${pattern} or lower(display_name) like ${pattern})
-        order by lower(display_name), username_normalized
-        limit 20
-      `;
-      return { users: users.map(toPublicUser) };
-    }, {
-      query: t.Object({ q: t.String({ maxLength: 80 }) }),
-    })
     .get("/v1/users/:userId", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
@@ -632,6 +613,30 @@ export function createApp() {
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }) }),
       body: t.Object({ encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })) }),
+    })
+    .delete("/v1/servers/:serverId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const membership = await serverMembership(params.serverId, user.id);
+      if (!membership) return respondError(set, 404, "server_not_found");
+      if (membership.role !== "owner") return respondError(set, 403, "only_server_owner_can_delete");
+
+      const attachments = await db<{ storage_key: string }[]>`
+        select a.storage_key
+        from attachments a
+        join channels c on c.conversation_id = a.conversation_id
+        where c.server_id = ${params.serverId}
+      `;
+      const [deleted] = await db<{ id: string }[]>`
+        delete from servers
+        where id = ${params.serverId} and owner_id = ${user.id}
+        returning id
+      `;
+      if (!deleted) return respondError(set, 404, "server_not_found");
+      await Promise.all(attachments.map((attachment) => removeEncryptedAttachment(attachment.storage_key)));
+      return { deleted: true };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
     })
     .get("/v1/servers/:serverId/channels", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -1495,7 +1500,7 @@ export function createApp() {
             insert into crypto_devices (device_id, user_id, matrix_user_id, device_keys, fallback_keys)
             values (
               ${deviceId}, ${user.id}, ${upload.deviceKeys.user_id},
-              ${JSON.stringify(upload.deviceKeys)}::jsonb, ${JSON.stringify(upload.fallbackKeys)}::jsonb
+              ${upload.deviceKeys}::jsonb, ${upload.fallbackKeys}::jsonb
             )
             on conflict (device_id) do update set
               device_keys = excluded.device_keys,
@@ -1514,7 +1519,7 @@ export function createApp() {
         for (const [keyId, key] of Object.entries(upload.oneTimeKeys)) {
           await transaction`
             insert into crypto_one_time_keys (device_id, key_id, key_json)
-            values (${deviceId}, ${keyId}, ${JSON.stringify(key)}::jsonb)
+            values (${deviceId}, ${keyId}, ${key}::jsonb)
             on conflict (device_id, key_id) do update set
               key_json = excluded.key_json
             where crypto_one_time_keys.claimed_at is null
@@ -1524,7 +1529,7 @@ export function createApp() {
         for (const [keyId, key] of Object.entries(upload.fallbackKeys)) {
           await transaction`
             insert into crypto_fallback_keys (device_id, key_id, key_json)
-            values (${deviceId}, ${keyId}, ${JSON.stringify(key)}::jsonb)
+            values (${deviceId}, ${keyId}, ${key}::jsonb)
             on conflict (device_id, key_id) do update set
               key_json = excluded.key_json
             where crypto_fallback_keys.used_at is null
@@ -1570,7 +1575,10 @@ export function createApp() {
           if (allowed.size > 0 && !allowed.has(row.device_id)) continue;
           selected[row.device_id] = row.device_keys;
         }
-        if (Object.keys(selected).length > 0) deviceKeys[requestedUserId] = selected;
+        // An empty device map is a successful response for a user who has
+        // not registered a crypto device yet. Omitting the user leaves the
+        // Matrix key-query state dirty and causes the client to retry forever.
+        deviceKeys[requestedUserId] = selected;
       }
 
       return { device_keys: deviceKeys, failures: {} };
@@ -1676,7 +1684,7 @@ export function createApp() {
               )
               values (
                 ${params.eventType}, ${params.transactionId}, ${matrixUserId(user.id)},
-                ${deviceId}, ${JSON.stringify(content)}::jsonb
+                ${deviceId}, ${content}::jsonb
               )
               on conflict (event_type, transaction_id, sender_user_id, recipient_device_id) do nothing
             `;
@@ -1782,6 +1790,23 @@ export function createApp() {
           `;
       if (existingUsers.length !== memberIds.length) return respondError(set, 400, "unknown_member");
 
+      // Private conversations are addressable only through an existing trust
+      // boundary. A caller cannot use a guessed user id to create a room with
+      // an unrelated account; every invitee must share an active server with
+      // the creator.
+      const sharedMembers = memberIds.length === 0
+        ? []
+        : await db<{ user_id: string }[]>`
+            select distinct target.user_id
+            from server_members mine
+            join server_members target on target.server_id = mine.server_id
+              and target.left_at is null
+            where mine.user_id = ${user.id}
+              and mine.left_at is null
+              and target.user_id in ${db(memberIds)}
+          `;
+      if (sharedMembers.length !== memberIds.length) return respondError(set, 403, "conversation_member_not_shared");
+
       let metadata: Buffer;
       try {
         metadata = body.encryptedMetadata
@@ -1793,6 +1818,36 @@ export function createApp() {
       }
 
       const conversation = await db.begin(async (transaction) => {
+        if (body.kind === "dm") {
+          const otherUserId = memberIds[0];
+          const pairKey = [user.id, otherUserId].sort().join(":");
+          // Serialize creation for a pair so two tabs cannot create duplicate
+          // direct-message rooms at the same time.
+          await transaction`select pg_advisory_xact_lock(hashtextextended(${pairKey}, 0))`;
+          const [existing] = await transaction<{ id: string; created_at: Date; left_at: Date | null }[]>`
+            select c.id, c.created_at, mine.left_at
+            from conversations c
+            join conversation_members mine
+              on mine.conversation_id = c.id and mine.user_id = ${user.id}
+            join conversation_members other_member
+              on other_member.conversation_id = c.id and other_member.user_id = ${otherUserId}
+            where c.kind = 'dm' and other_member.left_at is null
+            order by c.created_at asc, c.id asc
+            limit 1
+            for update of c
+          `;
+          if (existing) {
+            if (existing.left_at) {
+              await transaction`
+                update conversation_members
+                set left_at = null, joined_at = now(), role = 'member'
+                where conversation_id = ${existing.id} and user_id = ${user.id}
+              `;
+            }
+            return { id: existing.id, kind: "dm", created_at: existing.created_at, reused: true };
+          }
+        }
+
         const [created] = await transaction<{ id: string; kind: string; created_at: Date }[]>`
           insert into conversations (kind, encrypted_metadata, created_by)
           values (${body.kind}, ${metadata}, ${user.id})
@@ -1810,11 +1865,11 @@ export function createApp() {
           `;
         }
 
-        return created;
+        return { ...created, reused: false };
       });
 
-      set.status = 201;
-      return { conversation };
+      set.status = conversation.reused ? 200 : 201;
+      return { conversation: { id: conversation.id, kind: conversation.kind, createdAt: conversation.created_at } };
     }, {
       body: t.Object({
         kind: t.Union([t.Literal("dm"), t.Literal("group")]),
@@ -1841,11 +1896,26 @@ export function createApp() {
           ) as member_display_names
         from conversations c
         join conversation_members m on m.conversation_id = c.id
-        join conversation_members other_member on other_member.conversation_id = c.id and other_member.left_at is null
+        join conversation_members other_member on other_member.conversation_id = c.id
+          and other_member.user_id <> ${user.id} and other_member.left_at is null
         join users other_user on other_user.id = other_member.user_id
         where m.user_id = ${user.id} and m.left_at is null
           and not exists (
             select 1 from channels channel_filter where channel_filter.conversation_id = c.id
+          )
+          and not (
+            c.kind = 'dm' and exists (
+              select 1
+              from conversations older
+              join conversation_members older_mine
+                on older_mine.conversation_id = older.id
+                and older_mine.user_id = ${user.id} and older_mine.left_at is null
+              join conversation_members older_other
+                on older_other.conversation_id = older.id
+                and older_other.user_id = other_member.user_id and older_other.left_at is null
+              where older.kind = 'dm'
+                and (older.created_at, older.id) < (c.created_at, c.id)
+            )
           )
         group by c.id, c.kind, c.encrypted_metadata, c.created_at
         order by c.created_at desc
@@ -1886,6 +1956,28 @@ export function createApp() {
           displayName: member.display_name,
         })),
       };
+    }, {
+      params: t.Object({ conversationId: t.String({ format: "uuid" }) }),
+    })
+    .delete("/v1/conversations/:conversationId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+
+      const [conversation] = await db<{ kind: string; user_id: string }[]>`
+        select c.kind, cm.user_id
+        from conversations c
+        join conversation_members cm on cm.conversation_id = c.id
+        where c.id = ${params.conversationId} and cm.user_id = ${user.id} and cm.left_at is null
+      `;
+      if (!conversation) return respondError(set, 404, "conversation_not_found");
+      if (conversation.kind === "channel") return respondError(set, 409, "cannot_delete_server_channel");
+
+      await db`
+        update conversation_members
+        set left_at = coalesce(left_at, now())
+        where conversation_id = ${params.conversationId} and user_id = ${user.id} and left_at is null
+      `;
+      return { deleted: true };
     }, {
       params: t.Object({ conversationId: t.String({ format: "uuid" }) }),
     })
@@ -2117,12 +2209,19 @@ export function createApp() {
       if (!storedMessage.sender_user_id) storedMessage.sender_user_id = user.id;
 
       if (!deduplicated) {
+        const recipients = await db<{ user_id: string }[]>`
+          select user_id
+          from conversation_members
+          where conversation_id = ${params.conversationId}
+            and user_id <> ${user.id}
+            and left_at is null
+        `;
         await publishMessageCreated(params.conversationId, {
           type: "message.created",
           messageId: storedMessage.id,
           conversationId: storedMessage.conversation_id,
           serverSequence: String(storedMessage.server_sequence),
-        });
+        }, recipients.map((recipient) => recipient.user_id));
       }
 
       set.status = deduplicated ? 200 : 201;
@@ -2224,14 +2323,14 @@ export function createApp() {
 
         try {
           const connection = await createRealtimeConnection(ws, user.id);
-          realtimeConnections.set(ws, connection);
+          realtimeConnections.set(ws.raw, connection);
           ws.send(JSON.stringify({ type: "ready" }));
         } catch {
           ws.close(1013, "realtime_unavailable");
         }
       },
       message: async (ws, command) => {
-        const connection = realtimeConnections.get(ws);
+        const connection = realtimeConnections.get(ws.raw);
         if (!connection) {
           ws.close(4001, "unauthorized");
           return;
@@ -2273,7 +2372,8 @@ export function createApp() {
         ws.close(1003, "unsupported_realtime_command");
       },
       close: async (ws) => {
-        const connection = realtimeConnections.get(ws);
+        const connection = realtimeConnections.get(ws.raw);
+        realtimeConnections.delete(ws.raw);
         if (connection) await connection.close();
       },
     });

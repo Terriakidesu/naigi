@@ -18,10 +18,16 @@ export async function createRealtimeConnection(socket: RealtimeSocket, userId: s
   const subscriber = await redis.duplicate();
   await subscriber.connect();
   const channels = new Set<string>();
+  const userChannel = `user:${userId}`;
 
   const sendControl = (payload: object) => {
     socket.send(JSON.stringify(payload));
   };
+
+  await subscriber.subscribe(userChannel, (message) => {
+    const status = socket.send(message);
+    if (status <= 0) socket.close(1013, "realtime_backpressure");
+  });
 
   return {
     async subscribe(conversationId) {

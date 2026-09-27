@@ -137,11 +137,15 @@ export type ReplyReference = {
   messageId: string;
   sender: string;
   body: string;
+  userId?: string;
+  username?: string;
+  mentionSender?: boolean;
 };
 
 export type SendContentResult = {
   delivery: "sent" | "queued";
   pending?: PendingMessage;
+  message?: MessageEnvelope;
 };
 
 function canRetryMessage(error: unknown) {
@@ -417,8 +421,8 @@ export class CryptoClient {
       ciphertext,
     };
     try {
-      await this.api.sendMessage(conversationId, payload);
-      return { delivery: "sent" };
+      const result = await this.api.sendMessage(conversationId, payload);
+      return { delivery: "sent", message: result.message };
     } catch (error) {
       if (!canRetryMessage(error)) throw error;
       try {

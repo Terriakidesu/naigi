@@ -1,7 +1,8 @@
-import { ApiClient, ApiError, type User } from "./api";
+import { ApiClient, ApiError, type Server, type ServerMember, type User } from "./api";
 
 const api = new ApiClient();
 const form = document.getElementById("new-conversation-form") as HTMLFormElement;
+const serverSelect = document.getElementById("member-server") as HTMLSelectElement;
 const search = document.getElementById("member-search") as HTMLInputElement;
 const results = document.getElementById("member-results") as HTMLElement;
 const selectedMembers = document.getElementById("selected-members") as HTMLElement;
@@ -10,8 +11,11 @@ const submit = document.getElementById("create-submit") as HTMLButtonElement;
 const status = document.getElementById("new-status") as HTMLElement;
 
 const selected = new Map<string, User>();
-let searchTimer: number | undefined;
-let searchRequest = 0;
+let currentUserId = "";
+let sharedServers: Server[] = [];
+let availableMembers: User[] = [];
+let currentResults: User[] = [];
+let membersRequest = 0;
 
 function setStatus(message: string, error = false) {
   status.textContent = message;
@@ -74,14 +78,18 @@ function renderSelected() {
   }
 }
 
-let currentResults: User[] = [];
-
 function renderResults() {
   results.replaceChildren();
   if (currentResults.length === 0) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = search.value.trim().length < 2 ? "Type at least two characters to search." : "No matching people found.";
+    empty.textContent = !serverSelect.value
+      ? "Choose a shared server to see its members."
+      : availableMembers.length === 0
+        ? "No other members are available in this server."
+        : search.value.trim()
+          ? "No matching members in this server."
+          : "No members selected yet.";
     results.append(empty);
     return;
   }
@@ -112,37 +120,56 @@ function renderResults() {
   }
 }
 
-async function searchUsers() {
-  const query = search.value.trim();
-  const request = ++searchRequest;
-  if (query.length < 2) {
-    currentResults = [];
-    renderResults();
-    return;
-  }
+function memberToUser(member: ServerMember): User {
+  return {
+    id: member.userId,
+    username: member.username,
+    displayName: member.displayName,
+    createdAt: member.joinedAt,
+  };
+}
 
-  results.replaceChildren();
+function filterMembers() {
+  const query = search.value.trim().toLowerCase();
+  currentResults = availableMembers.filter((user) =>
+    !query || `${user.username} ${user.displayName}`.toLowerCase().includes(query),
+  );
+  renderResults();
+}
+
+async function loadMembers(serverId: string) {
+  const request = ++membersRequest;
+  availableMembers = [];
+  currentResults = [];
+  selected.clear();
+  search.value = "";
+  search.disabled = !serverId;
+  search.placeholder = serverId ? "Filter members in this server" : "Choose a shared server first";
+  renderSelected();
+  renderResults();
+  if (!serverId) return;
+
   const loading = document.createElement("p");
   loading.className = "muted";
-  loading.textContent = "Searching…";
-  results.append(loading);
+  loading.textContent = "Loading members…";
+  results.replaceChildren(loading);
   try {
-    const users = (await api.searchUsers(query)).users;
-    if (request !== searchRequest) return;
-    currentResults = users;
+    const response = await api.serverMembers(serverId);
+    if (request !== membersRequest) return;
+    availableMembers = response.members
+      .filter((member) => member.userId !== currentUserId)
+      .map(memberToUser);
+    currentResults = availableMembers;
     renderResults();
   } catch (error) {
-    if (request !== searchRequest) return;
-    currentResults = [];
-    setStatus(error instanceof Error ? error.message : "Unable to search for members.", true);
+    if (request !== membersRequest) return;
+    setStatus(error instanceof Error ? error.message : "Unable to load shared-server members.", true);
     renderResults();
   }
 }
 
-search.addEventListener("input", () => {
-  if (searchTimer !== undefined) window.clearTimeout(searchTimer);
-  searchTimer = window.setTimeout(() => void searchUsers(), 220);
-});
+search.addEventListener("input", filterMembers);
+serverSelect.addEventListener("change", () => void loadMembers(serverSelect.value));
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -152,17 +179,38 @@ form.addEventListener("submit", async (event) => {
   try {
     const memberUserIds = [...selected.keys()];
     const result = await api.createConversation(memberUserIds.length === 1 ? "dm" : "group", memberUserIds);
-     window.location.assign(`/channels/@me/${encodeURIComponent(result.conversation.id)}`);
+    window.location.assign(`/channels/@me/${encodeURIComponent(result.conversation.id)}`);
   } catch (error) {
     setStatus(error instanceof ApiError ? error.code : error instanceof Error ? error.message : "request_failed", true);
     submit.disabled = false;
   }
 });
 
+async function initialize() {
+  try {
+    const [me, serverResult] = await Promise.all([api.me(), api.servers()]);
+    currentUserId = me.user.id;
+    sharedServers = serverResult.servers;
+    serverSelect.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = sharedServers.length > 0 ? "Choose a shared server…" : "No shared servers available";
+    serverSelect.append(placeholder);
+    for (const [index, server] of sharedServers.entries()) {
+      const option = document.createElement("option");
+      option.value = server.id;
+      option.textContent = `Shared server ${index + 1} · ${server.id.slice(0, 8)}`;
+      serverSelect.append(option);
+    }
+    serverSelect.disabled = sharedServers.length === 0;
+    renderSelected();
+    renderResults();
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) window.location.assign("/");
+    else setStatus(error instanceof Error ? error.message : "Unable to load shared servers.", true);
+  }
+}
+
 renderSelected();
 renderResults();
-
-void api.me().catch((error) => {
-  if (error instanceof ApiError && error.status === 401) window.location.assign("/");
-  else setStatus(error instanceof Error ? error.message : "Unable to check the session.", true);
-});
+void initialize();

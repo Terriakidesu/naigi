@@ -294,10 +294,6 @@ export class ApiClient {
     return this.get<{ devices: Device[] }>("/v1/devices");
   }
 
-  searchUsers(query: string) {
-    return this.get<{ users: User[] }>(`/v1/users/search?q=${encodeURIComponent(query)}`);
-  }
-
   user(userId: string) {
     return this.get<{ user: User }>(`/v1/users/${encodeURIComponent(userId)}`);
   }
@@ -336,6 +332,10 @@ export class ApiClient {
 
   updateServer(serverId: string, encryptedMetadata: string) {
     return this.patch<{ server: Server }>(`/v1/servers/${serverId}`, { encryptedMetadata });
+  }
+
+  deleteServer(serverId: string) {
+    return this.delete<{ deleted: boolean }>(`/v1/servers/${serverId}`);
   }
 
   createChannel(serverId: string, encryptedMetadata = "", categoryId: string | null = null) {
@@ -416,6 +416,10 @@ export class ApiClient {
       kind,
       memberUserIds,
     });
+  }
+
+  deleteConversation(conversationId: string) {
+    return this.delete<{ deleted: boolean }>(`/v1/conversations/${conversationId}`);
   }
 
   messages(conversationId: string, options: MessagePageOptions = {}) {

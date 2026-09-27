@@ -41,6 +41,9 @@ transport. Server, channel, and category names are client-encrypted opaque metad
 backend only sees IDs, membership, roles, categories, and ordering. The full future-frontend contract is in
 [`docs/api-v1.md`](docs/api-v1.md).
 
+Private conversation recipients are limited to active members of a server that the creator also
+belongs to. Naigi does not provide a global account directory or global user search.
+
 The browser client supports safe Markdown rendering, cursor-based older-message loading, draft
 preservation while navigating, server/category management, profile/password settings, and an
 opt-in remembered local unlock. Remembered unlock stores only encrypted passphrase material and

@@ -3,6 +3,7 @@
   "version": "1.7.0",
   "scripts": {
     "test": "bun test",
+    "test:e2ee": "bun run build:client && bun run scripts/test-e2ee.ts",
     "typecheck": "bunx --bun tsc --noEmit",
     "build:client": "bun run scripts/build-client.ts",
     "dev": "bun run --watch src/index.ts",
@@ -15,7 +16,8 @@
     "elysia": "latest"
   },
   "devDependencies": {
-    "bun-types": "latest"
+    "bun-types": "latest",
+    "playwright": "^1.63.0"
   },
   "module": "src/index.js"
 }

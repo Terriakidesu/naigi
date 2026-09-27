@@ -23,10 +23,13 @@ export async function pingRedis() {
   return true;
 }
 
-export async function publishMessageCreated(conversationId: string, payload: object) {
+export async function publishMessageCreated(conversationId: string, payload: object, recipientUserIds: string[] = []) {
   try {
     await connectRedis();
-    await redis.publish(`conversation:${conversationId}`, JSON.stringify(payload));
+    const message = JSON.stringify(payload);
+    await redis.publish(`conversation:${conversationId}`, message);
+    await Promise.all([...new Set(recipientUserIds)].map((userId) =>
+      redis.publish(`user:${userId}`, JSON.stringify({ ...payload, realtimeScope: "user" }))));
     return true;
   } catch {
     return false;

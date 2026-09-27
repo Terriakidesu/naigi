@@ -16,6 +16,7 @@ const serverForm = document.getElementById("server-form") as HTMLFormElement;
 const serverName = document.getElementById("server-name") as HTMLInputElement;
 const serverDescription = document.getElementById("server-description") as HTMLTextAreaElement;
 const saveServer = document.getElementById("save-server-button") as HTMLButtonElement;
+const deleteServer = document.getElementById("delete-server-button") as HTMLButtonElement;
 const categoryForm = document.getElementById("category-form") as HTMLFormElement;
 const newCategoryName = document.getElementById("new-category-name") as HTMLInputElement;
 const categoryList = document.getElementById("category-settings-list") as HTMLElement;
@@ -373,6 +374,7 @@ async function loadData() {
   title.textContent = "Server settings";
   roleLabel.textContent = `${currentServer.role} · ${channels.length} text channel${channels.length === 1 ? "" : "s"}`;
   saveServer.disabled = currentServer.role === "member";
+  deleteServer.hidden = currentServer.role !== "owner";
   categoryForm.querySelector("button")!.toggleAttribute("disabled", currentServer.role === "member");
   channelForm.querySelector("button")!.toggleAttribute("disabled", currentServer.role === "member");
   createInvite.disabled = currentServer.role === "member";
@@ -419,6 +421,20 @@ serverForm.addEventListener("submit", async (event) => {
     setStatus(readableError(error), true);
   } finally {
     saveServer.disabled = currentServer.role === "member";
+  }
+});
+
+deleteServer.addEventListener("click", async () => {
+  if (!currentServer || currentServer.role !== "owner") return;
+  const name = serverName.value.trim() || "this server";
+  if (!window.confirm(`Permanently delete ${name}? All channels and encrypted history will be removed for every member.`)) return;
+  deleteServer.disabled = true;
+  try {
+    await api.deleteServer(currentServer.id);
+    window.location.assign("/app");
+  } catch (error) {
+    setStatus(readableError(error), true);
+    deleteServer.disabled = false;
   }
 });
 
