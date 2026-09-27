@@ -85,9 +85,8 @@ const reactionOptions: ReactionOption[] = [
   { emoji: "✅", code: "2705", label: "Done" },
 ];
 const emojiOptions = emojiShortcodes;
-type EmojiPickerCategory = "all" | EmojiCategory;
+type EmojiPickerCategory = EmojiCategory;
 const emojiPickerCategories: Array<{ id: EmojiPickerCategory; label: string; icon: string }> = [
-  { id: "all", label: "All emojis", icon: "😀" },
   { id: "Smileys & Emotion", label: "Smileys and emotion", icon: "😀" },
   { id: "People & Body", label: "People and body", icon: "👋" },
   { id: "Animals & Nature", label: "Animals and nature", icon: "🐻" },
@@ -98,7 +97,7 @@ const emojiPickerCategories: Array<{ id: EmojiPickerCategory; label: string; ico
   { id: "Symbols", label: "Symbols", icon: "❤️" },
   { id: "Flags", label: "Flags", icon: "🏳️" },
 ];
-let emojiPickerCategory: EmojiPickerCategory = "all";
+let emojiPickerCategory: EmojiPickerCategory = "Smileys & Emotion";
 let editTarget: EditTarget | undefined;
 let contextMessage: ContextMessage | undefined;
 const messageContextTargets = new Map<string, ContextMessage>();
@@ -998,7 +997,8 @@ function closeEmojiPicker() {
   emojiPicker.hidden = true;
   emojiToggle.setAttribute("aria-expanded", "false");
   emojiPickerSearch.value = "";
-  emojiPickerCategory = "all";
+  emojiPickerCategory = emojiPickerCategories[0].id;
+  emojiPickerGrid.scrollTop = 0;
 }
 
 function insertEmoji(emoji: string) {
@@ -1025,6 +1025,7 @@ function renderEmojiCategoryTabs() {
     button.type = "button";
     button.className = "emoji-category-tab";
     button.id = `emoji-category-tab-${emojiCategorySlug(category.id)}`;
+    button.dataset.emojiCategory = category.id;
     button.setAttribute("role", "tab");
     button.setAttribute("aria-selected", String(emojiPickerCategory === category.id));
     button.setAttribute("aria-label", category.label);
@@ -1039,44 +1040,85 @@ function renderEmojiCategoryTabs() {
     button.addEventListener("click", () => {
       emojiPickerCategory = category.id;
       emojiPickerSearch.value = "";
-      renderEmojiPicker();
+      emojiPickerGrid.scrollTop = 0;
+      renderEmojiPickerGrid();
+      updateEmojiCategoryTabState();
+      scrollToEmojiCategory(category.id);
       emojiPickerSearch.focus();
     });
     emojiCategoryTabs.append(button);
   }
 }
 
+function updateEmojiCategoryTabState() {
+  for (const button of emojiCategoryTabs.querySelectorAll<HTMLButtonElement>(".emoji-category-tab")) {
+    button.setAttribute("aria-selected", String(button.dataset.emojiCategory === emojiPickerCategory));
+  }
+}
+
 function renderEmojiPickerGrid() {
   const query = emojiPickerSearch.value.trim().toLowerCase();
-  const candidates = emojiOptions.filter((option) => {
-    const matchesCategory = !query && emojiPickerCategory !== "all" ? option.category === emojiPickerCategory : true;
-    const matchesSearch = !query || [option.name, ...option.aliases].some((name) => name.includes(query));
-    return matchesCategory && matchesSearch;
-  });
   emojiPickerGrid.replaceChildren();
-  if (candidates.length === 0) {
+  let sectionCount = 0;
+  for (const category of emojiPickerCategories) {
+    const candidates = emojiOptions.filter((option) => option.category === category.id
+      && (!query || [option.name, ...option.aliases].some((name) => name.includes(query))));
+    if (candidates.length === 0) continue;
+    sectionCount += 1;
+    const section = document.createElement("section");
+    section.className = "emoji-category-section";
+    section.dataset.emojiCategory = category.id;
+    const heading = document.createElement("h3");
+    heading.className = "emoji-category-heading";
+    heading.textContent = category.label;
+    const items = document.createElement("div");
+    items.className = "emoji-category-items";
+    for (const option of candidates) {
+      const button = document.createElement("button");
+      button.type = "button";
+      appendTwemoji(button, option);
+      button.querySelector<HTMLImageElement>("img")!.loading = "lazy";
+      button.title = `Insert :${option.name}:`;
+      button.setAttribute("aria-label", `Insert :${option.name}:`);
+      button.addEventListener("mousedown", (event) => event.preventDefault());
+      button.addEventListener("click", () => insertEmoji(option.emoji));
+      items.append(button);
+    }
+    section.append(heading, items);
+    emojiPickerGrid.append(section);
+  }
+  if (sectionCount === 0) {
     const empty = document.createElement("p");
     empty.className = "emoji-picker-empty";
     empty.textContent = "No emojis found.";
     emojiPickerGrid.append(empty);
-    return;
   }
-  for (const option of candidates) {
-    const button = document.createElement("button");
-    button.type = "button";
-    appendTwemoji(button, option);
-    button.querySelector<HTMLImageElement>("img")!.loading = "lazy";
-    button.title = `Insert :${option.name}:`;
-    button.setAttribute("aria-label", `Insert :${option.name}:`);
-    button.addEventListener("mousedown", (event) => event.preventDefault());
-    button.addEventListener("click", () => insertEmoji(option.emoji));
-    emojiPickerGrid.append(button);
+}
+
+function scrollToEmojiCategory(category: EmojiPickerCategory) {
+  const section = [...emojiPickerGrid.querySelectorAll<HTMLElement>("[data-emoji-category]")]
+    .find((candidate) => candidate.dataset.emojiCategory === category);
+  if (section) emojiPickerGrid.scrollTo({ top: Math.max(0, section.offsetTop - 4), behavior: "smooth" });
+}
+
+function updateActiveEmojiCategory() {
+  const gridTop = emojiPickerGrid.getBoundingClientRect().top + 12;
+  const sections = [...emojiPickerGrid.querySelectorAll<HTMLElement>("[data-emoji-category]")];
+  let active = sections[0]?.dataset.emojiCategory as EmojiCategory | undefined ?? emojiPickerCategories[0].id;
+  for (const section of sections) {
+    if (section.getBoundingClientRect().top <= gridTop) active = section.dataset.emojiCategory as EmojiCategory;
+    else break;
+  }
+  if (active !== emojiPickerCategory) {
+    emojiPickerCategory = active;
+    updateEmojiCategoryTabState();
   }
 }
 
 function renderEmojiPicker() {
   renderEmojiCategoryTabs();
   renderEmojiPickerGrid();
+  updateActiveEmojiCategory();
 }
 
 function toggleEmojiPicker() {
@@ -3296,9 +3338,11 @@ cancelReply.addEventListener("click", clearReplyTarget);
 cancelEdit.addEventListener("click", () => clearEditTarget());
 emojiToggle.addEventListener("click", toggleEmojiPicker);
 emojiPickerSearch.addEventListener("input", () => {
-  if (emojiPickerSearch.value.trim()) emojiPickerCategory = "all";
+  if (emojiPickerSearch.value.trim()) emojiPickerCategory = emojiPickerCategories[0].id;
+  emojiPickerGrid.scrollTop = 0;
   renderEmojiPicker();
 });
+emojiPickerGrid.addEventListener("scroll", updateActiveEmojiCategory, { passive: true });
 notificationToggle.addEventListener("click", () => void toggleNotifications());
 
 conversationSearch.addEventListener("input", () => {

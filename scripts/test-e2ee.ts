@@ -127,11 +127,12 @@ try {
   await a.locator("#message-input").press("Enter");
   assert.equal(await a.locator("#message-input").inputValue(), "😃");
   await a.locator("#emoji-toggle").click();
+  await a.locator("#emoji-picker").waitFor({ state: "visible", timeout: 20_000 });
   await a.locator("#emoji-category-tab-animals-nature").click();
   assert.equal(await a.locator("#emoji-category-tab-animals-nature").getAttribute("aria-selected"), "true");
   await a.locator("#emoji-picker-search").fill("melting_face");
   await a.getByRole("button", { name: "Insert :melting_face:", exact: true }).waitFor({ timeout: 20_000 });
-  await a.locator("#emoji-toggle").click();
+  await a.locator("#emoji-picker-search").press("Escape");
   await a.locator("#message-input").fill(":melting_face: full 👩‍🚀 😄");
   await a.locator("#send-button").click();
   const emojiMessage = b.locator(".message").filter({ hasText: "full" });

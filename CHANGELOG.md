@@ -5,7 +5,7 @@
 ### Added
 
 - Added full local Twemoji rendering, complete Unicode emoji shortcode autocomplete, and bundled Twemoji artwork for offline use.
-- Added categorized emoji-picker tabs and emoji search.
+- Added a categorized, scrollable emoji picker with icon navigation and emoji search.
 
 ### Changed
 

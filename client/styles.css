@@ -258,11 +258,14 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .emoji-category-tab:hover, .emoji-category-tab:focus-visible, .emoji-category-tab[aria-selected="true"] { color: var(--text); background: var(--bg-active); }
 .emoji-category-icon, .emoji-category-twemoji { display: grid; place-items: center; width: 1.2rem; height: 1.2rem; }
 .emoji-category-twemoji { width: 1.2rem; height: 1.2rem; filter: grayscale(1); }
-.emoji-picker-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 0.12rem; min-height: 0; overflow-y: auto; padding-right: 0.1rem; }
-.emoji-picker-grid button { display: grid; place-items: center; min-width: 30px; min-height: 30px; padding: 0.15rem; border-radius: 4px; color: var(--text); background: transparent; font-size: 1.2rem; line-height: 1; }
-.emoji-picker-grid button:hover, .emoji-picker-grid button:focus-visible { background: var(--bg-active); }
-.emoji-picker-grid .twemoji { width: 1.2rem; height: 1.2rem; }
-.emoji-picker-empty { grid-column: 1 / -1; margin: 0; padding: 1rem 0.5rem; color: var(--text-faint); font-size: 0.72rem; text-align: center; }
+.emoji-picker-grid { min-height: 0; overflow-y: auto; padding-right: 0.1rem; scroll-behavior: smooth; }
+.emoji-category-section + .emoji-category-section { margin-top: 0.7rem; }
+.emoji-category-heading { position: sticky; z-index: 1; top: 0; margin: 0 0 0.25rem; padding: 0.25rem 0.15rem; color: var(--text-faint); background: var(--bg-elevated); font-size: 0.62rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.emoji-category-items { display: grid; grid-template-columns: repeat(8, 1fr); gap: 0.12rem; }
+.emoji-category-items button { display: grid; place-items: center; min-width: 30px; min-height: 30px; padding: 0.15rem; border-radius: 4px; color: var(--text); background: transparent; font-size: 1.2rem; line-height: 1; }
+.emoji-category-items button:hover, .emoji-category-items button:focus-visible { background: var(--bg-active); }
+.emoji-category-items .twemoji { width: 1.2rem; height: 1.2rem; }
+.emoji-picker-empty { margin: 0; padding: 1rem 0.5rem; color: var(--text-faint); font-size: 0.72rem; text-align: center; }
 .date-divider { display: flex; align-items: center; gap: 0.75rem; max-width: none; margin: 0.85rem 0 0.35rem; color: var(--text-faint); font-size: 0.62rem; font-weight: 700; }
 .date-divider::before, .date-divider::after { flex: 1; height: 1px; content: ""; background: var(--line-soft); }
 .date-divider span { white-space: nowrap; }
