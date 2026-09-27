@@ -3,6 +3,7 @@ import { emojiEntryAt, emojiForShortcode, emojiShortcodeToken, replaceEmojiShort
 
 test("resolves common emoji shortcodes and leaves unknown names alone", () => {
   expect(replaceEmojiShortcodes(":smile: :+1: :heart: :not_an_emoji:")).toBe("😄 👍 ❤️ :not_an_emoji:");
+  expect(replaceEmojiShortcodes(":sob::sob:")).toBe("😭😭");
   expect(emojiForShortcode("THUMBSUP")).toBe("👍");
   expect(emojiForShortcode("melting_face")).toBe("🫠");
 });
@@ -11,6 +12,7 @@ test("finds the shortcode being typed at the cursor", () => {
   expect(emojiShortcodeToken("hello :smi", 10)).toEqual({ query: "smi", start: 6, end: 10 });
   expect(emojiShortcodeToken("hello :smile: ")).toBeNull();
   expect(emojiShortcodeToken("hello:smile")).toBeNull();
+  expect(emojiShortcodeToken(":sob::sob", 9)).toEqual({ query: "sob", start: 5, end: 9 });
 });
 
 test("maps supported Unicode emoji to their local Twemoji asset", () => {

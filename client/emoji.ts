@@ -125,7 +125,7 @@ export function emojiShortcodeName(entry: EmojiShortcode, query = "") {
 
 export function emojiShortcodeToken(value: string, cursor = value.length) {
   const before = value.slice(0, cursor);
-  const match = before.match(/(^|[\s([{])(:[A-Za-z0-9_+-]*)$/);
+  const match = before.match(/(^|[\s([{:])(:[A-Za-z0-9_+-]*)$/);
   if (!match) return null;
   const shortcode = match[2];
   return {
@@ -136,9 +136,11 @@ export function emojiShortcodeToken(value: string, cursor = value.length) {
 }
 
 export function replaceEmojiShortcodes(value: string) {
-  return value.replace(/(^|[^A-Za-z0-9_+:-]):([A-Za-z0-9_+-]+):/gi, (match, prefix: string, name: string) => {
+  return value.replace(/:[A-Za-z0-9_+-]+:/gi, (match, offset: number) => {
+    if (offset > 0 && /[A-Za-z0-9_+-]/.test(value[offset - 1])) return match;
+    const name = match.slice(1, -1);
     const emoji = emojiForShortcode(name);
-    return emoji ? `${prefix}${emoji}` : match;
+    return emoji ?? match;
   });
 }
 
