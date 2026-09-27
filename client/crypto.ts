@@ -142,6 +142,10 @@ export type DecryptedMessage = {
   content: Record<string, unknown>;
 };
 
+export type DecryptedMessageResult =
+  | { messageId: string; decrypted: DecryptedMessage }
+  | { messageId: string; error: unknown };
+
 export type ReplyReference = {
   messageId: string;
   sender: string;
@@ -644,23 +648,42 @@ export class CryptoClient {
     return this.sendMedia(conversationId, members, file, options);
   }
 
-  async decryptMessage(conversationId: string, message: MessageEnvelope): Promise<DecryptedMessage> {
+  private async decryptMessageInternal(conversationId: string, message: MessageEnvelope): Promise<DecryptedMessage> {
     if (message.protocol !== "matrix-v1") throw new Error("unsupported_message_protocol");
+    const roomId = new RoomId(matrixRoomId(conversationId));
+    // decryptRoomEvent invalidates its settings handle in the current WASM
+    // binding, so do not manually free it after the call.
+    const settings = new DecryptionSettings(TrustRequirement.Untrusted);
+    try {
+      const decrypted = await this.state.decryptRoomEvent(JSON.stringify(eventForMessage(message)), roomId, settings);
+      const event = jsonObject(decrypted.event);
+      const sender = decrypted.sender.toString();
+      const content = jsonObject(JSON.stringify(event.content));
+      decrypted.free();
+      return { sender, content };
+    } finally {
+      roomId.free();
+    }
+  }
+
+  async decryptMessage(conversationId: string, message: MessageEnvelope): Promise<DecryptedMessage> {
+    return this.runCryptoOperation(() => this.decryptMessageInternal(conversationId, message));
+  }
+
+  async decryptMessages(conversationId: string, messages: MessageEnvelope[]): Promise<DecryptedMessageResult[]> {
+    if (messages.length === 0) return [];
     return this.runCryptoOperation(async () => {
-      const roomId = new RoomId(matrixRoomId(conversationId));
-      // decryptRoomEvent invalidates its settings handle in the current WASM
-      // binding, so do not manually free it after the call.
-      const settings = new DecryptionSettings(TrustRequirement.Untrusted);
-      try {
-        const decrypted = await this.state.decryptRoomEvent(JSON.stringify(eventForMessage(message)), roomId, settings);
-        const event = jsonObject(decrypted.event);
-        const sender = decrypted.sender.toString();
-        const content = jsonObject(JSON.stringify(event.content));
-        decrypted.free();
-        return { sender, content };
-      } finally {
-        roomId.free();
+      const results: DecryptedMessageResult[] = [];
+      for (const message of messages) {
+        try {
+          results.push({ messageId: message.id, decrypted: await this.decryptMessageInternal(conversationId, message) });
+        } catch (error) {
+          // One unavailable room key must not prevent the rest of the page
+          // from being rendered.
+          results.push({ messageId: message.id, error });
+        }
       }
+      return results;
     });
   }
 

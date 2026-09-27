@@ -9,6 +9,7 @@
 - Conversation details now occupy a dedicated column beside the messages and composer instead of covering the composer width.
 - The jump-to-latest control now stays centered above the composer and switches to a mention indicator when a new encrypted message pings the current user.
 - Role settings now provide a read-only “View as role” preview for room access and allowed or blocked actions without impersonating members or decrypting history.
+- Conversation loading now overlaps opaque history and encrypted-cache reads with membership and room-key preparation, batches client-side decryption, and reuses bounded in-memory results only while unlocked.
 
 Released versions are maintained as one Markdown file per version under
 [`docs/changelogs/`](docs/changelogs/).

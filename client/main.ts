@@ -5,6 +5,7 @@ import {
   type ConversationMember,
   type CustomServerRole,
   type MessageEnvelope,
+  type MessagePage,
   type Server,
   type ServerCategory,
   type ServerChannel,
@@ -67,6 +68,7 @@ let latestObservedSequence: bigint | null = null;
 let messageRenderToken = 0;
 let messageRenderLock: Promise<void> | undefined;
 const optimisticDecryptedMessages = new Map<string, DecryptedMessage>();
+const decryptedMessageCache = new Map<string, DecryptedMessage>();
 let conversationSearchQuery = "";
 let messageSearchQuery = "";
 const drafts = new Map<string, string>();
@@ -149,6 +151,8 @@ let notificationsEnabled = false;
 const redactedMessageIds = new Set<string>();
 const redactionAuthors = new Map<string, string | null>();
 const MESSAGE_PAGE_SIZE = 50;
+const MESSAGE_DECRYPT_BATCH_SIZE = 24;
+const DECRYPTED_MESSAGE_CACHE_LIMIT = 600;
 const MAX_RENDERED_MESSAGES = 300;
 const MAX_CATCH_UP_PAGES = 100;
 let selectionToken = 0;
@@ -1362,6 +1366,69 @@ function renderInputSuggestions() {
   renderEmojiSuggestions();
 }
 
+type RenderDecryption = {
+  decrypted: DecryptedMessage | null;
+  error?: unknown;
+};
+
+function decryptedCacheKey(conversationId: string, messageId: string) {
+  return `${conversationId}:${messageId}`;
+}
+
+function rememberDecryptedMessage(conversationId: string, messageId: string, decrypted: DecryptedMessage) {
+  const key = decryptedCacheKey(conversationId, messageId);
+  decryptedMessageCache.delete(key);
+  decryptedMessageCache.set(key, decrypted);
+  while (decryptedMessageCache.size > DECRYPTED_MESSAGE_CACHE_LIMIT) {
+    const oldest = decryptedMessageCache.keys().next().value;
+    if (typeof oldest !== "string") break;
+    decryptedMessageCache.delete(oldest);
+  }
+}
+
+function cachedDecryptedMessage(conversationId: string, messageId: string) {
+  const optimistic = optimisticDecryptedMessages.get(messageId);
+  if (optimistic) return optimistic;
+  const key = decryptedCacheKey(conversationId, messageId);
+  const cached = decryptedMessageCache.get(key);
+  if (!cached) return undefined;
+  // Keep recently rendered messages in the bounded in-memory cache.
+  decryptedMessageCache.delete(key);
+  decryptedMessageCache.set(key, cached);
+  return cached;
+}
+
+async function decryptMessagesForRender(
+  conversationId: string,
+  messages: MessageEnvelope[],
+  activeCryptoClient: CryptoClient,
+) {
+  const results = new Map<string, RenderDecryption>();
+  const pending: MessageEnvelope[] = [];
+  for (const message of messages) {
+    const cached = cachedDecryptedMessage(conversationId, message.id);
+    if (cached) results.set(message.id, { decrypted: cached });
+    else pending.push(message);
+  }
+  if (pending.length === 0) return results;
+
+  const decrypted = await activeCryptoClient.decryptMessages(conversationId, pending);
+  const canCache = conversationId === selectedConversationId && activeCryptoClient === cryptoClient;
+  for (const result of decrypted) {
+    if ("decrypted" in result) {
+      if (canCache) rememberDecryptedMessage(conversationId, result.messageId, result.decrypted);
+      results.set(result.messageId, { decrypted: result.decrypted });
+    } else {
+      results.set(result.messageId, { decrypted: null, error: result.error });
+    }
+  }
+  return results;
+}
+
+function yieldToBrowser() {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+}
+
 function renderUnreadButton() {
   const distanceFromBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight;
   const mentionCount = mentionHighlightMessageIds.size;
@@ -1383,17 +1450,14 @@ function renderUnreadButton() {
 async function detectUnreadMentions(messages: MessageEnvelope[], conversationId: string, activeCryptoClient: CryptoClient) {
   if (!currentUser || messages.length === 0 || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
   let changed = false;
-  for (const message of messages) {
-    if (mentionHighlightMessageIds.has(message.id) || message.senderUserId === currentUser.id) continue;
-    let decrypted: { content: Record<string, unknown> } | null = optimisticDecryptedMessages.get(message.id) ?? null;
-    if (!decrypted) {
-      try {
-        decrypted = await activeCryptoClient.decryptMessage(conversationId, message);
-      } catch {
-        continue;
-      }
-    }
+  const userId = currentUser.id;
+  const candidates = messages.filter((message) => !mentionHighlightMessageIds.has(message.id) && message.senderUserId !== userId);
+  const decryptedMessages = await decryptMessagesForRender(conversationId, candidates, activeCryptoClient);
+  for (const message of candidates) {
     if (conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    const result = decryptedMessages.get(message.id);
+    if (!result?.decrypted || result.error !== undefined) continue;
+    const decrypted = result.decrypted;
     pendingMentionNotifications.delete(message.id);
     const mentions = Array.isArray(decrypted.content.mentions)
       ? decrypted.content.mentions.filter((value): value is string => typeof value === "string")
@@ -1642,6 +1706,8 @@ async function startCrypto() {
   }
   loadUnreadMarkers();
   loadNotificationPreference();
+  optimisticDecryptedMessages.clear();
+  decryptedMessageCache.clear();
   await cryptoClient?.close();
   const nextCryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
   try {
@@ -2578,6 +2644,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   nextAfter = null;
   latestObservedSequence = null;
   optimisticDecryptedMessages.clear();
+  decryptedMessageCache.clear();
   redactedMessageIds.clear();
   redactionAuthors.clear();
   messageReactions.clear();
@@ -2626,14 +2693,19 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   window.history.replaceState(null, "", `${location}${messageTarget ? `#message=${encodeURIComponent(messageTarget)}` : ""}`);
   subscribeRealtime(conversationId);
   try {
-    const members = await api.conversationMembers(conversationId);
+    // Envelopes are opaque to the API, so fetch them while membership and
+    // room-key preparation are in flight. The result is consumed only after
+    // the device has synchronized its to-device queue.
+    const initialHistoryPromise = api.messages(conversationId, { limit: MESSAGE_PAGE_SIZE }).catch(() => undefined);
+    const [members, cached] = await Promise.all([
+      api.conversationMembers(conversationId),
+      currentUser ? readCachedMessages(currentUser.id, conversationId) : Promise.resolve<MessageEnvelope[]>([]),
+    ]);
     if (token !== selectionToken) return;
     selectedMembers = members.members.map((member) => ({ ...member, roleIds: normalizeRoleIds(member.roleIds) }));
     renderMembers(selectedMembers);
     conversationSubtitle.textContent = `${selectedMembers.length} member${selectedMembers.length === 1 ? "" : "s"} · end-to-end encrypted`;
     await cryptoClient.prepareConversation(conversationId, selectedMembers);
-    if (token !== selectionToken) return;
-    const cached = currentUser ? await readCachedMessages(currentUser.id, conversationId) : [];
     if (token !== selectionToken) return;
     if (cached.length > 0) {
       loadedMessages = sortMessages(cached).slice(-MAX_RENDERED_MESSAGES);
@@ -2644,7 +2716,10 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
       lastMessagesKey = messagesKey();
       await renderMessageHistory({ scrollToBottom: true });
     }
-    await cryptoClient.syncToDevice().catch(() => undefined);
+    const [initialHistory] = await Promise.all([
+      initialHistoryPromise,
+      cryptoClient.syncToDevice().catch(() => undefined),
+    ]);
     if (token !== selectionToken) return;
     conversationReady = true;
     updateComposerState();
@@ -2699,7 +2774,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
     renderChannels();
     updateComposerState();
     renderConversations();
-    await refreshMessages({ forceScrollToBottom: true });
+    await refreshMessages({ forceScrollToBottom: true, initialPage: initialHistory });
     if (token !== selectionToken) return;
     if (messageTarget) await scrollToMessage(messageTarget);
     if (wasSidebarOpen) messageInput.focus();
@@ -3195,42 +3270,40 @@ async function renderMessageHistoryInternal(options: { scrollAnchor?: ScrollAnch
 
   let previousDay = "";
   let previousGroup: MessageGroupState | undefined;
-  for (const message of loadedMessages) {
+  for (let offset = 0; offset < loadedMessages.length; offset += MESSAGE_DECRYPT_BATCH_SIZE) {
     if (renderToken !== messageRenderToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
-    let decrypted: { sender: string; content: Record<string, unknown> } | null = optimisticDecryptedMessages.get(message.id) ?? null;
-    let error: string | undefined;
-    if (!decrypted) {
-      try {
-        decrypted = await activeCryptoClient.decryptMessage(conversationId, message);
-      } catch (caught) {
-        if (roomKeyUnavailable(caught)) {
-          appendUnavailableMessage(message.id);
-          previousGroup = undefined;
-          continue;
-        }
-        error = readableError(caught);
+    const batch = loadedMessages.slice(offset, offset + MESSAGE_DECRYPT_BATCH_SIZE);
+    const decryptedMessages = await decryptMessagesForRender(conversationId, batch, activeCryptoClient);
+    if (renderToken !== messageRenderToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    for (const message of batch) {
+      const result = decryptedMessages.get(message.id);
+      if (result?.error !== undefined && roomKeyUnavailable(result.error)) {
+        appendUnavailableMessage(message.id);
+        previousGroup = undefined;
+        continue;
       }
+      const decrypted = result?.decrypted ?? null;
+      const error = result && result.error !== undefined ? readableError(result.error) : result ? undefined : "Encrypted message unavailable";
+      const created = new Date(message.createdAt);
+      const currentDay = dateKey(created);
+      const dayChanged = currentDay !== previousDay;
+      const previousDayBeforeMessage = previousDay;
+      let divider: HTMLElement | undefined;
+      if (dayChanged) {
+        divider = appendDateDivider(created);
+        previousDay = currentDay;
+      }
+      const currentGroup = groupStateForMessage(message, decrypted);
+      const grouped = shouldGroupMessage(previousGroup, currentGroup);
+      const rendered = renderMessage(message, decrypted, error, { grouped });
+      if (!rendered) {
+        divider?.remove();
+        previousDay = previousDayBeforeMessage;
+        continue;
+      }
+      previousGroup = currentGroup;
     }
-    if (renderToken !== messageRenderToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
-    const created = new Date(message.createdAt);
-    const currentDay = dateKey(created);
-    const sameDay = currentDay === previousDay;
-    const dayChanged = currentDay !== previousDay;
-    const previousDayBeforeMessage = previousDay;
-    let divider: HTMLElement | undefined;
-    if (dayChanged) {
-      divider = appendDateDivider(created);
-      previousDay = currentDay;
-    }
-    const currentGroup = groupStateForMessage(message, decrypted);
-    const grouped = shouldGroupMessage(previousGroup, currentGroup);
-    const rendered = renderMessage(message, decrypted, error, { grouped });
-    if (!rendered) {
-      divider?.remove();
-      previousDay = previousDayBeforeMessage;
-      continue;
-    }
-    previousGroup = currentGroup;
+    if (offset + batch.length < loadedMessages.length) await yieldToBrowser();
   }
   applyMessageSearch();
   if (options.scrollAnchor) {
@@ -3260,44 +3333,42 @@ async function appendNewMessagesInternal(messages: MessageEnvelope[], conversati
   let previousDay = previousArticle?.dataset.createdAt ? dateKey(new Date(previousArticle.dataset.createdAt)) : "";
   let previousGroup = groupStateFromArticle(previousArticle);
 
-  for (const message of messages) {
+  const newMessages = messages.filter((message) => !renderedMessageIds.has(message.id));
+  for (let offset = 0; offset < newMessages.length; offset += MESSAGE_DECRYPT_BATCH_SIZE) {
     if (renderToken !== messageRenderToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
-    if (renderedMessageIds.has(message.id)) continue;
-    renderedMessageIds.add(message.id);
-    let decrypted: { sender: string; content: Record<string, unknown> } | null = optimisticDecryptedMessages.get(message.id) ?? null;
-    let error: string | undefined;
-    if (!decrypted) {
-      try {
-        decrypted = await activeCryptoClient.decryptMessage(conversationId, message);
-      } catch (caught) {
-        if (roomKeyUnavailable(caught)) {
-          appendUnavailableMessage(message.id);
-          previousGroup = undefined;
-          continue;
-        }
-        error = readableError(caught);
+    const batch = newMessages.slice(offset, offset + MESSAGE_DECRYPT_BATCH_SIZE);
+    const decryptedMessages = await decryptMessagesForRender(conversationId, batch, activeCryptoClient);
+    if (renderToken !== messageRenderToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
+    for (const message of batch) {
+      renderedMessageIds.add(message.id);
+      const result = decryptedMessages.get(message.id);
+      if (result?.error !== undefined && roomKeyUnavailable(result.error)) {
+        appendUnavailableMessage(message.id);
+        previousGroup = undefined;
+        continue;
       }
+      const decrypted = result?.decrypted ?? null;
+      const error = result && result.error !== undefined ? readableError(result.error) : result ? undefined : "Encrypted message unavailable";
+      const created = new Date(message.createdAt);
+      const currentDay = dateKey(created);
+      const dayChanged = currentDay !== previousDay;
+      const previousDayBeforeMessage = previousDay;
+      let divider: HTMLElement | undefined;
+      if (dayChanged) {
+        divider = appendDateDivider(created);
+        previousDay = currentDay;
+      }
+      const currentGroup = groupStateForMessage(message, decrypted);
+      const grouped = shouldGroupMessage(previousGroup, currentGroup);
+      const rendered = renderMessage(message, decrypted, error, { grouped });
+      if (!rendered) {
+        divider?.remove();
+        previousDay = previousDayBeforeMessage;
+        continue;
+      }
+      previousGroup = currentGroup;
     }
-    if (renderToken !== messageRenderToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
-    const created = new Date(message.createdAt);
-    const currentDay = dateKey(created);
-    const sameDay = currentDay === previousDay;
-    const dayChanged = !sameDay;
-    const previousDayBeforeMessage = previousDay;
-    let divider: HTMLElement | undefined;
-    if (dayChanged) {
-      divider = appendDateDivider(created);
-      previousDay = currentDay;
-    }
-    const currentGroup = groupStateForMessage(message, decrypted);
-    const grouped = shouldGroupMessage(previousGroup, currentGroup);
-    const rendered = renderMessage(message, decrypted, error, { grouped });
-    if (!rendered) {
-      divider?.remove();
-      previousDay = previousDayBeforeMessage;
-      continue;
-    }
-    previousGroup = currentGroup;
+    if (offset + batch.length < newMessages.length) await yieldToBrowser();
   }
   applyMessageSearch();
 }
@@ -3336,7 +3407,7 @@ async function fetchNewerMessages(conversationId: string, activeCryptoClient: Cr
   return { messages, nextAfter: nextCursor };
 }
 
-async function refreshMessages(options: { forceScrollToBottom?: boolean } = {}) {
+async function refreshMessages(options: { forceScrollToBottom?: boolean; initialPage?: MessagePage } = {}) {
   if (!selectedConversationId || !cryptoClient || messagesLoading || olderMessagesLoading) return;
   const conversationId = selectedConversationId;
   const activeCryptoClient = cryptoClient;
@@ -3350,8 +3421,11 @@ async function refreshMessages(options: { forceScrollToBottom?: boolean } = {}) 
     }
 
     if (options.forceScrollToBottom || loadedMessages.length === 0) {
+      const pagePromise = options.initialPage
+        ? Promise.resolve(options.initialPage)
+        : api.messages(conversationId, { limit: MESSAGE_PAGE_SIZE });
       const [result] = await Promise.all([
-        api.messages(conversationId, { limit: MESSAGE_PAGE_SIZE }),
+        pagePromise,
         syncPromise,
       ]);
       if (selection !== selectionToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
@@ -3864,6 +3938,8 @@ messagesPanel.addEventListener("scroll", () => {
 });
 lockButton.addEventListener("click", () => {
   lockLocalSession();
+  optimisticDecryptedMessages.clear();
+  decryptedMessageCache.clear();
   cryptoClient?.close();
   const returnPath = `${window.location.pathname}${window.location.search}`;
   window.location.assign(`/unlock?manual=1&return=${encodeURIComponent(returnPath)}`);
