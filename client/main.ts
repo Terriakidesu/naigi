@@ -3,10 +3,12 @@ import {
   ApiClient,
   type Conversation,
   type ConversationMember,
+  type CustomServerRole,
   type MessageEnvelope,
   type Server,
   type ServerCategory,
   type ServerChannel,
+  type ServerPermission,
   type User,
 } from "./api";
 import { CryptoClient, type DecryptedMessage, type ReplyReference } from "./crypto";
@@ -37,6 +39,8 @@ let servers: Server[] = [];
 let channels: ServerChannel[] = [];
 const channelsByServer = new Map<string, ServerChannel[]>();
 let categories: ServerCategory[] = [];
+let serverRoles: CustomServerRole[] = [];
+const serverRoleLabels = new Map<string, string>();
 let selectedServerId: string | undefined;
 let selectedChannelId: string | undefined;
 const serverLabels = new Map<string, string>();
@@ -85,6 +89,7 @@ const reactionOptions: ReactionOption[] = [
   { emoji: "✅", code: "2705", label: "Done" },
 ];
 const emojiOptions = emojiShortcodes;
+type EmojiPickerOption = (typeof emojiOptions)[number];
 type EmojiPickerCategory = EmojiCategory;
 const emojiPickerCategories: Array<{ id: EmojiPickerCategory; label: string; icon: string }> = [
   { id: "Smileys & Emotion", label: "Smileys and emotion", icon: "😀" },
@@ -98,6 +103,27 @@ const emojiPickerCategories: Array<{ id: EmojiPickerCategory; label: string; ico
   { id: "Flags", label: "Flags", icon: "🏳️" },
 ];
 let emojiPickerCategory: EmojiPickerCategory = "Smileys & Emotion";
+let emojiPickerObserver: IntersectionObserver | undefined;
+const lazyEmojiOptions = new WeakMap<HTMLElement, EmojiPickerOption[]>();
+
+function renderEmojiSectionItems(section: HTMLElement) {
+  const items = section.querySelector<HTMLElement>(".emoji-category-items");
+  const candidates = lazyEmojiOptions.get(section);
+  if (!items || !candidates || items.dataset.rendered === "true") return;
+  items.dataset.rendered = "true";
+  items.style.minHeight = "";
+  for (const option of candidates) {
+    const button = document.createElement("button");
+    button.type = "button";
+    appendTwemoji(button, option);
+    button.querySelector<HTMLImageElement>("img")!.loading = "lazy";
+    button.title = `Insert :${option.name}:`;
+    button.setAttribute("aria-label", `Insert :${option.name}:`);
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => insertEmoji(option.emoji));
+    items.append(button);
+  }
+}
 let editTarget: EditTarget | undefined;
 let contextMessage: ContextMessage | undefined;
 const messageContextTargets = new Map<string, ContextMessage>();
@@ -105,7 +131,7 @@ const unavailableMessageNotices = new Map<string, HTMLElement>();
 const messageReactions = new Map<string, Map<string, Set<string>>>();
 const reactionEvents = new Map<string, { targetId: string; key: string; senderKey: string; action: "add" | "remove" }>();
 const pinnedMessageIds = new Set<string>();
-const editedMessageBodies = new Map<string, { body: string; embeds: SafeEmbed[]; mentions: string[] }>();
+const editedMessageBodies = new Map<string, { body: string; embeds: SafeEmbed[]; mentions: string[]; roleMentions: string[] }>();
 type UnreadMarker = { count: number; lastSequence: string };
 type PresenceState = "online" | "idle" | "offline";
 const unreadMarkers = new Map<string, UnreadMarker>();
@@ -557,8 +583,8 @@ function applyPinEvent(targetId: string, action: "add" | "remove") {
   }
 }
 
-function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], mentions: string[]) {
-  editedMessageBodies.set(messageId, { body, embeds, mentions });
+function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], mentions: string[], roleMentions: string[] = []) {
+  editedMessageBodies.set(messageId, { body, embeds, mentions, roleMentions });
   if (redactedMessageIds.has(messageId)) return;
   const article = findMessageArticle(messageId);
   const message = loadedMessages.find((candidate) => candidate.id === messageId);
@@ -578,7 +604,11 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
   article.dataset.mentionsCurrentUser = String(Boolean(currentUser && mentions.includes(currentUser.id)));
   article.classList.toggle("message-mention", Boolean(currentUser && mentions.includes(currentUser.id)
     && (mentionHighlightMessageIds.has(messageId) || hasUnreadConversation())));
-  if (body) appendMarkdown(content, body, { mentionUsernames: mentionNames });
+  const mentionRoleNames = new Set(roleMentions
+    .map((roleId) => serverRoles.find((role) => role.id === roleId))
+    .filter((role): role is CustomServerRole => role !== undefined && role.systemKey !== "owner")
+    .map(serverRoleSlug));
+  if (body) appendMarkdown(content, body, { mentionUsernames: mentionNames, mentionRoleNames });
   for (const embed of embeds) appendSafeEmbed(content, embed);
   if (reply) content.insertBefore(reply, content.children[1] ?? null);
   const editable = isOwnMessage(message);
@@ -687,6 +717,18 @@ async function deleteMessage(message: MessageEnvelope) {
   }
 }
 
+async function moderateDeleteMessage(message: MessageEnvelope) {
+  if (!selectedConversationId || !selectedServerId || !hasActiveServerPermission("delete_messages")
+    || !window.confirm("Permanently delete this encrypted message for everyone?")) return;
+  try {
+    await api.deleteMessage(selectedConversationId, message.id);
+    await refreshMessages({ forceScrollToBottom: false });
+    setStatus("Message deleted for everyone.");
+  } catch (error) {
+    setStatus(readableError(error), true);
+  }
+}
+
 function openMessageContextMenu(target: ContextMessage, x: number, y: number) {
   contextMessage = target;
   messageContextMenu.replaceChildren();
@@ -733,6 +775,8 @@ function openMessageContextMenu(target: ContextMessage, x: number, y: number) {
     divider.className = "message-context-divider";
     messageContextMenu.append(divider);
     contextMenuAction("Delete message", () => deleteMessage(target.message), { danger: true, icon: "⌫" });
+  } else if (selectedServerId && hasActiveServerPermission("delete_messages")) {
+    contextMenuAction("Delete for everyone", () => moderateDeleteMessage(target.message), { danger: true, icon: "⌫" });
   }
 
   messageContextMenu.hidden = false;
@@ -931,12 +975,40 @@ function mentionedUserIds(body: string) {
   return [...ids];
 }
 
+function mentionedRoleIds(body: string) {
+  if (!selectedServerId || !hasActiveServerPermission("mention_roles")) return [];
+  const ids = new Set<string>();
+  for (const match of body.matchAll(/(^|[^A-Za-z0-9_.-])@&([A-Za-z0-9_.-]+)/g)) {
+    const slug = match[2].toLowerCase();
+    const role = serverRoles.find((candidate) => candidate.mentionable && candidate.systemKey !== "owner" && serverRoleSlug(candidate) === slug);
+    if (role) ids.add(role.id);
+  }
+  return [...ids];
+}
+
+function blockedSpecialMentions(body: string) {
+  if (!selectedServerId) return undefined;
+  if (!hasActiveServerPermission("mention_everyone") && /(^|\s)@everyone\b/i.test(body)) return "@everyone";
+  if (!hasActiveServerPermission("mention_here") && /(^|\s)@here\b/i.test(body)) return "@here";
+  return undefined;
+}
+
 function mentionToken() {
   const cursor = messageInput.selectionStart ?? messageInput.value.length;
   const before = messageInput.value.slice(0, cursor);
+  const roleMatch = before.match(/(^|\s)@&([A-Za-z0-9_.-]*)$/);
+  if (roleMatch) {
+    return {
+      kind: "role" as const,
+      query: roleMatch[2].toLowerCase(),
+      start: before.length - roleMatch[0].length + roleMatch[1].length,
+      end: cursor,
+    };
+  }
   const match = before.match(/(^|\s)@([A-Za-z0-9_.-]*)$/);
   if (!match) return null;
   return {
+    kind: "user" as const,
     query: match[2].toLowerCase(),
     start: before.length - match[0].length + match[1].length,
     end: cursor,
@@ -1037,12 +1109,20 @@ function renderEmojiCategoryTabs() {
     if (iconEntry) appendTwemoji(icon, iconEntry.entry, "emoji-category-twemoji");
     else icon.textContent = category.icon;
     button.append(icon);
-    button.addEventListener("click", () => {
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
       emojiPickerCategory = category.id;
+      const hadSearch = Boolean(emojiPickerSearch.value.trim());
       emojiPickerSearch.value = "";
-      emojiPickerGrid.scrollTop = 0;
-      renderEmojiPickerGrid();
+      if (hadSearch) {
+        emojiPickerGrid.scrollTop = 0;
+        renderEmojiPickerGrid();
+      }
       updateEmojiCategoryTabState();
+      const sections = [...emojiPickerGrid.querySelectorAll<HTMLElement>("[data-emoji-category]")];
+      const target = sections.find((section) => section.dataset.emojiCategory === category.id);
+      if (target) renderEmojiSectionItems(target);
       scrollToEmojiCategory(category.id);
       emojiPickerSearch.focus();
     });
@@ -1058,7 +1138,10 @@ function updateEmojiCategoryTabState() {
 
 function renderEmojiPickerGrid() {
   const query = emojiPickerSearch.value.trim().toLowerCase();
+  emojiPickerObserver?.disconnect();
+  emojiPickerObserver = undefined;
   emojiPickerGrid.replaceChildren();
+  const lazySections: HTMLElement[] = [];
   let sectionCount = 0;
   for (const category of emojiPickerCategories) {
     const candidates = emojiOptions.filter((option) => option.category === category.id
@@ -1073,19 +1156,28 @@ function renderEmojiPickerGrid() {
     heading.textContent = category.label;
     const items = document.createElement("div");
     items.className = "emoji-category-items";
-    for (const option of candidates) {
-      const button = document.createElement("button");
-      button.type = "button";
-      appendTwemoji(button, option);
-      button.querySelector<HTMLImageElement>("img")!.loading = "lazy";
-      button.title = `Insert :${option.name}:`;
-      button.setAttribute("aria-label", `Insert :${option.name}:`);
-      button.addEventListener("mousedown", (event) => event.preventDefault());
-      button.addEventListener("click", () => insertEmoji(option.emoji));
-      items.append(button);
-    }
     section.append(heading, items);
+    lazyEmojiOptions.set(section, candidates);
+    if (query || sectionCount === 1) {
+      renderEmojiSectionItems(section);
+    } else {
+      items.style.minHeight = `${Math.ceil(candidates.length / 8) * 30}px`;
+      lazySections.push(section);
+    }
     emojiPickerGrid.append(section);
+    // The section's placeholder height keeps jump offsets stable until its
+    // buttons are needed. IntersectionObserver renders it near the viewport.
+  }
+  if (!query && lazySections.length > 0) {
+    emojiPickerObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const section = entry.target as HTMLElement;
+        renderEmojiSectionItems(section);
+        emojiPickerObserver?.unobserve(section);
+      }
+    }, { root: emojiPickerGrid, rootMargin: "40px 0px" });
+    for (const section of lazySections) emojiPickerObserver.observe(section);
   }
   if (sectionCount === 0) {
     const empty = document.createElement("p");
@@ -1098,7 +1190,7 @@ function renderEmojiPickerGrid() {
 function scrollToEmojiCategory(category: EmojiPickerCategory) {
   const section = [...emojiPickerGrid.querySelectorAll<HTMLElement>("[data-emoji-category]")]
     .find((candidate) => candidate.dataset.emojiCategory === category);
-  if (section) emojiPickerGrid.scrollTo({ top: Math.max(0, section.offsetTop - 4), behavior: "smooth" });
+  if (section) emojiPickerGrid.scrollTo({ top: Math.max(0, section.offsetTop - 4), behavior: "auto" });
 }
 
 function updateActiveEmojiCategory() {
@@ -1138,25 +1230,34 @@ function renderMentionSuggestions() {
     hideMentionSuggestions();
     return;
   }
-  const candidates = selectedMembers
-    .filter((member) => !token.query || member.username.toLowerCase().startsWith(token.query))
-    .slice(0, 8);
+  const candidates = token.kind === "role"
+    ? (selectedServerId && hasActiveServerPermission("mention_roles") ? serverRoles : [])
+      .filter((role) => role.mentionable && role.systemKey !== "owner")
+      .filter((role) => !token.query || serverRoleSlug(role).startsWith(token.query))
+      .slice(0, 8)
+    : selectedMembers
+      .filter((member) => !token.query || member.username.toLowerCase().startsWith(token.query))
+      .slice(0, 8);
   activeSuggestionIndex = -1;
   mentionSuggestions.replaceChildren();
   if (candidates.length === 0) {
     hideMentionSuggestions();
     return;
   }
-  for (const member of candidates) {
+  for (const candidate of candidates) {
     const option = document.createElement("button");
     option.type = "button";
     option.className = "mention-suggestion";
     option.setAttribute("role", "option");
     option.setAttribute("aria-selected", "false");
-    option.textContent = `@${member.username} · ${member.displayName || member.username}`;
+    option.textContent = token.kind === "role"
+      ? `@&${serverRoleSlug(candidate as CustomServerRole)} · ${serverRoleName(candidate as CustomServerRole)}`
+      : `@${(candidate as ConversationMember).username} · ${(candidate as ConversationMember).displayName || (candidate as ConversationMember).username}`;
     option.addEventListener("mousedown", (event) => event.preventDefault());
     option.addEventListener("click", () => {
-      const replacement = `@${member.username} `;
+      const replacement = token.kind === "role"
+        ? `@&${serverRoleSlug(candidate as CustomServerRole)} `
+        : `@${(candidate as ConversationMember).username} `;
       messageInput.value = `${messageInput.value.slice(0, token.start)}${replacement}${messageInput.value.slice(token.end)}`;
       const nextCursor = token.start + replacement.length;
       messageInput.setSelectionRange(nextCursor, nextCursor);
@@ -1395,6 +1496,11 @@ function readableError(error: unknown) {
     if (error.code === "channel_not_found") return "That channel no longer exists.";
     if (error.code === "cannot_archive_last_channel") return "A server must keep one active text channel.";
     if (error.code === "cannot_archive_metadata_channel") return "The original channel anchors encrypted server metadata and cannot be archived.";
+    if (error.code === "channel_not_visible") return "You no longer have access to that channel.";
+    if (error.code === "insufficient_channel_permissions") return "Your role cannot send messages or upload files here.";
+    if (error.code === "member_timed_out") return "You are temporarily timed out in this server.";
+    if (error.code === "message_not_found") return "That message was already deleted.";
+    if (error.code === "server_banned") return "This account is banned from that server.";
     return error.code;
   }
   return error instanceof Error ? error.message : "request_failed";
@@ -1518,6 +1624,12 @@ function connectRealtime() {
         receivePresence(payload.conversationId, payload.userId, payload.state);
         return;
       }
+      if (payload.type === "message.deleted" && payload.conversationId) {
+        if (payload.conversationId === selectedConversationId) {
+          void refreshMessages({ forceScrollToBottom: false }).catch((error) => setStatus(readableError(error), true));
+        }
+        return;
+      }
       if (payload.type === "message.created" && payload.conversationId) {
         if (payload.messageId && !rememberBounded(seenRealtimeMessageIds, payload.messageId)) return;
         if (!knownConversationIds().has(payload.conversationId)) {
@@ -1592,6 +1704,41 @@ function serverNameForId(serverId: string) {
   return server ? serverDisplayName(server) : "Server";
 }
 
+function activeServer() {
+  return selectedServerId ? servers.find((server) => server.id === selectedServerId) : undefined;
+}
+
+function hasActiveServerPermission(permission: ServerPermission) {
+  const server = activeServer();
+  return Boolean(server?.permissions[permission]);
+}
+
+function serverRoleName(role: CustomServerRole) {
+  if (serverRoleLabels.has(role.id)) return serverRoleLabels.get(role.id)!;
+  if (role.systemKey === "owner") return "Owner";
+  if (role.systemKey === "admin") return "Administrator";
+  if (role.systemKey === "member") return "Member";
+  return "Role";
+}
+
+function serverRoleSlug(role: CustomServerRole) {
+  return serverRoleName(role).trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function activeChannelPermissions() {
+  const channel = selectedChannelId ? channels.find((candidate) => candidate.id === selectedChannelId) : undefined;
+  return {
+    canSend: !channel || channel.canSend !== false,
+    canUpload: !channel || channel.canUpload !== false,
+  };
+}
+
+function normalizeRoleIds(value: unknown) {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
+  if (typeof value !== "string" || value.length < 2 || value[0] !== "{" || value[value.length - 1] !== "}") return [];
+  return value.slice(1, -1).split(",").map((item) => item.replace(/^"|"$/g, "")).filter(Boolean);
+}
+
 function channelDisplayName(channel: ServerChannel) {
   return channelLabels.get(channel.id) || (channel.position === 0 ? "general" : `channel-${channel.position + 1}`);
 }
@@ -1650,10 +1797,12 @@ function renderServers() {
   const activeServer = selectedServerId ? servers.find((server) => server.id === selectedServerId) : undefined;
   workspaceName.textContent = activeServer ? serverDisplayName(activeServer) : "Direct messages";
   workspaceSubtitle.textContent = selectedServerId ? "Private encrypted server" : "Encrypted workspace";
-  const canManage = activeServer?.role === "owner" || activeServer?.role === "admin";
-  createChannelButton.hidden = !canManage;
-  serverInviteButton.hidden = !canManage;
-  serverSettingsButton.hidden = !canManage;
+  const canManageChannels = Boolean(activeServer?.permissions.manage_channels);
+  const canManageInvites = Boolean(activeServer?.permissions.manage_invites);
+  const canManageSettings = Boolean(activeServer?.permissions.manage_server || activeServer?.permissions.manage_roles);
+  createChannelButton.hidden = !canManageChannels;
+  serverInviteButton.hidden = !canManageInvites;
+  serverSettingsButton.hidden = !canManageSettings;
   if (activeServer) serverSettingsButton.href = `/server-settings?server=${encodeURIComponent(activeServer.id)}`;
 }
 
@@ -1910,6 +2059,8 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   selectedMembers = [];
   channels = [];
   categories = [];
+  serverRoles = [];
+  serverRoleLabels.clear();
   selectionToken += 1;
   renderServers();
   renderConversations();
@@ -1922,14 +2073,36 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   channelIcon.textContent = "#";
 
   try {
-    const [channelResult, categoryResult] = await Promise.all([
+    const [channelResult, categoryResult, roleResult] = await Promise.all([
       api.serverChannels(serverId),
       api.serverCategories(serverId),
+      api.serverRoles(serverId),
     ]);
     if (token !== serverSelectionToken) return;
     channels = channelResult.channels;
     channelsByServer.set(serverId, channels);
     categories = categoryResult.categories;
+    serverRoles = roleResult.roles;
+    if (roleResult.metadataConversationId && cryptoClient) {
+      try {
+        const metadataMembers = (await api.conversationMembers(roleResult.metadataConversationId)).members;
+        await cryptoClient.prepareConversation(roleResult.metadataConversationId, metadataMembers);
+        await cryptoClient.syncToDevice().catch(() => undefined);
+        for (const role of serverRoles) {
+          if (!role.encryptedMetadata) continue;
+          try {
+            const metadata = await cryptoClient.decryptMetadata(roleResult.metadataConversationId, role.encryptedMetadata);
+            if (typeof metadata.name === "string" && metadata.name.trim()) {
+              serverRoleLabels.set(role.id, metadata.name.trim().slice(0, 80));
+            }
+          } catch {
+            // A role label is optional UI metadata and should not block the server.
+          }
+        }
+      } catch {
+        // Role labels are encrypted metadata and are optional for opening a channel.
+      }
+    }
     subscribeKnownConversations();
     renderChannels();
     renderServers();
@@ -1961,6 +2134,8 @@ async function openDirectMessage(conversationId: string) {
   selectedChannelId = undefined;
   channels = [];
   categories = [];
+  serverRoles = [];
+  serverRoleLabels.clear();
   selectedMembers = [];
   ++serverSelectionToken;
   renderServers();
@@ -1978,6 +2153,8 @@ async function showDirectMessages() {
   selectedChannelId = undefined;
   channels = [];
   categories = [];
+  serverRoles = [];
+  serverRoleLabels.clear();
   selectedConversationId = undefined;
   conversationReady = false;
   selectedMembers = [];
@@ -2033,7 +2210,12 @@ function renderMembers(members: ConversationMember[]) {
     memberList.append(empty);
     return;
   }
-  for (const member of members) {
+  const orderedMembers = [...members].sort((left, right) => {
+    const leftPosition = Math.max(...normalizeRoleIds(left.roleIds).map((id) => serverRoles.find((role) => role.id === id)?.position ?? 0), 0);
+    const rightPosition = Math.max(...normalizeRoleIds(right.roleIds).map((id) => serverRoles.find((role) => role.id === id)?.position ?? 0), 0);
+    return rightPosition - leftPosition || left.displayName.localeCompare(right.displayName);
+  });
+  for (const member of orderedMembers) {
     const row = document.createElement("button");
     const memberName = member.userId === currentUser?.id ? currentUser?.displayName ?? "You" : member.displayName || `@${member.username}`;
     row.className = "member-row profile-trigger";
@@ -2056,6 +2238,23 @@ function renderMembers(members: ConversationMember[]) {
       ? `you · ${state}`
       : `${state} · keys protected`;
     copy.append(name, identity);
+    const memberRoles = normalizeRoleIds(member.roleIds)
+      .map((id) => serverRoles.find((role) => role.id === id))
+      .filter((role): role is CustomServerRole => Boolean(role))
+      .sort((left, right) => right.position - left.position)
+      .slice(0, 2);
+    if (memberRoles.length > 0) {
+      const roleList = document.createElement("span");
+      roleList.className = "member-role-list";
+      for (const role of memberRoles) {
+        const badge = document.createElement("span");
+        badge.className = "member-role-badge";
+        badge.style.setProperty("--role-color", role.color);
+        badge.textContent = serverRoleName(role);
+        roleList.append(badge);
+      }
+      copy.append(roleList);
+    }
     row.append(avatar, copy);
     memberList.append(row);
   }
@@ -2117,12 +2316,17 @@ function releaseMediaResources(root: HTMLElement) {
 
 function updateComposerState() {
   const enabled = Boolean(selectedConversationId && cryptoClient && conversationReady);
-  messageInput.disabled = !enabled || sendInProgress;
-  photoInput.disabled = !enabled || sendInProgress || Boolean(editTarget);
+  const channelPermissions = activeChannelPermissions();
+  messageInput.disabled = !enabled || sendInProgress || !channelPermissions.canSend;
+  photoInput.disabled = !enabled || sendInProgress || Boolean(editTarget) || !channelPermissions.canUpload;
   sendButton.disabled = !enabled || sendInProgress;
   emojiToggle.disabled = !enabled || sendInProgress || Boolean(editTarget);
   messageSearchToggle.disabled = !enabled;
-  messageInput.placeholder = enabled ? "Message this conversation" : "Select a conversation to start chatting";
+  messageInput.placeholder = !enabled
+    ? "Select a conversation to start chatting"
+    : !channelPermissions.canSend
+      ? "You can view this channel but cannot send messages"
+      : "Message this conversation";
   if (!enabled) {
     closeEmojiPicker();
     attachmentPreview.hidden = true;
@@ -2276,7 +2480,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   try {
     const members = await api.conversationMembers(conversationId);
     if (token !== selectionToken) return;
-    selectedMembers = members.members;
+    selectedMembers = members.members.map((member) => ({ ...member, roleIds: normalizeRoleIds(member.roleIds) }));
     renderMembers(selectedMembers);
     conversationSubtitle.textContent = `${selectedMembers.length} member${selectedMembers.length === 1 ? "" : "s"} · end-to-end encrypted`;
     await cryptoClient.prepareConversation(conversationId, selectedMembers);
@@ -2581,6 +2785,9 @@ function renderMessage(
   const effectiveMentions = edited?.mentions ?? (Array.isArray(decrypted?.content.mentions)
     ? decrypted.content.mentions.filter((value): value is string => typeof value === "string")
     : []);
+  const effectiveRoleMentions = edited?.roleMentions ?? (Array.isArray(decrypted?.content.roleMentions)
+    ? decrypted.content.roleMentions.filter((value): value is string => typeof value === "string")
+    : []);
   article.dataset.messageId = message.id;
   article.id = `message-${message.id}`;
   article.dataset.search = `${senderIdentity} ${body} ${error ?? ""}`.toLowerCase();
@@ -2642,7 +2849,8 @@ function renderMessage(
     if (!target?.senderUserId || !message.senderUserId || target.senderUserId !== message.senderUserId) return false;
     const embeds = extractEmbeds(content.body);
     const mentions = Array.isArray(content.mentions) ? content.mentions.filter((value): value is string => typeof value === "string") : [];
-    applyEditedBody(content.replaces, content.body, embeds, mentions);
+    const roleMentions = Array.isArray(content.roleMentions) ? content.roleMentions.filter((value): value is string => typeof value === "string") : [];
+    applyEditedBody(content.replaces, content.body, embeds, mentions, roleMentions);
     return false;
   }
   const redactionAuthor = redactionAuthors.get(message.id);
@@ -2653,8 +2861,15 @@ function renderMessage(
   if (redactedMessageIds.has(message.id)) appendDeletedMessage(messageContent);
   const mediaMessage = content.msgtype === "m.image" || content.msgtype === "m.video" || content.msgtype === "m.file";
   const mentionNames = new Set(selectedMembers.filter((member) => effectiveMentions.includes(member.userId)).map((member) => member.username.toLowerCase()));
+  const mentionRoleNames = new Set(effectiveRoleMentions
+    .map((roleId) => serverRoles.find((role) => role.id === roleId))
+    .filter((role): role is CustomServerRole => role !== undefined && role.systemKey !== "owner")
+    .map(serverRoleSlug));
   const mentionedIds = effectiveMentions;
-  const mentionsCurrentUser = Boolean(currentUser && mentionedIds.includes(currentUser.id));
+  const currentRoleIds = normalizeRoleIds(selectedMembers.find((member) => member.userId === currentUser?.id)?.roleIds);
+  const mentionsCurrentUser = Boolean(currentUser && (mentionedIds.includes(currentUser.id)
+    || effectiveRoleMentions.some((roleId) => currentRoleIds.includes(roleId)
+      && serverRoles.find((role) => role.id === roleId)?.systemKey !== "owner")));
   article.dataset.mentionsCurrentUser = String(mentionsCurrentUser);
   if (mentionsCurrentUser && wasRealtimeMessage && selectedConversationId === message.conversationId && message.senderUserId !== currentUser?.id) {
     mentionHighlightMessageIds.add(message.id);
@@ -2671,7 +2886,7 @@ function renderMessage(
     }
   }
   if (!redactedMessageIds.has(message.id) && !mediaMessage && (content.msgtype === "m.text" || content.msgtype === "m.notice" || body)) {
-    appendMarkdown(messageContent, body, { mentionUsernames: mentionNames });
+    appendMarkdown(messageContent, body, { mentionUsernames: mentionNames, mentionRoleNames });
     for (const embed of effectiveEmbeds) appendSafeEmbed(messageContent, embed);
   }
   if (edited) {
@@ -3190,6 +3405,11 @@ composer.addEventListener("submit", async (event) => {
   const text = replaceEmojiShortcodes(messageInput.value.trim());
   const file = activeEdit ? undefined : photoInput.files?.[0];
   if (!text && !file) return;
+  const blockedMention = blockedSpecialMentions(text);
+  if (blockedMention) {
+    setStatus(`You do not have permission to use ${blockedMention}.`, true);
+    return;
+  }
   stopLocalTyping();
   sendInProgress = true;
   updateComposerState();
@@ -3206,11 +3426,12 @@ composer.addEventListener("submit", async (event) => {
     if (activeEdit) {
       const embeds = extractEmbeds(text);
       const mentions = mentionedUserIds(text);
-      const result = await activeCryptoClient.sendEdit(conversationId, members, activeEdit.messageId, text, embeds, mentions);
+      const roleMentions = mentionedRoleIds(text);
+      const result = await activeCryptoClient.sendEdit(conversationId, members, activeEdit.messageId, text, embeds, mentions, roleMentions);
       queued = result.delivery === "queued";
       editSent = true;
       if (stillHere()) {
-        applyEditedBody(activeEdit.messageId, text, embeds, mentions);
+        applyEditedBody(activeEdit.messageId, text, embeds, mentions, roleMentions);
         clearEditTarget();
         setStatus(queued ? "Edit queued on this device; it will retry automatically." : "Message edited.");
         try {
@@ -3223,10 +3444,11 @@ composer.addEventListener("submit", async (event) => {
     }
     if (text) {
       const mentions = mentionedUserIds(text);
+      const roleMentions = mentionedRoleIds(text);
       if (replyTarget?.mentionSender && replyTarget.userId) {
         mentions.push(replyTarget.userId);
       }
-      const result = await activeCryptoClient.sendText(conversationId, members, text, extractEmbeds(text), replyTarget, mentions);
+      const result = await activeCryptoClient.sendText(conversationId, members, text, extractEmbeds(text), replyTarget, mentions, roleMentions);
       queued = result.delivery === "queued";
       textSent = true;
       if (result.message) {

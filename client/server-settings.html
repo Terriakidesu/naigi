@@ -51,9 +51,26 @@
         <div id="channel-settings-list" class="settings-list"></div>
       </section>
 
+      <section class="settings-section panel roles-settings-section">
+        <div class="settings-section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>Roles</h2></div><span class="muted small">Higher roles appear first</span></div>
+        <p class="settings-section-description">Give each role exactly the access it needs. Role names stay end-to-end encrypted; permissions and channel gates are enforced by the server.</p>
+        <form id="role-form" class="inline-settings-form role-create-form">
+          <input id="new-role-name" maxlength="80" placeholder="New role name" aria-label="New role name" required>
+          <label class="role-color-input" title="New role color"><span class="sr-only">New role color</span><input id="new-role-color" type="color" value="#5865f2"></label>
+          <button type="submit">Create role</button>
+        </form>
+        <div id="role-settings-list" class="role-settings-list"></div>
+      </section>
+
       <section class="settings-section panel">
         <div class="settings-section-heading"><div><p class="eyebrow">PEOPLE</p><h2>Members</h2></div><span class="muted small">Membership is visible for authorization</span></div>
+        <p class="settings-section-description">Assign multiple roles per member. The role with the highest position is shown first.</p>
         <div id="member-settings-list" class="settings-list"></div>
+      </section>
+
+      <section class="settings-section panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">MODERATION</p><h2>Active actions</h2></div><span class="muted small">Bans block future invites; timeouts block sending</span></div>
+        <div id="moderation-settings-list" class="settings-list"></div>
       </section>
 
       <section class="settings-section panel">

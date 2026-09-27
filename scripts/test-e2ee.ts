@@ -169,6 +169,44 @@ try {
   assert.equal(await b.locator("#status-line").textContent(), "Connected");
   assert.deepEqual(errors, []);
 
+  const serverId = createdServer.body.server.id;
+  const initialRoles = await request(a, `/v1/servers/${serverId}/roles`);
+  assert.equal(initialRoles.status, 200, JSON.stringify(initialRoles.body));
+  assert.equal(initialRoles.body.roles.some((role: { systemKey: string; mentionable: boolean }) => role.systemKey === "owner" && role.mentionable), false);
+  const restrictedRole = await request(a, `/v1/servers/${serverId}/roles`, {
+    encryptedMetadata: "",
+    color: "#e05a7a",
+    permissions: { view_channels: true, upload_files: true, mention_roles: true },
+    mentionable: true,
+    viewAllChannels: false,
+  });
+  assert.equal(restrictedRole.status, 201, JSON.stringify(restrictedRole.body));
+  const extraChannel = await request(a, `/v1/servers/${serverId}/channels`, { encryptedMetadata: "" });
+  assert.equal(extraChannel.status, 201, JSON.stringify(extraChannel.body));
+  const assignedRole = await request(a, `/v1/servers/${serverId}/members/${users[1].id}/roles`, {
+    roleIds: [restrictedRole.body.role.id],
+  }, "PATCH");
+  assert.equal(assignedRole.status, 200, JSON.stringify(assignedRole.body));
+  const hiddenChannels = await request(b, `/v1/servers/${serverId}/channels`);
+  assert.equal(hiddenChannels.status, 200, JSON.stringify(hiddenChannels.body));
+  assert.equal(hiddenChannels.body.channels.some((channel: { id: string }) => channel.id === extraChannel.body.channel.id), false);
+  const channelAccess = await request(a, `/v1/servers/${serverId}/roles/${restrictedRole.body.role.id}/channels/${extraChannel.body.channel.id}`, {
+    canView: true,
+    canUpload: true,
+  }, "PATCH");
+  assert.equal(channelAccess.status, 200, JSON.stringify(channelAccess.body));
+  const visibleRestrictedChannel = await request(b, `/v1/servers/${serverId}/channels`);
+  assert.equal(visibleRestrictedChannel.status, 200, JSON.stringify(visibleRestrictedChannel.body));
+  const restrictedChannel = visibleRestrictedChannel.body.channels.find((channel: { id: string }) => channel.id === extraChannel.body.channel.id);
+  assert.equal(restrictedChannel?.canSend, false);
+  assert.equal(restrictedChannel?.canUpload, true);
+  const deletedRole = await request(a, `/v1/servers/${serverId}/roles/${restrictedRole.body.role.id}`, undefined, "DELETE");
+  assert.equal(deletedRole.status, 200, JSON.stringify(deletedRole.body));
+  const restoredChannels = await request(b, `/v1/servers/${serverId}/channels`);
+  const restoredChannel = restoredChannels.body.channels.find((channel: { id: string }) => channel.id === extraChannel.body.channel.id);
+  assert.equal(restoredChannel?.canSend, true);
+  assert.equal(restoredChannel?.canUpload, true);
+
   const deletedConversation = await request(a, `/v1/conversations/${room}`, undefined, "DELETE");
   assert.equal(deletedConversation.status, 200, JSON.stringify(deletedConversation.body));
   const deletedServer = await request(a, `/v1/servers/${createdServer.body.server.id}`, undefined, "DELETE");

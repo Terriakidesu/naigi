@@ -4,6 +4,7 @@ export type PendingMessagePayload = {
   protocol: string;
   ciphertext: string;
   protocolMetadata?: string;
+  attachmentId?: string;
 };
 
 export type PendingMessage = PendingMessagePayload & {

@@ -202,7 +202,8 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .markdown-body pre code { padding: 0; color: #d8dee9; background: transparent; white-space: pre; }
 .markdown-body a { color: #aab2ff; text-decoration: underline; text-decoration-color: rgba(170, 178, 255, 0.45); }
 .markdown-body a:hover { color: #d1d5ff; }
-.user-mention { padding: 0 0.15rem; border-radius: 3px; color: #dce0ff; background: rgba(88, 101, 242, 0.35); font-weight: 650; }
+.user-mention, .role-mention { padding: 0 0.15rem; border-radius: 3px; color: #dce0ff; background: rgba(88, 101, 242, 0.35); font-weight: 650; }
+.role-mention { color: #ffe6a7; background: rgba(240, 178, 50, 0.28); }
 .message-mention { background: rgba(88, 101, 242, 0.13); box-shadow: inset 3px 0 0 var(--accent); }
 .encrypted-media-button { display: inline-flex; align-items: center; gap: 0.55rem; max-width: 100%; margin-top: 0.4rem; padding: 0.75rem 0.9rem; border: 1px solid var(--line-soft); border-radius: 7px; color: var(--text); background: var(--bg-elevated); font-size: 0.78rem; text-align: left; }
 .encrypted-media-button::before { content: "◈"; display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: 6px; color: #b4bbff; background: rgba(101, 114, 250, 0.16); font-size: 1rem; }
@@ -258,7 +259,7 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .emoji-category-tab:hover, .emoji-category-tab:focus-visible, .emoji-category-tab[aria-selected="true"] { color: var(--text); background: var(--bg-active); }
 .emoji-category-icon, .emoji-category-twemoji { display: grid; place-items: center; width: 1.2rem; height: 1.2rem; }
 .emoji-category-twemoji { width: 1.2rem; height: 1.2rem; filter: grayscale(1); }
-.emoji-picker-grid { min-height: 0; overflow-y: auto; padding-right: 0.1rem; scroll-behavior: smooth; }
+.emoji-picker-grid { min-height: 0; overflow-y: auto; padding-right: 0.1rem; scroll-behavior: auto; }
 .emoji-category-section + .emoji-category-section { margin-top: 0.7rem; }
 .emoji-category-heading { position: sticky; z-index: 1; top: 0; margin: 0 0 0.25rem; padding: 0.25rem 0.15rem; color: var(--text-faint); background: var(--bg-elevated); font-size: 0.62rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
 .emoji-category-items { display: grid; grid-template-columns: repeat(8, 1fr); gap: 0.12rem; }
@@ -298,6 +299,8 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .member-row:hover { color: var(--text); background: transparent; }
 .member-avatar { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; color: #fff; background: #4f545c; font-size: 0.68rem; font-weight: 700; }
 .member-copy { min-width: 0; }
+.member-role-list { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-top: 0.2rem; }
+.member-role-badge { max-width: 90px; padding: 0.08rem 0.28rem; overflow: hidden; border-left: 2px solid var(--role-color, var(--accent)); color: var(--text-faint); font-size: 0.56rem; text-overflow: ellipsis; white-space: nowrap; }
 .member-copy strong, .member-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .member-copy strong { color: var(--text-muted); font-size: 0.7rem; }
 .member-copy span { margin-top: 0.12rem; color: var(--text-faint); font-size: 0.6rem; }
@@ -466,6 +469,7 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .danger-button:hover { background: rgba(242, 63, 66, 0.28); }
 .settings-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .settings-section-heading h2 { margin-bottom: 0; }
+.settings-section-description { max-width: 720px; margin: 0.7rem 0 1rem; color: var(--text-faint); font-size: 0.76rem; line-height: 1.55; }
 .inline-settings-form { display: flex; align-items: center; gap: 0.5rem; margin: 1rem 0; }
 .inline-settings-form input, .inline-settings-form select { min-width: 0; padding: 0.55rem; font-size: 0.75rem; }
 .inline-settings-form button { flex: 0 0 auto; padding: 0.55rem 0.75rem; font-size: 0.7rem; font-weight: 700; }
@@ -481,6 +485,44 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
 .settings-row-copy strong, .settings-row-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-row-copy strong { font-size: 0.74rem; }
 .settings-row-copy span { margin-top: 0.15rem; color: var(--text-faint); font-size: 0.64rem; }
+.role-create-form { max-width: 520px; }
+.role-create-form > input { flex: 1 1 220px; }
+.role-color-input { display: grid; place-items: center; flex: 0 0 38px; width: 38px; height: 38px; padding: 0; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--bg-sidebar); cursor: pointer; }
+.role-color-input input { width: 24px; height: 24px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.role-settings-list { display: grid; gap: 0.8rem; }
+.role-settings-card { position: relative; display: grid; gap: 0.75rem; padding: 1rem; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg-sidebar); }
+.role-settings-card::before { position: absolute; inset: 0 auto 0 0; width: 4px; content: ""; background: var(--role-color, var(--accent)); }
+.role-card-heading, .role-card-form, .role-card-controls, .role-card-actions { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
+.role-card-heading { justify-content: space-between; gap: 1rem; }
+.role-card-identity { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
+.role-card-identity > div { min-width: 0; }
+.role-card-identity strong, .role-card-identity span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.role-card-identity strong { font-size: 0.8rem; }
+.role-card-identity span { margin-top: 0.15rem; color: var(--text-faint); font-size: 0.64rem; }
+.role-color-swatch { flex: 0 0 12px; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 3px color-mix(in srgb, var(--role-color, var(--accent)) 20%, transparent); }
+.role-system-owner { flex: 0 0 auto; color: var(--text-faint); font-size: 0.64rem; text-align: right; }
+.role-card-form input:first-child { flex: 1 1 220px; min-width: 0; }
+.role-card-form input[type="color"] { flex: 0 0 38px; width: 38px; height: 34px; padding: 0.2rem; }
+.role-card-controls { flex-wrap: wrap; }
+.role-toggle { width: fit-content; padding: 0.4rem 0.55rem; border-radius: 5px; background: var(--bg-elevated); font-size: 0.7rem; }
+.role-card-subheading { margin: 0.2rem 0 -0.25rem; color: var(--text-faint); font-size: 0.64rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.role-permission-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.4rem; }
+.permission-option { display: flex; align-items: flex-start; gap: 0.5rem; min-width: 0; padding: 0.5rem; border: 1px solid transparent; border-radius: 5px; background: var(--bg-elevated); font-size: 0.7rem; }
+.permission-option:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-soft)); background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated)); }
+.permission-option input { flex: 0 0 auto; width: auto; margin-top: 0.12rem; accent-color: var(--accent); }
+.permission-option span { display: grid; min-width: 0; gap: 0.16rem; }
+.permission-option strong { color: var(--text); font-size: 0.7rem; }
+.permission-option small { color: var(--text-faint); font-size: 0.61rem; line-height: 1.35; }
+.role-channel-access-grid { display: grid; gap: 0.35rem; padding: 0.45rem; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--bg-elevated); }
+.role-channel-access-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 0.8rem; padding: 0.35rem 0.45rem; border-radius: 4px; }
+.role-channel-access-row:hover { background: var(--bg-hover); }
+.role-channel-access-row > strong { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 0.7rem; text-overflow: ellipsis; white-space: nowrap; }
+.role-channel-access-row .checkbox-label { width: auto; font-size: 0.66rem; }
+.role-card-actions { justify-content: flex-end; padding-top: 0.2rem; }
+.member-role-summary { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.35rem; }
+.role-badge { display: inline-flex; align-items: center; max-width: 150px; padding: 0.16rem 0.4rem; overflow: hidden; border: 1px solid color-mix(in srgb, var(--role-color, var(--accent)) 55%, var(--line-soft)); border-radius: 999px; color: var(--role-color, var(--text-muted)); background: color-mix(in srgb, var(--role-color, var(--accent)) 12%, transparent); font-size: 0.59rem; text-overflow: ellipsis; white-space: nowrap; }
+.member-role-select { flex: 0 0 145px; min-height: 52px; padding: 0.3rem; font-size: 0.64rem; }
+.moderation-row { min-height: 48px; }
 .server-settings-layout { display: grid; gap: 1rem; width: min(980px, calc(100% - 2rem)); margin: 2rem auto; }
 .server-settings-layout > .form-status { margin: 0; }
 .settings-content > .form-status, .server-settings-layout > .form-status { position: fixed; z-index: 10; right: 1rem; bottom: 1rem; max-width: min(420px, calc(100vw - 2rem)); margin: 0; padding: 0.7rem 1rem; border: 1px solid var(--line-soft); border-radius: 8px; color: var(--text); background: var(--bg-elevated); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3); }
@@ -530,6 +572,12 @@ kbd { border: 1px solid #4e5158; border-bottom-width: 2px; border-radius: 3px; p
   .settings-list-row { align-items: stretch; flex-wrap: wrap; }
   .settings-list-row > input:first-child { flex-basis: calc(100% - 0.1rem); }
   .settings-list-row select { flex: 1 1 130px; }
+  .role-permission-grid { grid-template-columns: 1fr; }
+  .role-card-heading { align-items: flex-start; flex-direction: column; }
+  .role-system-owner { text-align: left; }
+  .role-channel-access-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .role-channel-access-row > label:last-child { grid-column: 2; }
+  .member-role-select { flex: 1 1 100%; }
   .channel-settings-row .position-input { flex: 0 0 62px !important; }
   .compact-connection-status .status { display: none; }
   .compact-connection-status { margin-right: 0; }

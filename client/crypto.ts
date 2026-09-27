@@ -413,7 +413,7 @@ export class CryptoClient {
     return jsonObject(decrypted.content.body);
   }
 
-  async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>): Promise<SendContentResult> {
+  async sendContent(conversationId: string, members: ConversationMember[], content: Record<string, unknown>, attachmentId?: string): Promise<SendContentResult> {
     const ciphertext = await this.encryptContent(conversationId, members, content);
     const decrypted: DecryptedMessage = {
       sender: matrixUserId(this.accountUserId),
@@ -424,6 +424,7 @@ export class CryptoClient {
       clientMessageId: randomUuid(),
       protocol: "matrix-v1",
       ciphertext,
+      ...(attachmentId ? { attachmentId } : {}),
     };
     try {
       const result = await this.api.sendMessage(conversationId, payload);
@@ -468,6 +469,7 @@ export class CryptoClient {
           protocol: record.protocol,
           ciphertext: record.ciphertext,
           protocolMetadata: record.protocolMetadata,
+          attachmentId: record.attachmentId,
         });
         await removePendingMessage(record.id);
         sent += 1;
@@ -498,12 +500,13 @@ export class CryptoClient {
     return this.flushPendingMessages();
   }
 
-  async sendText(conversationId: string, members: ConversationMember[], body: string, embeds: unknown[], replyTo?: ReplyReference, mentions: string[] = []) {
+  async sendText(conversationId: string, members: ConversationMember[], body: string, embeds: unknown[], replyTo?: ReplyReference, mentions: string[] = [], roleMentions: string[] = []) {
     return this.sendContent(conversationId, members, {
       msgtype: "m.text",
       body,
       embeds,
       ...(mentions.length > 0 ? { mentions: [...new Set(mentions)].slice(0, 50) } : {}),
+      ...(roleMentions.length > 0 ? { roleMentions: [...new Set(roleMentions)].slice(0, 25) } : {}),
       ...(replyTo ? {
         replyTo: {
           messageId: replyTo.messageId,
@@ -521,13 +524,14 @@ export class CryptoClient {
     });
   }
 
-  async sendEdit(conversationId: string, members: ConversationMember[], messageId: string, body: string, embeds: unknown[], mentions: string[] = []) {
+  async sendEdit(conversationId: string, members: ConversationMember[], messageId: string, body: string, embeds: unknown[], mentions: string[] = [], roleMentions: string[] = []) {
     return this.sendContent(conversationId, members, {
       msgtype: "m.replace",
       replaces: messageId,
       body,
       embeds,
       ...(mentions.length > 0 ? { mentions: [...new Set(mentions)].slice(0, 50) } : {}),
+      ...(roleMentions.length > 0 ? { roleMentions: [...new Set(roleMentions)].slice(0, 25) } : {}),
     });
   }
 
@@ -588,7 +592,7 @@ export class CryptoClient {
           h: compressed.height || undefined,
         },
         file: mediaFile,
-      });
+      }, attachment.attachment.id);
     } finally {
       encrypted.free();
     }

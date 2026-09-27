@@ -15,11 +15,30 @@ export type Conversation = {
 
 export type ServerRole = "owner" | "admin" | "member";
 
+export type ServerPermission =
+  | "view_channels"
+  | "send_messages"
+  | "upload_files"
+  | "mention_everyone"
+  | "mention_here"
+  | "mention_roles"
+  | "manage_server"
+  | "manage_channels"
+  | "manage_invites"
+  | "manage_roles"
+  | "manage_members"
+  | "ban_members"
+  | "timeout_members"
+  | "delete_messages";
+
+export type ServerPermissionMap = Record<ServerPermission, boolean>;
+
 export type Server = {
   id: string;
   ownerId: string;
   encryptedMetadata: string;
   role: ServerRole;
+  permissions: ServerPermissionMap;
   channelCount: number;
   createdAt: string;
 };
@@ -32,6 +51,9 @@ export type ServerChannel = {
   categoryId: string | null;
   kind: "text";
   position: number;
+  canView?: boolean;
+  canUpload?: boolean;
+  canSend?: boolean;
   createdAt: string;
 };
 
@@ -48,6 +70,7 @@ export type ServerMember = {
   username: string;
   displayName: string;
   role: ServerRole;
+  roleIds: string[];
   joinedAt: string;
 };
 
@@ -56,6 +79,52 @@ export type ConversationMember = {
   matrixUserId: string;
   username: string;
   displayName: string;
+  roleIds?: string[];
+};
+
+export type ServerRoleChannelAccess = {
+  channelId: string;
+  canView: boolean;
+  canUpload: boolean;
+};
+
+export type CustomServerRole = {
+  id: string;
+  serverId: string;
+  encryptedMetadata: string;
+  color: string;
+  position: number;
+  permissions: ServerPermissionMap;
+  mentionable: boolean;
+  viewAllChannels: boolean;
+  isSystem: boolean;
+  systemKey: "owner" | "admin" | "member" | null;
+  channelAccess: ServerRoleChannelAccess[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ServerRoleAssignment = { userId: string; roleIds: string[] };
+
+export type ServerModeration = {
+  bans: Array<{
+    id: string;
+    userId: string;
+    username: string;
+    displayName: string;
+    reason: string | null;
+    expiresAt: string | null;
+    createdAt: string;
+  }>;
+  timeouts: Array<{
+    id: string;
+    userId: string;
+    username: string;
+    displayName: string;
+    reason: string | null;
+    expiresAt: string;
+    createdAt: string;
+  }>;
 };
 
 export type MessageEnvelope = {
@@ -326,6 +395,79 @@ export class ApiClient {
     return this.get<{ members: ServerMember[] }>(`/v1/servers/${serverId}/members`);
   }
 
+  serverRoles(serverId: string) {
+    return this.get<{
+      metadataConversationId: string | null;
+      permissions: ServerPermissionMap;
+      roles: CustomServerRole[];
+      assignments: ServerRoleAssignment[];
+    }>(`/v1/servers/${serverId}/roles`);
+  }
+
+  createServerRole(serverId: string, body: {
+    encryptedMetadata?: string;
+    color?: string;
+    position?: number;
+    permissions?: Partial<ServerPermissionMap>;
+    mentionable?: boolean;
+    viewAllChannels?: boolean;
+  }) {
+    return this.post<{ role: CustomServerRole }>(`/v1/servers/${serverId}/roles`, body);
+  }
+
+  updateServerRole(serverId: string, roleId: string, body: {
+    encryptedMetadata?: string;
+    color?: string;
+    position?: number;
+    permissions?: Partial<ServerPermissionMap>;
+    mentionable?: boolean;
+    viewAllChannels?: boolean;
+  }) {
+    return this.patch<{ role: CustomServerRole }>(`/v1/servers/${serverId}/roles/${roleId}`, body);
+  }
+
+  deleteServerRole(serverId: string, roleId: string) {
+    return this.delete<{ deleted: boolean }>(`/v1/servers/${serverId}/roles/${roleId}`);
+  }
+
+  updateServerRoleChannelAccess(serverId: string, roleId: string, channelId: string, canView: boolean, canUpload: boolean) {
+    return this.patch<{ updated: boolean; canView: boolean; canUpload: boolean }>(
+      `/v1/servers/${serverId}/roles/${roleId}/channels/${channelId}`,
+      { canView, canUpload },
+    );
+  }
+
+  removeServerRoleChannelAccess(serverId: string, roleId: string, channelId: string) {
+    return this.delete<{ deleted: boolean }>(`/v1/servers/${serverId}/roles/${roleId}/channels/${channelId}`);
+  }
+
+  updateServerMemberRoles(serverId: string, userId: string, roleIds: string[]) {
+    return this.patch<{ updated: boolean; roleIds: string[] }>(`/v1/servers/${serverId}/members/${userId}/roles`, { roleIds });
+  }
+
+  serverModeration(serverId: string) {
+    return this.get<ServerModeration>(`/v1/servers/${serverId}/moderation`);
+  }
+
+  banServerMember(serverId: string, userId: string, options: { reason?: string; expiresInSeconds?: number } = {}) {
+    return this.post<{ banned: boolean }>(`/v1/servers/${serverId}/members/${userId}/ban`, options);
+  }
+
+  unbanServerMember(serverId: string, userId: string) {
+    return this.delete<{ revoked: boolean }>(`/v1/servers/${serverId}/bans/${userId}`);
+  }
+
+  timeoutServerMember(serverId: string, userId: string, durationSeconds: number, reason?: string) {
+    return this.post<{ timedOut: boolean; expiresAt: string }>(`/v1/servers/${serverId}/members/${userId}/timeout`, {
+      durationSeconds,
+      ...(reason ? { reason } : {}),
+    });
+  }
+
+  removeServerMemberTimeout(serverId: string, userId: string) {
+    return this.delete<{ revoked: boolean }>(`/v1/servers/${serverId}/timeouts/${userId}`);
+  }
+
   createServer(encryptedMetadata = "") {
     return this.post<{ server: Server; channel: ServerChannel }>("/v1/servers", { encryptedMetadata });
   }
@@ -437,11 +579,16 @@ export class ApiClient {
     protocol: string;
     ciphertext: string;
     protocolMetadata?: string;
+    attachmentId?: string;
   }) {
     return this.post<{ message: MessageEnvelope; deduplicated: boolean }>(
       `/v1/conversations/${conversationId}/messages`,
       message,
     );
+  }
+
+  deleteMessage(conversationId: string, messageId: string) {
+    return this.delete<{ deleted: boolean }>(`/v1/conversations/${conversationId}/messages/${messageId}`);
   }
 
   createAttachment(conversationId: string, expectedSizeBytes: number, extension: string, mimeType: string) {

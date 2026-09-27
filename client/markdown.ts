@@ -137,8 +137,8 @@ function appendTextChunk(parent: HTMLElement, value: string) {
   });
 }
 
-function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<string>) {
-  const pattern = /@([A-Za-z0-9_.-]+)/g;
+function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<string>, mentionRoleNames?: Set<string>) {
+  const pattern = /@&([A-Za-z0-9_.-]+)|@([A-Za-z0-9_.-]+)/g;
   let offset = 0;
   while (offset < value.length) {
     pattern.lastIndex = offset;
@@ -169,10 +169,11 @@ function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<s
     if (mentionMatch) {
       const index = mentionMatch.index ?? offset;
       appendTextChunk(parent, value.slice(offset, index));
-      const username = mentionMatch[1].toLowerCase();
-      if (mentionUsernames?.has(username)) {
+      const roleName = mentionMatch[1]?.toLowerCase();
+      const username = mentionMatch[2]?.toLowerCase();
+      if ((roleName && mentionRoleNames?.has(roleName)) || (username && mentionUsernames?.has(username))) {
         const mention = document.createElement("span");
-        mention.className = "user-mention";
+        mention.className = roleName ? "role-mention" : "user-mention";
         mention.textContent = mentionMatch[0];
         parent.append(mention);
       } else {
@@ -186,10 +187,10 @@ function appendText(parent: HTMLElement, value: string, mentionUsernames?: Set<s
   }
 }
 
-function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set<string>) {
+function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set<string>, mentionRoleNames?: Set<string>) {
   for (const token of parseInlineMarkdown(value)) {
     if (token.kind === "text") {
-      appendText(parent, token.value, mentionUsernames);
+      appendText(parent, token.value, mentionUsernames, mentionRoleNames);
       continue;
     }
     if (token.kind === "link") {
@@ -197,7 +198,7 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
       link.href = token.url;
       link.target = "_blank";
       link.rel = "noreferrer noopener nofollow";
-      appendText(link, token.label, mentionUsernames);
+      appendText(link, token.label, mentionUsernames, mentionRoleNames);
       parent.append(link);
       continue;
     }
@@ -207,7 +208,7 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
       spoiler.tabIndex = 0;
       spoiler.setAttribute("role", "button");
       spoiler.setAttribute("aria-label", "Reveal spoiler");
-      appendText(spoiler, token.value, mentionUsernames);
+      appendText(spoiler, token.value, mentionUsernames, mentionRoleNames);
       const reveal = () => {
         spoiler.classList.toggle("revealed");
         spoiler.setAttribute("aria-label", spoiler.classList.contains("revealed") ? "Hide spoiler" : "Reveal spoiler");
@@ -224,12 +225,12 @@ function appendInline(parent: HTMLElement, value: string, mentionUsernames?: Set
     }
     const element = document.createElement(token.kind === "strong" ? "strong" : token.kind === "emphasis" ? "em" : token.kind === "strike" ? "del" : "code");
     if (token.kind === "code") element.textContent = token.value;
-    else appendText(element, token.value, mentionUsernames);
+    else appendText(element, token.value, mentionUsernames, mentionRoleNames);
     parent.append(element);
   }
 }
 
-export function appendMarkdown(parent: HTMLElement, value: string, options: { mentionUsernames?: Set<string> } = {}) {
+export function appendMarkdown(parent: HTMLElement, value: string, options: { mentionUsernames?: Set<string>; mentionRoleNames?: Set<string> } = {}) {
   const markdown = document.createElement("div");
   markdown.className = "markdown-body";
   for (const block of parseMarkdown(value)) {
@@ -244,13 +245,13 @@ export function appendMarkdown(parent: HTMLElement, value: string, options: { me
     }
     if (block.kind === "heading") {
       const heading = document.createElement(block.level && block.level <= 2 ? "h3" : "h4");
-      appendInline(heading, block.value as string, options.mentionUsernames);
+      appendInline(heading, block.value as string, options.mentionUsernames, options.mentionRoleNames);
       markdown.append(heading);
       continue;
     }
     if (block.kind === "quote") {
       const quote = document.createElement("blockquote");
-      appendInline(quote, (block.value as string[]).join("\n"), options.mentionUsernames);
+      appendInline(quote, (block.value as string[]).join("\n"), options.mentionUsernames, options.mentionRoleNames);
       markdown.append(quote);
       continue;
     }
@@ -258,14 +259,14 @@ export function appendMarkdown(parent: HTMLElement, value: string, options: { me
       const list = document.createElement(block.kind === "unordered-list" ? "ul" : "ol");
       for (const item of block.value as string[]) {
         const listItem = document.createElement("li");
-        appendInline(listItem, item, options.mentionUsernames);
+         appendInline(listItem, item, options.mentionUsernames, options.mentionRoleNames);
         list.append(listItem);
       }
       markdown.append(list);
       continue;
     }
     const paragraph = document.createElement("p");
-    appendInline(paragraph, block.value as string, options.mentionUsernames);
+    appendInline(paragraph, block.value as string, options.mentionUsernames, options.mentionRoleNames);
     markdown.append(paragraph);
   }
   parent.append(markdown);
