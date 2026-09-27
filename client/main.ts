@@ -26,6 +26,7 @@ import { renderAvatar, setAvatarStyle } from "./avatar";
 import type { EmojiCategory } from "./emoji-data";
 import { appendMarkdown } from "./markdown";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
+import { isEmojiOnlyMessage } from "./message-format";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
 import { confirmLocalUnlock, lockLocalSession, resolveLocalPassphrase } from "./unlock-vault";
 import { iconElement, renderIcons } from "./icons";
@@ -473,6 +474,8 @@ function appendTwemoji(parent: HTMLElement, option: TwemojiOption, className = "
 }
 
 function closeMessageContextMenu() {
+  contextMessage?.article.classList.remove("message-actions-open");
+  contextMessage?.article.querySelector<HTMLButtonElement>(".message-action-menu")?.setAttribute("aria-expanded", "false");
   messageContextMenu.hidden = true;
   messageContextMenu.replaceChildren();
   contextMessage = undefined;
@@ -593,8 +596,9 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
   const content = article.querySelector<HTMLElement>(".message-content");
   const header = content?.querySelector<HTMLElement>(".message-meta");
   if (!content || !header) return;
-  const reply = content.querySelector<HTMLElement>(".reply-context");
+  const reply = article.querySelector<HTMLElement>(".reply-context");
   reply?.remove();
+  article.querySelector<HTMLElement>(".message-actions")?.remove();
   content.replaceChildren(header);
   header.querySelector(".edited-label")?.remove();
   const editedLabel = document.createElement("span");
@@ -611,9 +615,10 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
     .map(serverRoleSlug));
   if (body) appendMarkdown(content, body, { mentionUsernames: mentionNames, mentionRoleNames });
   for (const embed of embeds) appendSafeEmbed(content, embed);
-  if (reply) content.insertBefore(reply, content.children[1] ?? null);
+  article.classList.toggle("message-emoji-only", isEmojiOnlyMessage(body));
+  if (reply) article.insertBefore(reply, article.querySelector(".message-avatar") ?? content);
   const editable = isOwnMessage(message);
-  appendMessageActions(content, message, article.querySelector(".message-sender-link")?.textContent ?? "Member", body, editable);
+  appendMessageActions(article, message, article.querySelector(".message-sender-link")?.textContent ?? "Member", body, editable);
   article.dataset.search = `${article.querySelector(".message-sender-link")?.textContent ?? ""} ${body}`.toLowerCase();
   const contextTarget = messageContextTargets.get(messageId);
   if (contextTarget) {
@@ -2713,6 +2718,7 @@ function markMessageDeleted(messageId: string) {
   const header = content?.querySelector<HTMLElement>(".message-meta");
   if (!article || !content || !header) return;
   releaseMediaResources(article);
+  article.querySelector<HTMLElement>(".message-actions")?.remove();
   const deleted = document.createElement("p");
   deleted.className = "message-deleted muted";
   deleted.textContent = "Message deleted";
@@ -2724,6 +2730,43 @@ function markMessageDeleted(messageId: string) {
 function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sender: string, body: string, editable = false) {
   const actions = document.createElement("div");
   actions.className = "message-actions";
+  const reaction = document.createElement("button");
+  reaction.className = "message-action";
+  reaction.type = "button";
+  reaction.append(iconElement("smile"));
+  reaction.title = "Add reaction";
+  reaction.setAttribute("aria-label", `Add reaction to message from ${sender}`);
+  reaction.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const article = parent.closest<HTMLElement>(".message");
+    if (!article) return;
+    const rect = reaction.getBoundingClientRect();
+    openMessageContextMenu({ message, article, sender, body, editable }, rect.left, rect.bottom + 4);
+  });
+  actions.append(reaction);
+
+  if (editable) {
+    const edit = document.createElement("button");
+    edit.className = "message-action";
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => {
+      parent.closest<HTMLElement>(".message")?.classList.remove("message-actions-open");
+      setEditTarget({ messageId: message.id, sender, body });
+    });
+    actions.append(edit);
+  }
+
+  const reply = document.createElement("button");
+  reply.className = "message-action";
+  reply.type = "button";
+  reply.textContent = "Reply";
+  reply.addEventListener("click", () => {
+    parent.closest(".message")?.classList.remove("message-actions-open");
+    setReplyTarget(replyReferenceForMessage(message, sender, body || "Encrypted message"));
+  });
+  actions.append(reply);
+
   const menu = document.createElement("button");
   menu.className = "message-action message-action-menu";
   menu.type = "button";
@@ -2736,45 +2779,13 @@ function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sen
     event.stopPropagation();
     const article = parent.closest<HTMLElement>(".message");
     if (!article) return;
+    article.classList.add("message-actions-open");
+    menu.setAttribute("aria-expanded", "true");
     const rect = menu.getBoundingClientRect();
     openMessageContextMenu({ message, article, sender, body, editable }, rect.right, rect.bottom + 4);
   });
   actions.append(menu);
-  const reply = document.createElement("button");
-  reply.className = "message-action";
-  reply.type = "button";
-  reply.textContent = "Reply";
-  reply.addEventListener("click", () => {
-    parent.closest(".message")?.classList.remove("message-actions-open");
-    menu.setAttribute("aria-expanded", "false");
-    setReplyTarget(replyReferenceForMessage(message, sender, body || "Encrypted message"));
-  });
-  actions.append(reply);
-  if (editable) {
-    const edit = document.createElement("button");
-    edit.className = "message-action";
-    edit.type = "button";
-    edit.textContent = "Edit";
-    edit.addEventListener("click", () => setEditTarget({ messageId: message.id, sender, body }));
-    actions.append(edit);
-  }
-  if (body) {
-    const copy = document.createElement("button");
-    copy.className = "message-action";
-    copy.type = "button";
-    copy.textContent = "Copy";
-    copy.addEventListener("click", () => void copyMessageBody(body));
-    actions.append(copy);
-  }
-  if (isOwnMessage(message)) {
-    const remove = document.createElement("button");
-    remove.className = "message-action message-delete-action";
-    remove.type = "button";
-    remove.textContent = "Delete";
-    remove.addEventListener("click", () => void deleteMessage(message));
-    actions.append(remove);
-  }
-  parent.append(actions);
+  parent.prepend(actions);
   renderIcons(actions);
 }
 
@@ -2932,6 +2943,7 @@ function renderMessage(
   }
   if (redactedMessageIds.has(message.id)) appendDeletedMessage(messageContent);
   const mediaMessage = content.msgtype === "m.image" || content.msgtype === "m.video" || content.msgtype === "m.file";
+  article.classList.toggle("message-emoji-only", !mediaMessage && isEmojiOnlyMessage(body));
   const mentionNames = new Set(selectedMembers.filter((member) => effectiveMentions.includes(member.userId)).map((member) => member.username.toLowerCase()));
   const mentionRoleNames = new Set(effectiveRoleMentions
     .map((roleId) => serverRoles.find((role) => role.id === roleId))
@@ -3056,10 +3068,10 @@ function renderMessage(
     replyContext.append(iconElement("corner-up-left"), replyLabel);
     renderIcons(replyContext);
     replyContext.addEventListener("click", () => void scrollToMessage(reply.messageId));
-    messageContent.insertBefore(replyContext, messageContent.children[1] ?? null);
+    article.insertBefore(replyContext, avatar);
   }
   const editable = !mediaMessage && (content.msgtype === "m.text" || content.msgtype === "m.notice" || Boolean(body)) && isOwnMessage(message);
-  if (!redactedMessageIds.has(message.id)) appendMessageActions(messageContent, message, senderIdentity, body, editable);
+  if (!redactedMessageIds.has(message.id)) appendMessageActions(article, message, senderIdentity, body, editable);
 
   if (!redactedMessageIds.has(message.id)) {
     const target: ContextMessage = { message, article, sender: senderIdentity, body, editable };

@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Emoji-only messages now use larger typography, while reply previews and hover actions occupy dedicated rows instead of covering message content.
 - Arrow keys, Enter, and Tab now navigate mention and emoji suggestions without scrolling the chat.
 - Server settings now organize server management, roles, member assignments, channel gates, and moderation in a polished access-control workspace.
 - Space invite management now keeps one active invite link and groups revoked links into collapsed history.

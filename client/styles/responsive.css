@@ -98,7 +98,6 @@
   .message-actions { opacity: 1; pointer-events: auto; }
   .message-action-menu { display: grid; }
   .message:not(.message-actions-open) .message-actions .message-action:not(.message-action-menu) { display: none; }
-  .message .message-content { padding-right: 1.9rem; }
   .message-actions-open .message-actions { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
 }
 
