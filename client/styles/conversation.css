@@ -82,8 +82,6 @@
 .message-delete-action { color: #ffb3b5; }
 .message-delete-action:hover { color: #fff; background: rgba(242, 63, 66, 0.3); }
 .message-action-menu { display: grid; min-width: 32px; min-height: 28px; font-size: 1.25rem; line-height: 0.6; }
-.message-compact .message-actions { top: 0.1rem; right: auto; left: 0.65rem; }
-.message-compact .message-actions .message-action:not(.message-action-menu) { display: none; }
 .message-reactions { display: flex; flex-wrap: wrap; gap: 0.28rem; margin-top: 0.5rem; }
 .message-reaction { display: inline-flex; align-items: center; gap: 0.25rem; min-height: 28px; padding: 0.18rem 0.42rem; border: 1px solid var(--line-soft); border-radius: 8px; color: var(--text-muted); background: rgba(28, 42, 53, 0.72); font-size: 0.7rem; }
 .message-reaction:hover, .message-reaction[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 85%, transparent); color: var(--text); background: rgba(146, 170, 165, 0.2); }

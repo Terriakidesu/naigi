@@ -91,15 +91,11 @@
   .media-zoom-control input { width: min(72px, 18vw); }
   .media-viewer-toolbar { padding: 0.5rem; }
   .media-viewer-toolbar strong { font-size: 0.72rem; }
-  .message-meta { padding-right: 2.75rem; }
-  .reply-context { padding-right: 2.75rem; }
 }
 
 @media (hover: none), (pointer: coarse), (max-width: 760px) {
   .conversation-delete { opacity: 1; }
   .message-actions { opacity: 1; pointer-events: auto; }
-  .message-action-menu { display: grid; }
-  .message:not(.message-actions-open) .message-actions .message-action:not(.message-action-menu) { display: none; }
   .message-actions-open .message-actions { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
 }
 
