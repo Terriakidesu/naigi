@@ -149,14 +149,16 @@ function parseCryptoUpload(value: unknown) {
   const body = objectValue(value);
   const deviceKeys = objectValue(body?.device_keys);
   const keys = objectValue(deviceKeys?.keys);
+  const deviceId = deviceKeys?.device_id ?? body?.device_id;
   const oneTimeKeys = objectValue(body?.one_time_keys) ?? {};
   const fallbackKeys = objectValue(body?.fallback_keys) ?? {};
-  if (!deviceKeys || !keys || typeof deviceKeys.user_id !== "string" || !isUuid(deviceKeys.device_id)) return null;
+  if (!isUuid(deviceId)) return null;
+  if (deviceKeys && (!keys || typeof deviceKeys.user_id !== "string" || deviceKeys.device_id !== deviceId)) return null;
   if (Object.keys(oneTimeKeys).length > 100 || Object.keys(fallbackKeys).length > 10) return null;
-  if (!Object.values(keys).every((key) => typeof key === "string")) return null;
+  if (keys && !Object.values(keys).every((key) => typeof key === "string")) return null;
   if (!Object.values(oneTimeKeys).every(validCryptoKey)) return null;
   if (!Object.values(fallbackKeys).every(validCryptoKey)) return null;
-  return { deviceKeys, oneTimeKeys, fallbackKeys };
+  return { deviceId, deviceKeys, oneTimeKeys, fallbackKeys };
 }
 
 function decodeEncryptedMetadata(value: string | undefined) {
@@ -1449,12 +1451,21 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
 
       const upload = parseCryptoUpload(body);
-      if (!upload || upload.deviceKeys.user_id !== matrixUserId(user.id)) {
+      if (!upload || (upload.deviceKeys && upload.deviceKeys.user_id !== matrixUserId(user.id))) {
         return respondError(set, 400, "invalid_crypto_key_upload");
       }
 
-      const deviceId = upload.deviceKeys.device_id as string;
-      const publicKeyBytes = Buffer.from(JSON.stringify(upload.deviceKeys));
+      const deviceId = upload.deviceId;
+      const [knownCryptoDevice] = await db<{ user_id: string; revoked_at: Date | null }[]>`
+        select user_id, revoked_at
+        from crypto_devices
+        where device_id = ${deviceId}
+      `;
+      if (!upload.deviceKeys && (!knownCryptoDevice || knownCryptoDevice.user_id !== user.id || knownCryptoDevice.revoked_at)) {
+        return respondError(set, 400, "invalid_crypto_key_upload");
+      }
+
+      const publicKeyBytes = upload.deviceKeys ? Buffer.from(JSON.stringify(upload.deviceKeys)) : undefined;
       await db.begin(async (transaction) => {
         const [existingDevice] = await transaction<{ user_id: string; revoked_at: Date | null }[]>`
           select user_id, revoked_at from devices where id = ${deviceId}
@@ -1466,7 +1477,11 @@ export function createApp() {
           throw new Error("crypto device has been revoked");
         }
 
-        if (!existingDevice) {
+        if (!existingDevice && !upload.deviceKeys) {
+          throw new Error("crypto device keys missing");
+        }
+
+        if (!existingDevice && upload.deviceKeys) {
           await transaction`
             insert into devices (id, user_id, name, identity_key, signed_prekey)
             values (
@@ -1475,18 +1490,26 @@ export function createApp() {
           `;
         }
 
-        await transaction`
-          insert into crypto_devices (device_id, user_id, matrix_user_id, device_keys, fallback_keys)
-          values (
-            ${deviceId}, ${user.id}, ${upload.deviceKeys.user_id},
-            ${JSON.stringify(upload.deviceKeys)}::jsonb, ${JSON.stringify(upload.fallbackKeys)}::jsonb
-          )
-          on conflict (device_id) do update set
-            device_keys = excluded.device_keys,
-            fallback_keys = excluded.fallback_keys,
-            updated_at = now(),
-            revoked_at = null
-        `;
+        if (upload.deviceKeys) {
+          await transaction`
+            insert into crypto_devices (device_id, user_id, matrix_user_id, device_keys, fallback_keys)
+            values (
+              ${deviceId}, ${user.id}, ${upload.deviceKeys.user_id},
+              ${JSON.stringify(upload.deviceKeys)}::jsonb, ${JSON.stringify(upload.fallbackKeys)}::jsonb
+            )
+            on conflict (device_id) do update set
+              device_keys = excluded.device_keys,
+              fallback_keys = excluded.fallback_keys,
+              updated_at = now(),
+              revoked_at = null
+          `;
+        } else {
+          await transaction`
+            update crypto_devices
+            set updated_at = now()
+            where device_id = ${deviceId} and user_id = ${user.id} and revoked_at is null
+          `;
+        }
 
         for (const [keyId, key] of Object.entries(upload.oneTimeKeys)) {
           await transaction`

@@ -205,7 +205,14 @@ export class CryptoClient {
     let response: unknown;
     switch (request.type) {
       case RequestType.KeysUpload:
-        response = await this.api.cryptoRequest("/v1/crypto/keys/upload", jsonObject(request.body));
+        {
+          const body = jsonObject(request.body);
+          // Matrix omits device_keys when it replenishes one-time keys. The
+          // custom transport is session-authenticated rather than device-
+          // authenticated, so include the local device id for that update.
+          body.device_id = this.deviceId;
+          response = await this.api.cryptoRequest("/v1/crypto/keys/upload", body);
+        }
         break;
       case RequestType.KeysQuery:
         response = await this.api.cryptoRequest("/v1/crypto/keys/query", jsonObject(request.body));
@@ -334,6 +341,8 @@ export class CryptoClient {
     const deviceLists = new DeviceLists(changed, left);
     const oneTimeKeyCounts = new Map(Object.entries(response.one_time_keys_count).map(([name, count]) => [name, Number(count)]));
     const fallbackKeys = new Set(response.unused_fallback_key_types ?? []);
+    // The WASM sync path invalidates this handle while processing events;
+    // freeing it again triggers a Rust null-pointer panic.
     const settings = new DecryptionSettings(TrustRequirement.Untrusted);
     try {
       const processed = await this.state.receiveSyncChangesMsc4186(
@@ -348,7 +357,6 @@ export class CryptoClient {
       for (const event of processed) event.free?.();
       return processed.length;
     } finally {
-      settings.free();
       deviceLists.free();
     }
   }
@@ -585,6 +593,8 @@ export class CryptoClient {
     if (message.protocol !== "matrix-v1") throw new Error("unsupported_message_protocol");
     return this.runCryptoOperation(async () => {
       const roomId = new RoomId(matrixRoomId(conversationId));
+      // decryptRoomEvent invalidates its settings handle in the current WASM
+      // binding, so do not manually free it after the call.
       const settings = new DecryptionSettings(TrustRequirement.Untrusted);
       try {
         const decrypted = await this.state.decryptRoomEvent(JSON.stringify(eventForMessage(message)), roomId, settings);
@@ -594,7 +604,6 @@ export class CryptoClient {
         decrypted.free();
         return { sender, content };
       } finally {
-        settings.free();
         roomId.free();
       }
     });
