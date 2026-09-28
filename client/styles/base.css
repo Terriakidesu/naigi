@@ -19,13 +19,17 @@
   --accent-hover: #a7bdb7;
   --green: #78b39b;
   --danger: #d57f86;
+  --app-scale: 1;
 }
 
 * { box-sizing: border-box; }
+html { font-size: calc(16px * var(--app-scale)); }
 [hidden] { display: none !important; }
 html { scroll-behavior: smooth; }
 html, body { width: 100%; height: 100%; }
 body { margin: 0; min-width: 320px; overflow: hidden; background: var(--bg); color: var(--text); }
+:root[data-app-theme="light"] { color-scheme: light; --bg: #eef3f2; --bg-deep: #dfe8e6; --bg-sidebar: #e7efed; --bg-elevated: #f8fbfa; --bg-input: #fff; --bg-hover: #dbe7e4; --bg-active: #ccddda; --line: #c3d3d0; --line-soft: #b5c8c4; --text: #1f2c2d; --text-muted: #405154; --text-faint: #647578; --accent-hover: #527d75; }
+:root[data-app-theme="dim"] { --bg: #1a2026; --bg-deep: #11171d; --bg-sidebar: #161d23; --bg-elevated: #202a31; --bg-input: #253039; --bg-hover: #2b3a42; --bg-active: #33464d; }
 button, input, select, textarea { font: inherit; }
 svg.lucide { width: 1em; height: 1em; flex: 0 0 auto; stroke-width: 1.8; }
 button { cursor: pointer; border: 0; border-radius: 5px; color: #152027; background: var(--accent); transition: background 120ms ease, opacity 120ms ease, transform 120ms ease; }

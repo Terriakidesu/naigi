@@ -4,6 +4,17 @@
 
 _No unreleased changes._
 
+## [0.14.0] - 2026-09-28
+
+### Added
+
+- Profile settings now include a separate device-local App Settings surface for theme, accent color, interface scale, compact spacing, motion, sounds, media autoplay, external previews, and Enter-to-send behavior.
+- Rooms and categories now expose pointer and keyboard context menus for opening, unread markers, local room mute, link copying, collapsing categories, creating rooms, and settings navigation.
+
+### Security
+
+- App preferences and room mutes remain local to the browser and are never uploaded, persisted in PostgreSQL, or included in encrypted message content.
+
 ## [0.13.0] - 2026-09-28
 
 ### Added
@@ -43,6 +54,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.14.0](docs/changelogs/0.14.0.md) — 2026-09-28
 - [0.13.0](docs/changelogs/0.13.0.md) — 2026-09-28
 - [0.12.0](docs/changelogs/0.12.0.md) — 2026-09-27
 - [0.11.0](docs/changelogs/0.11.0.md) — 2026-09-27

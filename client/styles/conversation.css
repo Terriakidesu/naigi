@@ -128,6 +128,7 @@
 .message-pin-badge { display: inline-flex; align-items: center; gap: 0.2rem; margin-left: 0.2rem; color: #c4c9b3; font-size: 0.62rem; }
 .edited-label { margin-left: 0.2rem; color: var(--text-faint); font-size: 0.6rem; }
 .message-context-menu { position: fixed; z-index: 40; display: grid; width: min(208px, calc(100vw - 1rem)); max-height: min(420px, calc(100dvh - 1rem)); overflow: auto; padding: 0.22rem; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--bg-elevated); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.42); }
+.navigation-context-menu { z-index: 41; width: min(238px, calc(100vw - 1rem)); }
 .message-context-title { padding: 0.3rem 0.4rem 0.2rem; color: var(--text-faint); font-size: 0.55rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
 .message-context-reactions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.08rem; padding: 0.08rem 0.1rem 0.28rem; border-bottom: 1px solid var(--line-soft); }
 .message-context-reaction { display: grid; place-items: center; min-height: 30px; padding: 0.2rem; border-radius: 4px; background: transparent; }

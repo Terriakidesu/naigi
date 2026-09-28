@@ -15,6 +15,7 @@ import {
 import { CryptoClient, LocalCryptoStoreError, MAX_MESSAGE_TEXT_LENGTH, type DecryptedMessage, type ReplyReference } from "./crypto";
 import { roomKeyUnavailable } from "./decryption";
 import { appendSafeEmbed, extractEmbeds, normalizeStoredEmbeds, prepareEmbeds, type SafeEmbed } from "./embeds";
+import { applyAppPreferences, defaultAppPreferences, loadAppPreferences, type AppPreferences } from "./app-preferences";
 import {
   emojiEntryAt,
   emojiShortcodeMatches,
@@ -37,6 +38,7 @@ import { askText, showOneTimeToken } from "./ui-dialog";
 
 const api = new ApiClient();
 let currentUser: User | undefined;
+let appPreferences: AppPreferences = { ...defaultAppPreferences };
 let cryptoClient: CryptoClient | undefined;
 let selectedConversationId: string | undefined;
 let selectedMembers: ConversationMember[] = [];
@@ -53,6 +55,7 @@ const serverLabels = new Map<string, string>();
 const channelLabels = new Map<string, string>();
 const categoryLabels = new Map<string, string>();
 const collapsedCategories = new Set<string>();
+const mutedChannelIds = new Set<string>();
 let realtime: WebSocket | undefined;
 let realtimeReadySocket: WebSocket | undefined;
 let realtimeHandshakeTimer: number | undefined;
@@ -288,6 +291,7 @@ const profileModalUsername = byId<HTMLElement>("profile-modal-username");
 const profileModalCreated = byId<HTMLElement>("profile-modal-created");
 const profileModalEdit = byId<HTMLAnchorElement>("profile-modal-edit");
 const messageContextMenu = byId<HTMLElement>("message-context-menu");
+const navigationContextMenu = byId<HTMLElement>("navigation-context-menu");
 let profileRequest = 0;
 let modalReturnFocus: HTMLElement | null = null;
 let activeSuggestionIndex = -1;
@@ -315,6 +319,14 @@ function notificationsSupported() {
 
 function notificationStorageKey() {
   return currentUser ? `priv-chat.notifications.${currentUser.id}` : "priv-chat.notifications";
+}
+
+function externalPreviewsEnabled() {
+  return appPreferences.externalPreviews;
+}
+
+function prepareAppEmbeds(text: string) {
+  return externalPreviewsEnabled() ? prepareEmbeds(text) : Promise.resolve<SafeEmbed[]>([]);
 }
 
 function saveNotificationPreference() {
@@ -392,11 +404,14 @@ function rememberBounded(set: Set<string>, value: string, limit = 2_000) {
 
 function notifyNewMessage(conversationId: string, messageId?: string, force = false) {
   if (!notificationsSupported() || !notificationsEnabled || Notification.permission !== "granted") return;
+  const muted = [...channelsByServer.values()].some((serverChannels) => serverChannels.some((channel) => channel.conversationId === conversationId && mutedChannelIds.has(channel.id)));
+  if (muted) return;
   if (messageId && notifiedRealtimeMessageIds.has(messageId)) return;
   const awayFromConversation = conversationId !== selectedConversationId
     || document.visibilityState === "hidden"
     || messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight >= 100;
   if (!force && !awayFromConversation) return;
+  if (appPreferences.sounds) playNotificationSound();
   try {
     const notification = new Notification("New encrypted message", {
       body: "A new encrypted message is waiting in Naigi.",
@@ -414,6 +429,26 @@ function notifyNewMessage(conversationId: string, messageId?: string, force = fa
     window.setTimeout(() => notification.close(), 8_000);
   } catch {
     // Browser notification failures must not affect encrypted message delivery.
+  }
+}
+
+function playNotificationSound() {
+  if (!appPreferences.sounds || typeof AudioContext === "undefined") return;
+  try {
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 660;
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.035, context.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.12);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.13);
+    oscillator.addEventListener("ended", () => void context.close());
+  } catch {
+    // Browsers may reject audio until the user has interacted with the page.
   }
 }
 
@@ -552,6 +587,108 @@ function closeMessageContextMenu() {
   messageContextMenu.hidden = true;
   messageContextMenu.replaceChildren();
   contextMessage = undefined;
+}
+
+function closeNavigationContextMenu() {
+  navigationContextMenu.hidden = true;
+  navigationContextMenu.replaceChildren();
+}
+
+function placeContextMenu(menu: HTMLElement, x: number, y: number) {
+  menu.hidden = false;
+  const margin = 8;
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(margin, Math.min(x, window.innerWidth - rect.width - margin))}px`;
+  menu.style.top = `${Math.max(margin, Math.min(y, window.innerHeight - rect.height - margin))}px`;
+}
+
+function navigationContextAction(label: string, action: () => void | Promise<void>, options: { icon?: string } = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "message-context-action";
+  button.setAttribute("role", "menuitem");
+  if (options.icon) button.append(iconElement(options.icon, "message-context-icon"));
+  const text = document.createElement("span");
+  text.className = "message-context-label";
+  text.textContent = label;
+  button.append(text);
+  button.addEventListener("click", () => {
+    closeNavigationContextMenu();
+    void action();
+  });
+  navigationContextMenu.append(button);
+  return button;
+}
+
+function mutedStorageKey() {
+  return currentUser ? `priv-chat.muted-rooms.${currentUser.id}` : "priv-chat.muted-rooms";
+}
+
+function loadMutedChannels() {
+  mutedChannelIds.clear();
+  try {
+    const value = JSON.parse(localStorage.getItem(mutedStorageKey()) ?? "[]") as unknown;
+    if (Array.isArray(value)) {
+      for (const channelId of value) if (typeof channelId === "string") mutedChannelIds.add(channelId);
+    }
+  } catch {
+    // Local mute state is optional.
+  }
+}
+
+function saveMutedChannels() {
+  try {
+    localStorage.setItem(mutedStorageKey(), JSON.stringify([...mutedChannelIds]));
+  } catch {
+    // Local storage may be disabled or full.
+  }
+}
+
+function toggleChannelMuted(channelId: string) {
+  if (mutedChannelIds.has(channelId)) mutedChannelIds.delete(channelId);
+  else mutedChannelIds.add(channelId);
+  saveMutedChannels();
+  renderChannels();
+  setStatus(mutedChannelIds.has(channelId) ? "Room muted on this browser." : "Room unmuted on this browser.");
+}
+
+function copyRoomLink(serverId: string, channelId: string) {
+  if (!navigator.clipboard) {
+    setStatus("Unable to copy the room link.", true);
+    return;
+  }
+  void navigator.clipboard.writeText(new URL(channelLocation(serverId, channelId), window.location.origin).toString())
+    .then(() => setStatus("Room link copied."))
+    .catch(() => setStatus("Unable to copy the room link.", true));
+}
+
+function openNavigationContextMenu(target: { kind: "channel"; channel: ServerChannel } | { kind: "category"; category: ServerCategory }, x: number, y: number) {
+  closeMessageContextMenu();
+  navigationContextMenu.replaceChildren();
+  if (target.kind === "channel") {
+    const { channel } = target;
+    navigationContextAction("Open room", () => void selectChannel(channel.id), { icon: "message-square" });
+    navigationContextAction("Mark unread from here", () => markConversationUnread(channel.conversationId, loadedMessages.length > 0 ? loadedMessages[loadedMessages.length - 1].serverSequence : "0", { force: true }), { icon: "clock" });
+    navigationContextAction(mutedChannelIds.has(channel.id) ? "Unmute room" : "Mute room", () => toggleChannelMuted(channel.id), { icon: mutedChannelIds.has(channel.id) ? "bell" : "bell-off" });
+    navigationContextAction("Copy room link", () => copyRoomLink(channel.serverId, channel.id), { icon: "link" });
+    if (selectedServerId && (hasActiveServerPermission("manage_channels") || hasActiveServerPermission("edit_channels"))) {
+      navigationContextAction("Room settings", () => window.location.assign(`/server-settings?server=${encodeURIComponent(channel.serverId)}#rooms`), { icon: "settings-2" });
+    }
+  } else {
+    const collapsed = collapsedCategories.has(target.category.id);
+    navigationContextAction(collapsed ? "Expand category" : "Collapse category", () => {
+      if (collapsed) collapsedCategories.delete(target.category.id);
+      else collapsedCategories.add(target.category.id);
+      renderChannels();
+    }, { icon: collapsed ? "chevron-down" : "chevron-right" });
+    navigationContextAction("Create room in category", () => void createChannel(target.category.id), { icon: "plus" });
+    if (selectedServerId && (hasActiveServerPermission("manage_channels") || hasActiveServerPermission("manage_categories"))) {
+      navigationContextAction("Category settings", () => window.location.assign(`/server-settings?server=${encodeURIComponent(target.category.serverId)}#rooms`), { icon: "settings-2" });
+    }
+  }
+  renderIcons(navigationContextMenu);
+  placeContextMenu(navigationContextMenu, x, y);
+  navigationContextMenu.querySelector<HTMLButtonElement>("button")?.focus();
 }
 
 function contextMenuAction(label: string, action: () => void | Promise<void>, options: { danger?: boolean; shortcut?: string; icon?: string } = {}) {
@@ -1907,6 +2044,7 @@ function conversationLocation(conversationId: string) {
 
 async function startCrypto() {
   if (!currentUser) throw new Error("not_authenticated");
+  appPreferences = applyAppPreferences(loadAppPreferences(currentUser.id), chatLayout);
   const localPassphrase = await resolveLocalPassphrase(currentUser.id);
   if (!localPassphrase) {
     const returnPath = `${window.location.pathname}${window.location.search}`;
@@ -1914,6 +2052,7 @@ async function startCrypto() {
     return;
   }
   loadUnreadMarkers();
+  loadMutedChannels();
   loadNotificationPreference();
   optimisticDecryptedMessages.clear();
   decryptedMessageCache.clear();
@@ -2269,6 +2408,7 @@ function renderChannels() {
     button.className = "channel-item";
     button.type = "button";
     button.dataset.channelId = channel.id;
+    button.dataset.muted = String(mutedChannelIds.has(channel.id));
     button.classList.toggle("selected", channel.id === selectedChannelId);
     button.setAttribute("aria-pressed", String(channel.id === selectedChannelId));
     const icon = document.createElement("span");
@@ -2287,6 +2427,17 @@ function renderChannels() {
       button.append(badge);
     }
     button.addEventListener("click", () => void selectChannel(channel.id));
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openNavigationContextMenu({ kind: "channel", channel }, event.clientX, event.clientY);
+    });
+    button.addEventListener("keydown", (event) => {
+      if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+      event.preventDefault();
+      const rect = button.getBoundingClientRect();
+      openNavigationContextMenu({ kind: "channel", channel }, rect.right, rect.bottom);
+    });
     channelList.append(button);
   };
 
@@ -2306,6 +2457,17 @@ function renderChannels() {
         if (collapsedCategories.has(category.id)) collapsedCategories.delete(category.id);
         else collapsedCategories.add(category.id);
         renderChannels();
+      });
+      heading.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openNavigationContextMenu({ kind: "category", category }, event.clientX, event.clientY);
+      });
+      heading.addEventListener("keydown", (event) => {
+        if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+        event.preventDefault();
+        const rect = heading.getBoundingClientRect();
+        openNavigationContextMenu({ kind: "category", category }, rect.right, rect.bottom);
       });
     } else {
       heading.disabled = true;
@@ -3464,12 +3626,15 @@ messagesPanel.addEventListener("contextmenu", (event) => {
 
 document.addEventListener("pointerdown", (event) => {
   if (!messageContextMenu.hidden && event.target instanceof Node && !messageContextMenu.contains(event.target)) closeMessageContextMenu();
+  if (!navigationContextMenu.hidden && event.target instanceof Node && !navigationContextMenu.contains(event.target)) closeNavigationContextMenu();
   if (!emojiPicker.hidden && event.target instanceof Node && !emojiPicker.contains(event.target) && event.target !== emojiToggle) closeEmojiPicker();
   if (!emojiSuggestions.hidden && event.target instanceof Node && !emojiSuggestions.contains(event.target) && event.target !== messageInput) hideEmojiSuggestions();
   if (!mentionSuggestions.hidden && event.target instanceof Node && !mentionSuggestions.contains(event.target) && event.target !== messageInput) hideMentionSuggestions();
 });
 window.addEventListener("resize", closeMessageContextMenu);
+window.addEventListener("resize", closeNavigationContextMenu);
 messagesPanel.addEventListener("scroll", closeMessageContextMenu, { passive: true });
+channelList.addEventListener("scroll", closeNavigationContextMenu, { passive: true });
 
 function appendDeletedMessage(messageContent: HTMLElement) {
   const deleted = document.createElement("p");
@@ -3883,7 +4048,9 @@ function renderMessage(
   const originalBody = decrypted && typeof decrypted.content.body === "string" ? decrypted.content.body : "";
   const body = edited?.body ?? originalBody;
   const storedEmbeds = normalizeStoredEmbeds(decrypted?.content.embeds);
-  const effectiveEmbeds = edited?.embeds ?? (storedEmbeds.length > 0 ? storedEmbeds : extractEmbeds(body));
+  const effectiveEmbeds = externalPreviewsEnabled()
+    ? edited?.embeds ?? (storedEmbeds.length > 0 ? storedEmbeds : extractEmbeds(body))
+    : [];
   const effectiveMentions = edited?.mentions ?? (Array.isArray(decrypted?.content.mentions)
     ? decrypted.content.mentions.filter((value): value is string => typeof value === "string")
     : []);
@@ -3952,7 +4119,9 @@ function renderMessage(
     const target = loadedMessages.find((candidate) => candidate.id === content.replaces);
     if (!target?.senderUserId || !message.senderUserId || target.senderUserId !== message.senderUserId) return false;
     const storedEmbeds = normalizeStoredEmbeds(content.embeds);
-    const embeds = storedEmbeds.length > 0 ? storedEmbeds : extractEmbeds(content.body);
+     const embeds = externalPreviewsEnabled()
+       ? storedEmbeds.length > 0 ? storedEmbeds : extractEmbeds(content.body)
+       : [];
     const mentions = Array.isArray(content.mentions) ? content.mentions.filter((value): value is string => typeof value === "string") : [];
     const roleMentions = Array.isArray(content.roleMentions) ? content.roleMentions.filter((value): value is string => typeof value === "string") : [];
     applyEditedBody(content.replaces, content.body, embeds, mentions, roleMentions);
@@ -4413,7 +4582,7 @@ async function createServer() {
   }
 }
 
-async function createChannel() {
+async function createChannel(categoryId?: string) {
   const server = selectedServerId ? servers.find((item) => item.id === selectedServerId) : undefined;
   if (!server || !cryptoClient) return;
   const name = await askText("Create an encrypted room", "Room names are encrypted. Each room has its own conversation key.", "Room name", "new-room");
@@ -4421,7 +4590,7 @@ async function createChannel() {
   createChannelButton.disabled = true;
   setStatus("Creating encrypted room…");
   try {
-    const result = await api.createChannel(server.id);
+    const result = await api.createChannel(server.id, "", categoryId ?? null);
     await encryptAndStoreMetadata(server.id, result.channel, name);
     await refreshServers();
     await selectServer(server.id, result.channel.id);
@@ -4512,7 +4681,7 @@ composer.addEventListener("submit", async (event) => {
   let activeBatchAttachmentIndex = -1;
   try {
     if (activeEdit) {
-      const embeds = await prepareEmbeds(text);
+      const embeds = await prepareAppEmbeds(text);
       const mentions = mentionedUserIds(text);
       const roleMentions = mentionedRoleIds(text);
       const result = await activeCryptoClient.sendEdit(conversationId, members, activeEdit.messageId, text, embeds, mentions, roleMentions);
@@ -4536,7 +4705,7 @@ composer.addEventListener("submit", async (event) => {
       if (replyTarget?.mentionSender && replyTarget.userId) {
         mentions.push(replyTarget.userId);
       }
-      const result = await activeCryptoClient.sendText(conversationId, members, text, await prepareEmbeds(text), replyTarget, mentions, roleMentions);
+       const result = await activeCryptoClient.sendText(conversationId, members, text, await prepareAppEmbeds(text), replyTarget, mentions, roleMentions);
       queued = result.delivery === "queued";
       textSent = true;
       if (result.message) {
@@ -4566,7 +4735,7 @@ composer.addEventListener("submit", async (event) => {
           {
             signal: uploadController?.signal,
             body: text,
-            embeds: await prepareEmbeds(text),
+             embeds: await prepareAppEmbeds(text),
             replyTo: replyTarget,
             mentions,
             roleMentions,
@@ -4680,7 +4849,7 @@ composer.addEventListener("submit", async (event) => {
 
 messageInput.addEventListener("keydown", (event) => {
   if (handleSuggestionKeydown(event)) return;
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+  if (appPreferences.enterToSend && event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     composer.requestSubmit();
   }
@@ -4784,6 +4953,11 @@ document.addEventListener("keydown", (event) => {
   if (!messageContextMenu.hidden && event.key === "Escape") {
     event.preventDefault();
     closeMessageContextMenu();
+    return;
+  }
+  if (!navigationContextMenu.hidden && event.key === "Escape") {
+    event.preventDefault();
+    closeNavigationContextMenu();
     return;
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {

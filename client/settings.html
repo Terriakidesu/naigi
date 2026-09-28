@@ -14,12 +14,13 @@
       <div class="topbar-links"><a class="text-link" href="/app">Back to chat</a><button id="logout-button" class="text-link-button" type="button">Sign out</button></div>
     </header>
     <main class="settings-layout">
-      <nav class="settings-nav panel" aria-label="Settings navigation">
-        <p class="eyebrow">ACCOUNT</p>
-         <a class="settings-nav-item active" data-settings-tab href="#profile"><i data-lucide="user-round"></i><span>Profile</span></a>
-         <a class="settings-nav-item" data-settings-tab href="#security"><i data-lucide="key-round"></i><span>Security</span></a>
-         <a class="settings-nav-item" data-settings-tab href="#devices"><i data-lucide="monitor-smartphone"></i><span>Devices</span></a>
-         <a class="settings-nav-item" data-settings-tab href="#privacy"><i data-lucide="shield-check"></i><span>Privacy</span></a>
+       <nav class="settings-nav panel" aria-label="Settings navigation">
+         <p class="eyebrow">PROFILE SETTINGS</p>
+          <a class="settings-nav-item active" data-settings-tab href="#profile"><i data-lucide="user-round"></i><span>Profile</span></a>
+          <a class="settings-nav-item" data-settings-tab href="#security"><i data-lucide="key-round"></i><span>Security</span></a>
+          <a class="settings-nav-item" data-settings-tab href="#devices"><i data-lucide="monitor-smartphone"></i><span>Devices</span></a>
+          <a class="settings-nav-item" data-settings-tab href="#privacy"><i data-lucide="shield-check"></i><span>Privacy</span></a>
+          <a class="settings-nav-item" data-settings-tab href="#app"><i data-lucide="sliders-horizontal"></i><span>App</span></a>
       </nav>
       <section class="settings-content">
          <section id="profile" class="settings-section panel" data-settings-view>
@@ -56,7 +57,7 @@
            <p class="muted">Each browser has its own encrypted key store. Revoking a device blocks future server access; it does not erase keys or messages already stored there.</p>
           <div id="device-list" class="device-list"></div>
         </section>
-         <section id="privacy" class="settings-section panel" data-settings-view hidden>
+          <section id="privacy" class="settings-section panel" data-settings-view hidden>
            <p class="eyebrow">PRIVACY</p>
            <h2>Your keys stay local</h2>
             <p class="muted">Your local encryption passphrase is used only to unlock this browser’s IndexedDB key store. It is never transmitted to Naigi.</p>
@@ -64,8 +65,25 @@
              <button id="lock-now-button" class="secondary" type="button">Lock this browser</button>
              <button id="forget-device-button" class="danger-button" type="button">Forget remembered unlock</button>
            </div>
-           <p id="local-unlock-status" class="muted small"></p>
-         </section>
+            <p id="local-unlock-status" class="muted small"></p>
+          </section>
+          <section id="app" class="settings-section panel" data-settings-view hidden>
+            <p class="eyebrow">APP SETTINGS</p>
+            <h2>Customize this browser</h2>
+            <p class="muted">These preferences stay on this device. They are never uploaded or included in encrypted messages.</p>
+            <form id="app-preferences-form" class="settings-form app-preferences-form">
+              <label for="app-theme">Theme<select id="app-theme"><option value="dark">Dark</option><option value="dim">Dim</option><option value="light">Light</option></select></label>
+              <label for="app-accent">Accent color<input id="app-accent" type="color" value="#92aaa5"></label>
+              <label for="app-scale">Interface scale<select id="app-scale"><option value="0.85">85%</option><option value="0.9">90%</option><option value="1">100%</option><option value="1.1">110%</option><option value="1.25">125%</option></select></label>
+              <label class="checkbox-label settings-checkbox"><input id="app-sounds" type="checkbox"><span>Notification sounds</span></label>
+              <label class="checkbox-label settings-checkbox"><input id="app-autoplay-media" type="checkbox"><span>Autoplay media when available</span></label>
+              <label class="checkbox-label settings-checkbox"><input id="app-external-previews" type="checkbox"><span>Load external link previews</span></label>
+              <label class="checkbox-label settings-checkbox"><input id="app-enter-to-send" type="checkbox"><span>Enter sends messages <small>Shift + Enter adds a new line</small></span></label>
+              <label class="checkbox-label settings-checkbox"><input id="app-compact-messages" type="checkbox"><span>Compact message spacing</span></label>
+              <label class="checkbox-label settings-checkbox"><input id="app-reduced-motion" type="checkbox"><span>Reduce motion</span></label>
+              <button type="submit">Save app settings</button>
+            </form>
+          </section>
         <p id="settings-status" class="form-status" role="status"></p>
       </section>
     </main>

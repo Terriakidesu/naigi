@@ -1,4 +1,5 @@
 import { ApiClient, ApiError } from "./api";
+import { applyAppPreferences, defaultAppPreferences, loadAppPreferences, saveAppPreferences, type AppPreferences } from "./app-preferences";
 import { iconElement, renderIcons } from "./icons";
 import { setupProfileSettings } from "./profile-settings";
 import { clearSessionPassphrase, forgetRememberedPassphrase, lockLocalSession } from "./unlock-vault";
@@ -28,7 +29,18 @@ const confirmPassword = document.getElementById("confirm-password") as HTMLInput
 const lockNow = document.getElementById("lock-now-button") as HTMLButtonElement;
 const forgetDevice = document.getElementById("forget-device-button") as HTMLButtonElement;
 const localUnlockStatus = document.getElementById("local-unlock-status") as HTMLElement;
+const appPreferencesForm = document.getElementById("app-preferences-form") as HTMLFormElement;
+const appTheme = document.getElementById("app-theme") as HTMLSelectElement;
+const appAccent = document.getElementById("app-accent") as HTMLInputElement;
+const appScale = document.getElementById("app-scale") as HTMLSelectElement;
+const appSounds = document.getElementById("app-sounds") as HTMLInputElement;
+const appAutoplayMedia = document.getElementById("app-autoplay-media") as HTMLInputElement;
+const appExternalPreviews = document.getElementById("app-external-previews") as HTMLInputElement;
+const appEnterToSend = document.getElementById("app-enter-to-send") as HTMLInputElement;
+const appCompactMessages = document.getElementById("app-compact-messages") as HTMLInputElement;
+const appReducedMotion = document.getElementById("app-reduced-motion") as HTMLInputElement;
 let currentUserId: string | undefined;
+let appPreferences: AppPreferences = { ...defaultAppPreferences };
 
 function setStatus(message: string, error = false) {
   status.textContent = message;
@@ -104,6 +116,19 @@ window.addEventListener("hashchange", syncSettingsNav);
 syncSettingsNav();
 renderIcons();
 
+function renderAppPreferences(preferences: AppPreferences) {
+  appPreferences = applyAppPreferences(preferences);
+  appTheme.value = appPreferences.theme;
+  appAccent.value = appPreferences.accent;
+  appScale.value = String(appPreferences.scale);
+  appSounds.checked = appPreferences.sounds;
+  appAutoplayMedia.checked = appPreferences.autoplayMedia;
+  appExternalPreviews.checked = appPreferences.externalPreviews;
+  appEnterToSend.checked = appPreferences.enterToSend;
+  appCompactMessages.checked = appPreferences.compactMessages;
+  appReducedMotion.checked = appPreferences.reducedMotion;
+}
+
 const profileSettings = setupProfileSettings(api, {
   name,
   avatar,
@@ -122,6 +147,7 @@ async function boot() {
   try {
     const result = await api.me();
     currentUserId = result.user.id;
+    renderAppPreferences(loadAppPreferences(currentUserId));
     profileSettings.renderProfile(result.user);
     await loadDevices();
   } catch (error) {
@@ -129,6 +155,23 @@ async function boot() {
     else setStatus(error instanceof Error ? error.message : "Unable to load settings.", true);
   }
 }
+
+appPreferencesForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  appPreferences = saveAppPreferences(currentUserId, {
+    theme: appTheme.value as AppPreferences["theme"],
+    accent: appAccent.value,
+    scale: Number(appScale.value),
+    sounds: appSounds.checked,
+    autoplayMedia: appAutoplayMedia.checked,
+    externalPreviews: appExternalPreviews.checked,
+    enterToSend: appEnterToSend.checked,
+    compactMessages: appCompactMessages.checked,
+    reducedMotion: appReducedMotion.checked,
+  });
+  renderAppPreferences(appPreferences);
+  setStatus("App settings saved on this browser.");
+});
 
 passwordForm.addEventListener("submit", async (event) => {
   event.preventDefault();

@@ -73,6 +73,12 @@
 .settings-form { display: grid; gap: 0.8rem; margin-top: 1rem; }
 .settings-form button { width: fit-content; padding: 0.55rem 0.85rem; font-size: 0.74rem; font-weight: 700; }
 .settings-form textarea { resize: vertical; }
+.app-preferences-form { gap: 0.65rem; }
+.app-preferences-form input[type="color"] { width: 54px; height: 38px; padding: 0.2rem; }
+.settings-checkbox { display: flex; align-items: flex-start; gap: 0.55rem; width: fit-content; padding: 0.45rem 0.6rem; border-radius: 6px; color: var(--text-muted); background: var(--bg-sidebar); font-size: 0.76rem; }
+.settings-checkbox input { flex: 0 0 auto; width: auto; margin-top: 0.12rem; accent-color: var(--accent); }
+.settings-checkbox span { display: grid; gap: 0.12rem; }
+.settings-checkbox small { color: var(--text-faint); font-size: 0.65rem; font-weight: 400; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 0.55rem; margin-top: 1rem; }
 .settings-actions button, .danger-button { padding: 0.5rem 0.7rem; font-size: 0.7rem; }
 .danger-button { color: #ffb3b5; background: rgba(242, 63, 66, 0.14); }
