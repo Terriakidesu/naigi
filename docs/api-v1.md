@@ -55,11 +55,13 @@ the backend does not depend on that representation.
 | `GET` | `/v1/servers` | List active server memberships |
 | `POST` | `/v1/servers` | Create a server and its initial `general` channel |
 | `GET` | `/v1/servers/:serverId` | Fetch one authorized server |
-| `PATCH` | `/v1/servers/:serverId` | Replace encrypted server metadata (owner/admin) |
+| `PATCH` | `/v1/servers/:serverId` | Replace encrypted server metadata and/or set the onboarding channel (owner/admin) |
 | `GET` | `/v1/servers/:serverId/categories` | List ordered active categories |
 | `POST` | `/v1/servers/:serverId/categories` | Create a category (owner/admin) |
 | `PATCH` | `/v1/servers/:serverId/categories/:categoryId` | Replace metadata or set `position` |
 | `DELETE` | `/v1/servers/:serverId/categories/:categoryId` | Archive a category and uncategorize its channels |
+| `PATCH` | `/v1/servers/:serverId/roles/:roleId/categories/:categoryId` | Grant or replace inherited role access to a category |
+| `DELETE` | `/v1/servers/:serverId/roles/:roleId/categories/:categoryId` | Remove inherited role access from a category |
 | `GET` | `/v1/servers/:serverId/members` | List active members and roles |
 | `GET` | `/v1/servers/:serverId/invites` | List invite metadata (owner/admin) |
 | `POST` | `/v1/servers/:serverId/invites` | Replace the current active invite with a hashed, expiring invite (owner/admin) |
@@ -89,6 +91,13 @@ frontend can keep navigation and cryptographic room state separate.
 Category IDs and channel ordering are server-visible for navigation. Category names and
 descriptions remain inside `encryptedMetadata`; the reference browser client encrypts
 category metadata in the first active channel room.
+
+Roles may receive category-level view/upload grants. Active channels in that category inherit
+those grants in addition to any channel-specific grants. `PATCH /v1/servers/:serverId` accepts
+`onboardingChannelId` (or `null` to disable join notices); a new server defaults it to its first
+active channel. The API exposes this ID as `onboardingChannelId`. The server only stores the
+channel ID and never creates or reads the encrypted join notice; the browser that accepts an
+invite may publish the notice as an encrypted `m.notice` event.
 
 ## Encrypted conversations
 

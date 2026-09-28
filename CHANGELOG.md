@@ -4,6 +4,22 @@
 
 _No unreleased changes._
 
+## [0.15.0] - 2026-09-28
+
+### Added
+
+- Categories can now grant inherited view and upload access to roles; rooms in a category enforce those grants while preserving room-specific access rules.
+- Server settings can choose or disable the room used for encrypted join announcements, with the first room selected by default.
+- Invite acceptance now returns the configured onboarding room, and the browser can publish a client-encrypted “joined” notice without exposing its plaintext to the server.
+
+### Changed
+
+- Role previews and role management now show category-level inherited access alongside direct room access.
+
+### Security
+
+- Category permissions are enforced by the server for channel listing, membership synchronization, message history, uploads, and sends; onboarding stores only a channel ID and never stores plaintext notices.
+
 ## [0.14.0] - 2026-09-28
 
 ### Added
@@ -54,6 +70,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.15.0](docs/changelogs/0.15.0.md) — 2026-09-28
 - [0.14.0](docs/changelogs/0.14.0.md) — 2026-09-28
 - [0.13.0](docs/changelogs/0.13.0.md) — 2026-09-28
 - [0.12.0](docs/changelogs/0.12.0.md) — 2026-09-27

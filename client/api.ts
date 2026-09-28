@@ -65,6 +65,7 @@ export type Server = {
   role: ServerRole;
   permissions: ServerPermissionMap;
   channelCount: number;
+  onboardingChannelId: string | null;
   createdAt: string;
 };
 
@@ -115,6 +116,12 @@ export type ServerRoleChannelAccess = {
   canUpload: boolean;
 };
 
+export type ServerRoleCategoryAccess = {
+  categoryId: string;
+  canView: boolean;
+  canUpload: boolean;
+};
+
 export type CustomServerRole = {
   id: string;
   serverId: string;
@@ -127,6 +134,7 @@ export type CustomServerRole = {
   isSystem: boolean;
   systemKey: "owner" | "admin" | "everyone" | "member" | null;
   channelAccess: ServerRoleChannelAccess[];
+  categoryAccess: ServerRoleCategoryAccess[];
   createdAt: string;
   updatedAt: string;
 };
@@ -492,6 +500,17 @@ export class ApiClient {
     return this.delete<{ deleted: boolean }>(`/v1/servers/${serverId}/roles/${roleId}/channels/${channelId}`);
   }
 
+  updateServerRoleCategoryAccess(serverId: string, roleId: string, categoryId: string, canView: boolean, canUpload: boolean) {
+    return this.patch<{ updated: boolean; canView: boolean; canUpload: boolean }>(
+      `/v1/servers/${serverId}/roles/${roleId}/categories/${categoryId}`,
+      { canView, canUpload },
+    );
+  }
+
+  removeServerRoleCategoryAccess(serverId: string, roleId: string, categoryId: string) {
+    return this.delete<{ deleted: boolean }>(`/v1/servers/${serverId}/roles/${roleId}/categories/${categoryId}`);
+  }
+
   updateServerMemberRoles(serverId: string, userId: string, roleIds: string[]) {
     return this.patch<{ updated: boolean; roleIds: string[] }>(`/v1/servers/${serverId}/members/${userId}/roles`, { roleIds });
   }
@@ -525,6 +544,10 @@ export class ApiClient {
 
   updateServer(serverId: string, encryptedMetadata: string) {
     return this.patch<{ server: Server }>(`/v1/servers/${serverId}`, { encryptedMetadata });
+  }
+
+  updateServerSettings(serverId: string, body: { encryptedMetadata?: string; onboardingChannelId?: string | null }) {
+    return this.patch<{ server: Server }>(`/v1/servers/${serverId}`, body);
   }
 
   deleteServer(serverId: string) {
@@ -585,7 +608,7 @@ export class ApiClient {
   }
 
   acceptInvite(token: string) {
-    return this.post<{ serverId: string; joined: boolean }>(`/v1/invites/${encodeURIComponent(token)}/accept`, {});
+    return this.post<{ serverId: string; onboardingChannelId: string | null; joined: boolean }>(`/v1/invites/${encodeURIComponent(token)}/accept`, {});
   }
 
   leaveServer(serverId: string) {

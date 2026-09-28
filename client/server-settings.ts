@@ -29,6 +29,7 @@ const roleLabel = document.getElementById("server-settings-role") as HTMLElement
 const serverForm = document.getElementById("server-form") as HTMLFormElement;
 const serverName = document.getElementById("server-name") as HTMLInputElement;
 const serverDescription = document.getElementById("server-description") as HTMLTextAreaElement;
+const onboardingChannel = document.getElementById("onboarding-channel") as HTMLSelectElement;
 const saveServer = document.getElementById("save-server-button") as HTMLButtonElement;
 const deleteServer = document.getElementById("delete-server-button") as HTMLButtonElement;
 const categoryForm = document.getElementById("category-form") as HTMLFormElement;
@@ -325,9 +326,10 @@ function renderRolePreview() {
   roomList.className = "role-preview-channel-list";
   for (const channel of [...channels].sort((left, right) => left.position - right.position)) {
     const access = role.channelAccess.find((item) => item.channelId === channel.id);
-    const canView = permissions.view_channels && (role.viewAllChannels || Boolean(access?.canView || access?.canUpload));
+    const categoryAccess = channel.categoryId ? (role.categoryAccess ?? []).find((item) => item.categoryId === channel.categoryId) : undefined;
+    const canView = permissions.view_channels && (role.viewAllChannels || Boolean(access?.canView || access?.canUpload || categoryAccess?.canView || categoryAccess?.canUpload));
     const canSend = canView && permissions.send_messages;
-    const canUpload = canView && permissions.upload_files && (role.viewAllChannels || Boolean(access?.canUpload));
+    const canUpload = canView && permissions.upload_files && (role.viewAllChannels || Boolean(access?.canUpload || categoryAccess?.canUpload));
     const row = document.createElement("div");
     row.className = "role-preview-channel";
     const name = document.createElement("strong");
@@ -433,6 +435,23 @@ function categoryOptions(selected: string | null) {
 
 function renderCategoryOptions() {
   newChannelCategory.replaceChildren(categoryOptions(null));
+}
+
+function renderOnboardingOptions() {
+  onboardingChannel.replaceChildren();
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No join announcements";
+  none.selected = !currentServer?.onboardingChannelId;
+  onboardingChannel.append(none);
+  for (const channel of [...channels].sort((left, right) => left.position - right.position)) {
+    const option = document.createElement("option");
+    option.value = channel.id;
+    option.textContent = channelName(channel);
+    option.selected = channel.id === currentServer?.onboardingChannelId;
+    onboardingChannel.append(option);
+  }
+  onboardingChannel.disabled = !hasPermission("manage_server");
 }
 
 function renderCategories() {
@@ -595,6 +614,7 @@ function renderRoles() {
     empty.textContent = "No roles have been configured yet.";
     roleList.append(empty);
     renderRolePreview();
+    renderOnboardingOptions();
     return;
   }
   const editableRoles = roles.filter((role) => role.systemKey !== "owner");
@@ -858,6 +878,56 @@ function renderRoles() {
   }
   card.append(accessGrid);
 
+  const categoryHeading = document.createElement("h3");
+  categoryHeading.className = "role-card-subheading";
+  categoryHeading.textContent = "Category access (inherited by rooms)";
+  card.append(categoryHeading);
+  const categoryAccessGrid = document.createElement("div");
+  categoryAccessGrid.className = "role-channel-access-grid";
+  const categoryInputs = new Map<string, { view: HTMLInputElement; upload: HTMLInputElement }>();
+  for (const category of categories) {
+    const access = (role.categoryAccess ?? []).find((item) => item.categoryId === category.id);
+    const row = document.createElement("div");
+    row.className = "role-channel-access-row";
+    row.dataset.categoryId = category.id;
+    const label = document.createElement("strong");
+    label.className = "role-channel-name";
+    label.textContent = categoryName(category);
+    const viewLabel = document.createElement("label");
+    viewLabel.className = "checkbox-label";
+    const view = document.createElement("input");
+    view.type = "checkbox";
+    view.checked = Boolean(access?.canView || access?.canUpload);
+    view.disabled = ownerRole || !canEditChannelAccess || role.viewAllChannels || !metadataReady;
+    view.addEventListener("change", markDirty);
+    const viewText = document.createElement("span");
+    viewText.textContent = "View";
+    viewLabel.append(view, viewText);
+    const uploadLabel = document.createElement("label");
+    uploadLabel.className = "checkbox-label";
+    const upload = document.createElement("input");
+    upload.type = "checkbox";
+    upload.checked = Boolean(access?.canUpload);
+    upload.disabled = ownerRole || !canEditChannelAccess || role.viewAllChannels || !role.permissions.upload_files || !metadataReady;
+    upload.addEventListener("change", () => {
+      markDirty();
+      if (upload.checked) view.checked = true;
+    });
+    const uploadText = document.createElement("span");
+    uploadText.textContent = "Upload";
+    uploadLabel.append(upload, uploadText);
+    row.append(label, viewLabel, uploadLabel);
+    categoryAccessGrid.append(row);
+    categoryInputs.set(category.id, { view, upload });
+  }
+  if (categories.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted small";
+    empty.textContent = "Create a category before restricting this role by category.";
+    categoryAccessGrid.append(empty);
+  }
+  card.append(categoryAccessGrid);
+
   const actions = document.createElement("div");
   actions.className = "role-card-actions";
   const preview = document.createElement("button");
@@ -902,6 +972,15 @@ function renderRoles() {
           await api.removeServerRoleChannelAccess(currentServer.id, role.id, channel.id);
         } else {
           await api.updateServerRoleChannelAccess(currentServer.id, role.id, channel.id, inputs.view.checked, inputs.upload.checked);
+        }
+      }
+      for (const category of categories) {
+        const inputs = categoryInputs.get(category.id);
+        if (!inputs || viewAll.checked || ownerRole || !canEditChannelAccess) continue;
+        if (!inputs.view.checked && !inputs.upload.checked) {
+          await api.removeServerRoleCategoryAccess(currentServer.id, role.id, category.id);
+        } else {
+          await api.updateServerRoleCategoryAccess(currentServer.id, role.id, category.id, inputs.view.checked, inputs.upload.checked);
         }
       }
       roleEditorDirty = false;
@@ -1248,6 +1327,7 @@ async function hydrateMetadata(version: number, channelSnapshot: ServerChannel[]
     updateSettingsControls();
     renderCategories();
     renderChannels();
+    renderOnboardingOptions();
     renderRoles();
     return;
   }
@@ -1273,6 +1353,7 @@ async function hydrateMetadata(version: number, channelSnapshot: ServerChannel[]
     updateSettingsControls();
     renderCategories();
     renderChannels();
+    renderOnboardingOptions();
     renderRoles();
     renderMembers();
     if (status.textContent === "Loading encrypted settings…") setStatus("");
@@ -1326,6 +1407,7 @@ async function loadData() {
   updateSettingsControls();
   renderCategories();
   renderChannels();
+  renderOnboardingOptions();
   renderRoles();
   renderMembers();
   renderModeration();
@@ -1338,6 +1420,7 @@ async function loadData() {
     updateSettingsControls();
     renderCategories();
     renderChannels();
+    renderOnboardingOptions();
     renderRoles();
   }
 }
@@ -1352,7 +1435,11 @@ serverForm.addEventListener("submit", async (event) => {
       description: serverDescription.value.trim().slice(0, 240),
       kind: "server",
     });
-    await api.updateServer(currentServer.id, encryptedMetadata);
+    const updated = await api.updateServerSettings(currentServer.id, {
+      encryptedMetadata,
+      onboardingChannelId: onboardingChannel.value || null,
+    });
+    currentServer = updated.server;
     setStatus("Space settings saved.");
   } catch (error) {
     setStatus(readableError(error), true);

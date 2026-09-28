@@ -2705,8 +2705,10 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
     subscribeKnownConversations();
     renderChannels();
     renderServers();
+    const configuredLandingChannel = servers.find((server) => server.id === serverId)?.onboardingChannelId;
     const requested = requestedChannelId && channels.find((channel) => channel.id === requestedChannelId);
-    const channel = requested ?? channels[0];
+    const landing = configuredLandingChannel && channels.find((channel) => channel.id === configuredLandingChannel);
+    const channel = requested ?? landing ?? channels[0];
     if (channel) {
       await selectChannel(channel.id);
       void hydrateChannelLabels(serverId, channels.slice(), token);
@@ -4618,6 +4620,31 @@ async function createInvite() {
   }
 }
 
+async function sendJoinAnnouncement(serverId: string, channelId: string | null) {
+  if (!channelId || !currentUser || !cryptoClient) return;
+  const storageKey = `priv-chat.join-announcement.${currentUser.id}.${serverId}`;
+  try {
+    if (localStorage.getItem(storageKey) === "sent") return;
+  } catch {
+    // Continue if local storage is unavailable; the encrypted message is still safe.
+  }
+  const channel = (await api.serverChannels(serverId)).channels.find((candidate) => candidate.id === channelId);
+  if (!channel) return;
+  const members = (await api.conversationMembers(channel.conversationId)).members;
+  await cryptoClient.prepareConversation(channel.conversationId, members);
+  await cryptoClient.syncToDevice().catch(() => undefined);
+  await cryptoClient.sendContent(channel.conversationId, members, {
+    msgtype: "m.notice",
+    body: `${currentUser.displayName} joined this encrypted space.`,
+    onboarding: true,
+  });
+  try {
+    localStorage.setItem(storageKey, "sent");
+  } catch {
+    // The notice was already encrypted and delivered; a future duplicate is preferable to blocking the join.
+  }
+}
+
 async function joinServer() {
   const token = await askText("Join a private space", "Ask a space steward for an invite token. It grants access to current rooms, not older message history.", "Invite token");
   if (!token) return;
@@ -4627,6 +4654,7 @@ async function joinServer() {
     const result = await api.acceptInvite(token);
     await refreshServers();
     await selectServer(result.serverId);
+    if (result.joined) await sendJoinAnnouncement(result.serverId, result.onboardingChannelId).catch(() => undefined);
     setStatus("You joined the encrypted space.");
   } catch (error) {
     setStatus(readableError(error), true);

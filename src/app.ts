@@ -406,8 +406,8 @@ async function serverAuthorization(serverId: string, userId: string) {
 async function channelAuthorization(serverId: string, userId: string, channelId: string) {
   const authorization = await serverAuthorization(serverId, userId);
   if (!authorization) return undefined;
-  const [channel] = await db<{ id: string }[]>`
-    select id from channels
+  const [channel] = await db<{ id: string; category_id: string | null }[]>`
+    select id, category_id from channels
     where id = ${channelId} and server_id = ${serverId} and archived_at is null
   `;
   if (!channel) return undefined;
@@ -447,6 +447,11 @@ async function channelAuthorization(serverId: string, userId: string, channelId:
               where src.role_id = sr.id and src.channel_id = ${channelId}
                 and (src.can_view or src.can_upload)
             )
+            or exists (
+              select 1 from server_role_category_access src
+              where src.role_id = sr.id and src.category_id = ${channel.category_id}
+                and (src.can_view or src.can_upload)
+            )
           )
       ) as can_view,
       exists (
@@ -471,6 +476,11 @@ async function channelAuthorization(serverId: string, userId: string, channelId:
             or exists (
               select 1 from server_role_channel_access src
               where src.role_id = sr.id and src.channel_id = ${channelId}
+                and src.can_upload and sr.permissions->>'upload_files' = 'true'
+            )
+            or exists (
+              select 1 from server_role_category_access src
+              where src.role_id = sr.id and src.category_id = ${channel.category_id}
                 and src.can_upload and sr.permissions->>'upload_files' = 'true'
             )
           )
@@ -534,8 +544,8 @@ async function syncChannelConversationMembership(serverId: string, channelId: st
       and sm.left_at is null
     on conflict do nothing
   `;
-  const [channel] = await db<{ conversation_id: string }[]>`
-    select conversation_id from channels
+  const [channel] = await db<{ conversation_id: string; category_id: string | null }[]>`
+    select conversation_id, category_id from channels
     where id = ${channelId} and server_id = ${serverId} and archived_at is null
   `;
   if (!channel) return;
@@ -580,6 +590,11 @@ async function syncChannelConversationMembership(serverId: string, channelId: st
                   where src.role_id = sr.id and src.channel_id = ${channelId}
                     and (src.can_view or src.can_upload)
                 )
+                or exists (
+                  select 1 from server_role_category_access src
+                  where src.role_id = sr.id and src.category_id = ${channel.category_id}
+                    and (src.can_view or src.can_upload)
+                )
               )
           )
         )
@@ -617,11 +632,16 @@ async function syncChannelConversationMembership(serverId: string, channelId: st
                   )
                   and (
                     sr.view_all_channels
-                    or exists (
-                      select 1 from server_role_channel_access src
-                      where src.role_id = sr.id and src.channel_id = ${channelId}
-                        and (src.can_view or src.can_upload)
-                    )
+                      or exists (
+                        select 1 from server_role_channel_access src
+                        where src.role_id = sr.id and src.channel_id = ${channelId}
+                          and (src.can_view or src.can_upload)
+                      )
+                      or exists (
+                        select 1 from server_role_category_access src
+                        where src.role_id = sr.id and src.category_id = ${channel.category_id}
+                          and (src.can_view or src.can_upload)
+                      )
                   )
               )
             )
@@ -664,7 +684,11 @@ type ServerRoleRow = {
   updated_at: Date;
 };
 
-function publicServerRole(role: ServerRoleRow, channelAccess: Array<{ channel_id: string; can_view: boolean; can_upload: boolean }> = []) {
+function publicServerRole(
+  role: ServerRoleRow,
+  channelAccess: Array<{ channel_id: string; can_view: boolean; can_upload: boolean }> = [],
+  categoryAccess: Array<{ category_id: string; can_view: boolean; can_upload: boolean }> = [],
+) {
   return {
     id: role.id,
     serverId: role.server_id,
@@ -678,6 +702,11 @@ function publicServerRole(role: ServerRoleRow, channelAccess: Array<{ channel_id
     systemKey: role.system_key,
     channelAccess: channelAccess.map((access) => ({
       channelId: access.channel_id,
+      canView: access.can_view,
+      canUpload: access.can_upload,
+    })),
+    categoryAccess: categoryAccess.map((access) => ({
+      categoryId: access.category_id,
       canView: access.can_view,
       canUpload: access.can_upload,
     })),
@@ -747,7 +776,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.14.0" };
+         ?? { name: "Naigi", version: "0.15.0" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -1127,6 +1156,10 @@ export function createApp() {
           values (${server.id}, ${conversation.id}, ${user.id}, 0)
           returning id, position, created_at
         `;
+        await transaction`
+          update servers set onboarding_channel_id = ${channel.id}
+          where id = ${server.id}
+        `;
         return { server, channel, conversationId: conversation.id };
       });
 
@@ -1139,6 +1172,7 @@ export function createApp() {
           role: "owner",
           permissions: defaultRolePermissions("owner"),
           channelCount: 1,
+          onboardingChannelId: created.channel.id,
           createdAt: created.server.created_at,
         },
         channel: {
@@ -1165,15 +1199,16 @@ export function createApp() {
         encrypted_metadata: Buffer;
         role: "owner" | "admin" | "member";
         channel_count: number;
+        onboarding_channel_id: string | null;
         created_at: Date;
       }[]>`
         select s.id, s.owner_id, s.encrypted_metadata, sm.role,
-          count(c.id)::int as channel_count, s.created_at
+          count(c.id)::int as channel_count, s.onboarding_channel_id, s.created_at
         from servers s
         join server_members sm on sm.server_id = s.id
         left join channels c on c.server_id = s.id and c.archived_at is null
         where sm.user_id = ${user.id} and sm.left_at is null
-        group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at
+        group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at, s.onboarding_channel_id
         order by s.created_at asc
       `;
 
@@ -1185,6 +1220,7 @@ export function createApp() {
           role: server.role,
           permissions: (await serverAuthorization(server.id, user.id))?.permissions ?? permissionMap(undefined),
           channelCount: server.channel_count,
+          onboardingChannelId: server.onboarding_channel_id,
           createdAt: server.created_at,
         }))),
       };
@@ -1198,15 +1234,16 @@ export function createApp() {
         encrypted_metadata: Buffer;
         role: "owner" | "admin" | "member";
         channel_count: number;
+        onboarding_channel_id: string | null;
         created_at: Date;
       }[]>`
         select s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at,
-          count(c.id)::int as channel_count
+          s.onboarding_channel_id, count(c.id)::int as channel_count
         from servers s
         join server_members sm on sm.server_id = s.id
         left join channels c on c.server_id = s.id and c.archived_at is null
         where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
-        group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at
+         group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at, s.onboarding_channel_id
       `;
       if (!server) return respondError(set, 404, "server_not_found");
       const authorization = await serverAuthorization(params.serverId, user.id);
@@ -1218,6 +1255,7 @@ export function createApp() {
           role: server.role,
           permissions: authorization?.permissions ?? permissionMap(undefined),
           channelCount: server.channel_count,
+          onboardingChannelId: server.onboarding_channel_id,
           createdAt: server.created_at,
         },
       };
@@ -1232,30 +1270,52 @@ export function createApp() {
       if (!membership) return respondError(set, 403, "not_a_server_member");
       if (!hasServerPermission(membership, "manage_server")) return respondError(set, 403, "insufficient_server_permissions");
 
-      let metadata: Buffer;
+      let metadata: Buffer | undefined;
       try {
-        metadata = decodeEncryptedMetadata(body.encryptedMetadata);
+        metadata = body.encryptedMetadata === undefined ? undefined : decodeEncryptedMetadata(body.encryptedMetadata);
       } catch (error) {
         if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_encrypted_metadata");
         throw error;
       }
 
-      const [server] = await db<{
+      if (body.onboardingChannelId) {
+        const [channel] = await db<{ id: string }[]>`
+          select id from channels
+          where id = ${body.onboardingChannelId}
+            and server_id = ${params.serverId} and archived_at is null
+        `;
+        if (!channel) return respondError(set, 404, "onboarding_channel_not_found");
+      }
+
+      type ServerUpdateRow = {
         id: string;
         owner_id: string;
         encrypted_metadata: Buffer;
         role: "owner" | "admin" | "member";
         channel_count: number;
+        onboarding_channel_id: string | null;
         created_at: Date;
-      }[]>`
-        update servers s
-        set encrypted_metadata = ${metadata}, updated_at = now()
-        where s.id = ${params.serverId}
-        returning s.id, s.owner_id, s.encrypted_metadata,
-          (select role from server_members where server_id = s.id and user_id = ${user.id} and left_at is null) as role,
-          (select count(*)::int from channels where server_id = s.id and archived_at is null) as channel_count,
-          s.created_at
-      `;
+      };
+      const [server] = body.onboardingChannelId === undefined
+        ? await db<ServerUpdateRow[]>`
+            update servers s
+            set encrypted_metadata = coalesce(${metadata ?? null}, s.encrypted_metadata), updated_at = now()
+            where s.id = ${params.serverId}
+            returning s.id, s.owner_id, s.encrypted_metadata, s.onboarding_channel_id,
+              (select role from server_members where server_id = s.id and user_id = ${user.id} and left_at is null) as role,
+              (select count(*)::int from channels where server_id = s.id and archived_at is null) as channel_count,
+              s.created_at
+          `
+        : await db<ServerUpdateRow[]>`
+            update servers s
+            set encrypted_metadata = coalesce(${metadata ?? null}, s.encrypted_metadata),
+                onboarding_channel_id = ${body.onboardingChannelId}, updated_at = now()
+            where s.id = ${params.serverId}
+            returning s.id, s.owner_id, s.encrypted_metadata, s.onboarding_channel_id,
+              (select role from server_members where server_id = s.id and user_id = ${user.id} and left_at is null) as role,
+              (select count(*)::int from channels where server_id = s.id and archived_at is null) as channel_count,
+              s.created_at
+          `;
       if (!server) return respondError(set, 404, "server_not_found");
       return {
         server: {
@@ -1265,12 +1325,16 @@ export function createApp() {
           role: server.role,
           permissions: membership.permissions,
           channelCount: server.channel_count,
+          onboardingChannelId: server.onboarding_channel_id,
           createdAt: server.created_at,
         },
       };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }) }),
-      body: t.Object({ encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })) }),
+      body: t.Object({
+        encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
+        onboardingChannelId: t.Optional(t.Union([t.String({ format: "uuid" }), t.Null()])),
+      }),
     })
     .delete("/v1/servers/:serverId", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -1381,7 +1445,14 @@ export function createApp() {
                         and elevated_sr.system_key is distinct from 'everyone'
                     )
                   )
-                  and sr.view_all_channels
+                  and (
+                    sr.view_all_channels
+                    or exists (
+                      select 1 from server_role_category_access src
+                      where src.role_id = sr.id and src.category_id = ${body.categoryId ?? null}
+                        and (src.can_view or src.can_upload)
+                    )
+                  )
               )
             )
           on conflict (conversation_id, user_id) do nothing
@@ -1735,6 +1806,13 @@ export function createApp() {
             from server_role_channel_access
             where role_id in ${db(roleIds)}
           `;
+      const categoryAccess = roleIds.length === 0
+        ? []
+        : await db<{ role_id: string; category_id: string; can_view: boolean; can_upload: boolean }[]>`
+            select role_id, category_id, can_view, can_upload
+            from server_role_category_access
+            where role_id in ${db(roleIds)}
+          `;
       const assignments = await db<{ user_id: string; role_ids: string[] }[]>`
         select user_id,
           coalesce(array_agg(role_id order by assigned_at asc), array[]::uuid[]) as role_ids
@@ -1751,7 +1829,11 @@ export function createApp() {
       return {
         metadataConversationId: metadataChannel?.conversation_id ?? null,
         permissions: authorization.permissions,
-        roles: roles.map((role) => publicServerRole(role, access.filter((item) => item.role_id === role.id))),
+         roles: roles.map((role) => publicServerRole(
+           role,
+           access.filter((item) => item.role_id === role.id),
+           categoryAccess.filter((item) => item.role_id === role.id),
+         )),
         assignments: assignments.map((assignment) => ({ userId: assignment.user_id, roleIds: stringArray(assignment.role_ids) })),
       };
     }, {
@@ -1969,6 +2051,64 @@ export function createApp() {
       return { deleted: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), roleId: t.String({ format: "uuid" }), channelId: t.String({ format: "uuid" }) }),
+    })
+    .patch("/v1/servers/:serverId/roles/:roleId/categories/:categoryId", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      const [role] = await db<Pick<ServerRoleRow, "id" | "position" | "is_system" | "system_key">[]>`
+        select id, position, is_system, system_key from server_roles
+        where id = ${params.roleId} and server_id = ${params.serverId}
+      `;
+      const [category] = await db<{ id: string }[]>`
+        select id from categories
+        where id = ${params.categoryId} and server_id = ${params.serverId} and archived_at is null
+      `;
+      if (!role) return respondError(set, 404, "role_not_found");
+      if (!category) return respondError(set, 404, "category_not_found");
+      if (role.is_system && role.system_key === "owner") return respondError(set, 400, "owner_role_is_not_customizable");
+      if (!canManageRole(authorization, role, "manage_channel_access")) return respondError(set, 403, "insufficient_server_permissions");
+      const canView = body.canView === true || body.canUpload === true;
+      const canUpload = body.canUpload === true;
+      await db`
+        insert into server_role_category_access (role_id, category_id, can_view, can_upload)
+        values (${role.id}, ${category.id}, ${canView}, ${canUpload})
+        on conflict (role_id, category_id) do update set
+          can_view = excluded.can_view,
+          can_upload = excluded.can_upload
+      `;
+      await syncServerChannelMemberships(params.serverId);
+      return { updated: true, canView, canUpload };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), roleId: t.String({ format: "uuid" }), categoryId: t.String({ format: "uuid" }) }),
+      body: t.Object({ canView: t.Optional(t.Boolean()), canUpload: t.Optional(t.Boolean()) }),
+    })
+    .delete("/v1/servers/:serverId/roles/:roleId/categories/:categoryId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      const [role] = await db<Pick<ServerRoleRow, "id" | "position" | "is_system" | "system_key">[]>`
+        select id, position, is_system, system_key from server_roles
+        where id = ${params.roleId} and server_id = ${params.serverId}
+      `;
+      const [category] = await db<{ id: string }[]>`
+        select id from categories
+        where id = ${params.categoryId} and server_id = ${params.serverId} and archived_at is null
+      `;
+      if (!role) return respondError(set, 404, "role_not_found");
+      if (!category) return respondError(set, 404, "category_not_found");
+      if (role.is_system && role.system_key === "owner") return respondError(set, 400, "owner_role_is_not_customizable");
+      if (!canManageRole(authorization, role, "manage_channel_access")) return respondError(set, 403, "insufficient_server_permissions");
+      await db`
+        delete from server_role_category_access
+        where role_id = ${role.id} and category_id = ${category.id}
+      `;
+      await syncServerChannelMemberships(params.serverId);
+      return { deleted: true };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), roleId: t.String({ format: "uuid" }), categoryId: t.String({ format: "uuid" }) }),
     })
     .patch("/v1/servers/:serverId/members/:userId/roles", async ({ body, headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -2283,13 +2423,16 @@ export function createApp() {
         const [invite] = await transaction<{
           id: string;
           server_id: string;
+          onboarding_channel_id: string | null;
           max_uses: number;
           uses: number;
           expires_at: Date | null;
           revoked_at: Date | null;
         }[]>`
-          select id, server_id, max_uses, uses, expires_at, revoked_at
-          from server_invites where token_hash = ${tokenHash} for update
+           select i.id, i.server_id, s.onboarding_channel_id, i.max_uses, i.uses, i.expires_at, i.revoked_at
+           from server_invites i
+           join servers s on s.id = i.server_id
+           where i.token_hash = ${tokenHash} for update
         `;
         if (!invite) return { error: "invite_not_found" as const };
         if (invite.revoked_at || (invite.expires_at && invite.expires_at.getTime() <= Date.now())) {
@@ -2309,7 +2452,7 @@ export function createApp() {
           where server_id = ${invite.server_id} and user_id = ${user.id}
         `;
         if (existingMember && existingMember.left_at === null) {
-          return { serverId: invite.server_id, joined: false };
+          return { serverId: invite.server_id, onboardingChannelId: invite.onboarding_channel_id, joined: false };
         }
 
         await transaction`
@@ -2353,7 +2496,14 @@ export function createApp() {
                         and elevated_sr.system_key is distinct from 'everyone'
                     )
                   )
-                  and sr.view_all_channels
+                   and (
+                     sr.view_all_channels
+                     or exists (
+                       select 1 from server_role_category_access src
+                       where src.role_id = sr.id and src.category_id = c.category_id
+                         and (src.can_view or src.can_upload)
+                     )
+                   )
               )
             )
           on conflict (conversation_id, user_id) do update set left_at = null
@@ -2361,14 +2511,14 @@ export function createApp() {
         await transaction`
           update server_invites set uses = uses + 1 where id = ${invite.id}
         `;
-        return { serverId: invite.server_id, joined: true };
+        return { serverId: invite.server_id, onboardingChannelId: invite.onboarding_channel_id, joined: true };
       });
 
       if ("error" in result) {
         const error = result.error ?? "invite_not_found";
         return respondError(set, error === "invite_not_found" ? 404 : 409, error);
       }
-      return { serverId: result.serverId, joined: result.joined };
+      return { serverId: result.serverId, onboardingChannelId: result.onboardingChannelId, joined: result.joined };
     }, {
       params: t.Object({ token: t.String({ minLength: 20, maxLength: 255 }) }),
     })

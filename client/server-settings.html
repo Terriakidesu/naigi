@@ -31,6 +31,8 @@
             <form id="server-form" class="settings-form">
               <label for="server-name">Space name<input id="server-name" maxlength="80" required></label>
               <label for="server-description">Description<textarea id="server-description" rows="3" maxlength="240"></textarea></label>
+              <label for="onboarding-channel">Join announcements room<select id="onboarding-channel"><option value="">No join announcements</option></select></label>
+              <p class="muted small">A joining member’s browser can publish an end-to-end encrypted notice to this room. The server never creates or reads that message.</p>
               <button id="save-server-button" type="submit">Save space</button>
             </form>
           </section>
