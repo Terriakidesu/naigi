@@ -539,17 +539,32 @@ try {
     const button = document.querySelector<HTMLButtonElement>("#jump-latest-button");
     if (!button) throw new Error("jump_latest_button_missing");
     const maxScroll = messages.scrollHeight - messages.clientHeight;
-    messages.scrollTop = Math.max(0, maxScroll - 150);
+    const showDistance = Math.max(400, messages.clientHeight * 0.75);
+    const hideDistance = Math.max(280, messages.clientHeight * 0.55);
+    if (maxScroll < showDistance + 1) throw new Error("not_enough_scroll_range_for_jump_button_test");
+    messages.scrollTop = maxScroll - Math.max(hideDistance + 20, showDistance - 50);
     messages.dispatchEvent(new Event("scroll"));
-    const hiddenAfterShortScroll = button.hidden;
-    messages.scrollTop = Math.max(0, maxScroll - 450);
+    const hiddenBeforeShowThreshold = button.hidden;
+    messages.scrollTop = maxScroll - (showDistance + 1);
     messages.dispatchEvent(new Event("scroll"));
-    const visibleAfterLongScroll = !button.hidden;
+    const visibleAfterShowThreshold = !button.hidden;
+    messages.scrollTop = maxScroll - ((showDistance + hideDistance) / 2);
+    messages.dispatchEvent(new Event("scroll"));
+    const staysVisibleInHysteresisBand = !button.hidden;
+    messages.scrollTop = maxScroll - (hideDistance - 1);
+    messages.dispatchEvent(new Event("scroll"));
+    const hiddenAfterReturningNearLatest = button.hidden;
     messages.scrollTop = messages.scrollHeight;
     messages.dispatchEvent(new Event("scroll"));
-    return { hiddenAfterShortScroll, visibleAfterLongScroll, hiddenAtLatest: button.hidden };
+    return { hiddenBeforeShowThreshold, visibleAfterShowThreshold, staysVisibleInHysteresisBand, hiddenAfterReturningNearLatest, hiddenAtLatest: button.hidden };
   });
-  assert.deepEqual(jumpLatestVisibility, { hiddenAfterShortScroll: true, visibleAfterLongScroll: true, hiddenAtLatest: true }, "jump-to-latest waits until scrolling well away from the newest messages");
+  assert.deepEqual(jumpLatestVisibility, {
+    hiddenBeforeShowThreshold: true,
+    visibleAfterShowThreshold: true,
+    staysVisibleInHysteresisBand: true,
+    hiddenAfterReturningNearLatest: true,
+    hiddenAtLatest: true,
+  }, "jump-to-latest uses responsive distance thresholds with hysteresis");
   const mentionPrefix = users[1].username.slice(0, -1);
   await a.locator("#message-input").fill(`@${mentionPrefix}`);
   await a.locator("#mention-suggestions").waitFor({ state: "visible", timeout: 20_000 });

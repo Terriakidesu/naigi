@@ -242,7 +242,12 @@ const MESSAGE_DECRYPT_BATCH_SIZE = 24;
 const DECRYPTED_MESSAGE_CACHE_LIMIT = 600;
 const MAX_RENDERED_MESSAGES = 300;
 const MAX_CATCH_UP_PAGES = 100;
-const JUMP_TO_LATEST_SCROLL_THRESHOLD = 400;
+const JUMP_TO_LATEST_SHOW_MIN_DISTANCE = 400;
+const JUMP_TO_LATEST_HIDE_MIN_DISTANCE = 280;
+const JUMP_TO_LATEST_SHOW_VIEWPORT_RATIO = 0.75;
+const JUMP_TO_LATEST_HIDE_VIEWPORT_RATIO = 0.55;
+let jumpLatestVisible = false;
+let jumpLatestConversationId: string | undefined;
 let selectionToken = 0;
 let serverSelectionToken = 0;
 
@@ -2194,6 +2199,15 @@ function yieldToBrowser() {
 
 function renderUnreadButton() {
   const distanceFromBottom = messagesPanel.scrollHeight - messagesPanel.scrollTop - messagesPanel.clientHeight;
+  if (jumpLatestConversationId !== selectedConversationId) {
+    jumpLatestConversationId = selectedConversationId;
+    jumpLatestVisible = false;
+  }
+  const showDistance = Math.max(JUMP_TO_LATEST_SHOW_MIN_DISTANCE, messagesPanel.clientHeight * JUMP_TO_LATEST_SHOW_VIEWPORT_RATIO);
+  const hideDistance = Math.max(JUMP_TO_LATEST_HIDE_MIN_DISTANCE, messagesPanel.clientHeight * JUMP_TO_LATEST_HIDE_VIEWPORT_RATIO);
+  if (jumpLatestVisible ? distanceFromBottom <= hideDistance : distanceFromBottom >= showDistance) {
+    jumpLatestVisible = !jumpLatestVisible;
+  }
   const mentionCount = mentionHighlightMessageIds.size;
   const hasMention = mentionCount > 0;
   const label = document.createElement("span");
@@ -2207,7 +2221,7 @@ function renderUnreadButton() {
   jumpLatestButton.title = hasMention ? "Jump to new mention" : "Jump to latest messages";
   jumpLatestButton.setAttribute("aria-label", hasMention ? `Jump to ${mentionCount} new mention${mentionCount === 1 ? "" : "s"}` : "Jump to latest messages");
   renderIcons(jumpLatestButton);
-  jumpLatestButton.hidden = !hasMention && unreadCount === 0 && distanceFromBottom < JUMP_TO_LATEST_SCROLL_THRESHOLD;
+  jumpLatestButton.hidden = !jumpLatestVisible;
 }
 
 async function detectUnreadMentions(messages: MessageEnvelope[], conversationId: string, activeCryptoClient: CryptoClient) {
@@ -5866,6 +5880,7 @@ messagesPanel.addEventListener("scroll", () => {
   } else renderUnreadButton();
   if (messagesPanel.scrollTop < 240 && nextBefore) void loadOlderMessages();
 });
+window.addEventListener("resize", renderUnreadButton);
 lockButton.addEventListener("click", () => {
   lockLocalSession();
   optimisticDecryptedMessages.clear();

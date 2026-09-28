@@ -15,7 +15,7 @@
 - Text attachments now show compact, scrollable inline previews with character counts and a single expand-to-view action.
 - Recognized plaintext code attachments now receive safe client-side syntax highlighting in both inline and expanded previews.
 - Files can be dragged into the chat area and are queued through the existing encrypted attachment flow.
-- The jump-to-latest control stays hidden during short scrolls and appears after scrolling more than 400px from the newest messages; unread-message and mention alerts retain their existing behavior.
+- The jump-to-latest control now uses responsive show/hide thresholds to avoid appearing on short scrolls or flickering near its boundary; unread and mention counts remain available when it appears.
 
 ### Fixed
 
