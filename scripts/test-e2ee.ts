@@ -535,6 +535,21 @@ try {
   await spoilerMessage.locator(".media-spoiler-cover").click();
   await b.locator(".message .media-preview").last().waitFor({ timeout: 20_000 });
   await b.locator("#messages").evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  const jumpLatestVisibility = await b.locator("#messages").evaluate((messages) => {
+    const button = document.querySelector<HTMLButtonElement>("#jump-latest-button");
+    if (!button) throw new Error("jump_latest_button_missing");
+    const maxScroll = messages.scrollHeight - messages.clientHeight;
+    messages.scrollTop = Math.max(0, maxScroll - 150);
+    messages.dispatchEvent(new Event("scroll"));
+    const hiddenAfterShortScroll = button.hidden;
+    messages.scrollTop = Math.max(0, maxScroll - 450);
+    messages.dispatchEvent(new Event("scroll"));
+    const visibleAfterLongScroll = !button.hidden;
+    messages.scrollTop = messages.scrollHeight;
+    messages.dispatchEvent(new Event("scroll"));
+    return { hiddenAfterShortScroll, visibleAfterLongScroll, hiddenAtLatest: button.hidden };
+  });
+  assert.deepEqual(jumpLatestVisibility, { hiddenAfterShortScroll: true, visibleAfterLongScroll: true, hiddenAtLatest: true }, "jump-to-latest waits until scrolling well away from the newest messages");
   const mentionPrefix = users[1].username.slice(0, -1);
   await a.locator("#message-input").fill(`@${mentionPrefix}`);
   await a.locator("#mention-suggestions").waitFor({ state: "visible", timeout: 20_000 });

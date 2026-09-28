@@ -242,6 +242,7 @@ const MESSAGE_DECRYPT_BATCH_SIZE = 24;
 const DECRYPTED_MESSAGE_CACHE_LIMIT = 600;
 const MAX_RENDERED_MESSAGES = 300;
 const MAX_CATCH_UP_PAGES = 100;
+const JUMP_TO_LATEST_SCROLL_THRESHOLD = 400;
 let selectionToken = 0;
 let serverSelectionToken = 0;
 
@@ -2206,7 +2207,7 @@ function renderUnreadButton() {
   jumpLatestButton.title = hasMention ? "Jump to new mention" : "Jump to latest messages";
   jumpLatestButton.setAttribute("aria-label", hasMention ? `Jump to ${mentionCount} new mention${mentionCount === 1 ? "" : "s"}` : "Jump to latest messages");
   renderIcons(jumpLatestButton);
-  jumpLatestButton.hidden = !hasMention && unreadCount === 0 && distanceFromBottom < 100;
+  jumpLatestButton.hidden = !hasMention && unreadCount === 0 && distanceFromBottom < JUMP_TO_LATEST_SCROLL_THRESHOLD;
 }
 
 async function detectUnreadMentions(messages: MessageEnvelope[], conversationId: string, activeCryptoClient: CryptoClient) {
