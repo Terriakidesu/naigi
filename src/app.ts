@@ -23,6 +23,7 @@ import { decodeBase64, encodeBase64, InvalidEncodingError } from "./encoding";
 import { db, pingDatabase } from "./db/client";
 import {
   ProfileImageInvalidError,
+  profileBannerUrl,
   profileImageMetadata,
   profileImagePath,
   profileImageUrl,
@@ -43,6 +44,9 @@ type UserRow = {
   profile_image_storage_key?: string | null;
   profile_image_mime_type?: string | null;
   profile_image_size_bytes?: number | string | null;
+  profile_banner_storage_key?: string | null;
+  profile_banner_mime_type?: string | null;
+  profile_banner_size_bytes?: number | string | null;
 };
 
 type MessageRow = {
@@ -85,15 +89,37 @@ function isUniqueViolation(error: unknown) {
   return error instanceof Error && "code" in error && (error as { code?: string }).code === "23505";
 }
 
-function toPublicUser(user: Pick<UserRow, "id" | "username" | "display_name" | "created_at"> & Partial<Pick<UserRow, "profile_image_storage_key">>) {
+function toPublicUser(user: Pick<UserRow, "id" | "username" | "display_name" | "created_at"> & Partial<Pick<UserRow, "profile_image_storage_key" | "profile_banner_storage_key">>) {
   return {
     id: user.id,
     username: user.username,
     displayName: user.display_name,
     createdAt: user.created_at,
     avatarUrl: profileImageUrl(user.id, user.profile_image_storage_key),
+    bannerUrl: profileBannerUrl(user.id, user.profile_banner_storage_key),
   };
 }
+
+function serverBrandingUrl(serverId: string, asset: "icon" | "banner", storageKey: string | null | undefined) {
+  return storageKey
+    ? `/v1/servers/${encodeURIComponent(serverId)}/branding/${asset}?v=${encodeURIComponent(storageKey)}`
+    : null;
+}
+
+async function recordServerAudit(
+  serverId: string,
+  actorId: string,
+  action: string,
+  targetId: string | null = null,
+  targetUserId: string | null = null,
+) {
+  await db`
+    insert into server_audit_logs (server_id, actor_id, action, target_id, target_user_id)
+    values (${serverId}, ${actorId}, ${action}, ${targetId}, ${targetUserId})
+  `;
+}
+
+const maxCustomEmojiBytes = 10 * 1024 * 1024;
 
 function toMessage(message: MessageRow) {
   return {
@@ -246,6 +272,8 @@ const serverPermissionNames = [
   "pin_messages",
   "delete_others_messages",
   "delete_messages",
+  "manage_custom_emoji",
+  "view_audit_logs",
 ] as const;
 
 type ServerPermission = typeof serverPermissionNames[number];
@@ -288,6 +316,8 @@ function defaultRolePermissions(systemKey: ServerSystemKey): ServerPermissionMap
     mention_here: true,
     mention_roles: true,
     manage_server: true,
+    manage_custom_emoji: true,
+    view_audit_logs: true,
     manage_channels: true,
     create_channels: true,
     edit_channels: true,
@@ -776,7 +806,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.15.0" };
+         ?? { name: "Naigi", version: "0.16.0" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -910,7 +940,8 @@ export function createApp() {
         const [user] = await db<UserRow[]>`
           insert into users (username, username_normalized, password_hash, display_name)
           values (${body.username}, ${username}, ${passwordHash}, ${displayName})
-          returning id, username, display_name, password_hash, created_at, profile_image_storage_key
+           returning id, username, display_name, password_hash, created_at,
+             profile_image_storage_key, profile_banner_storage_key
         `;
         const session = await createSession(user.id);
         setSessionCookie(set, session.token);
@@ -923,7 +954,8 @@ export function createApp() {
     }, { body: userBody })
     .post("/v1/auth/login", async ({ body, set }) => {
       const [user] = await db<UserRow[]>`
-        select id, username, display_name, password_hash, created_at, profile_image_storage_key
+         select id, username, display_name, password_hash, created_at,
+           profile_image_storage_key, profile_banner_storage_key
         from users
         where username_normalized = ${normalizeUsername(body.username)}
       `;
@@ -954,7 +986,8 @@ export function createApp() {
         update users
         set display_name = ${displayName}, updated_at = now()
         where id = ${user.id}
-        returning id, username, display_name, password_hash, created_at, profile_image_storage_key
+         returning id, username, display_name, password_hash, created_at,
+           profile_image_storage_key, profile_banner_storage_key
       `;
       return { user: toPublicUser(updated) };
     }, {
@@ -964,7 +997,8 @@ export function createApp() {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
       const [record] = await db<UserRow[]>`
-        select id, username, display_name, password_hash, created_at, profile_image_storage_key
+         select id, username, display_name, password_hash, created_at,
+           profile_image_storage_key, profile_banner_storage_key
         from users where id = ${user.id}
       `;
       if (!await verifyPassword(record, body.currentPassword)) return respondError(set, 400, "current_password_incorrect");
@@ -1010,6 +1044,29 @@ export function createApp() {
     }, {
       params: t.Object({ userId: t.String({ format: "uuid" }) }),
     })
+    .get("/v1/users/:userId/banner", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [profile] = await db<{ profile_banner_storage_key: string | null; profile_banner_mime_type: string | null }[]>`
+        select profile_banner_storage_key, profile_banner_mime_type
+        from users
+        where id = ${params.userId}
+      `;
+      if (!profile?.profile_banner_storage_key || !profile.profile_banner_mime_type) {
+        return respondError(set, 404, "profile_banner_not_found");
+      }
+      const path = profileImagePath(profile.profile_banner_storage_key);
+      if (!(await Bun.file(path).exists())) return respondError(set, 404, "profile_banner_not_found");
+      return new Response(Bun.file(path), {
+        headers: {
+          "cache-control": "private, max-age=3600",
+          "content-type": profile.profile_banner_mime_type,
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+    })
     .put("/v1/me/avatar", async ({ headers, request, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
@@ -1047,7 +1104,8 @@ export function createApp() {
               profile_image_mime_type = ${metadata.mimeType},
               profile_image_size_bytes = ${stored.size}
             where id = ${user.id}
-            returning id, username, display_name, created_at, profile_image_storage_key
+             returning id, username, display_name, created_at,
+               profile_image_storage_key, profile_banner_storage_key
           `;
           previousStorageKey = current.profile_image_storage_key;
           return next;
@@ -1086,11 +1144,89 @@ export function createApp() {
       if (deleted) await removeProfileImage(deleted);
       return { deleted: Boolean(deleted) };
     })
+    .put("/v1/me/banner", async ({ headers, request, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const metadata = profileImageMetadata(headers["content-type"]);
+      if (!metadata) return respondError(set, 400, "unsupported_profile_banner_type");
+
+      const storageKey = `${crypto.randomUUID()}.${metadata.extension}`;
+      let stored: { size: number };
+      try {
+        stored = await storeProfileImage(
+          request,
+          storageKey,
+          config.maxProfileImageBytes,
+          (bytes) => validProfileImageBytes(bytes, metadata.mimeType),
+        );
+      } catch (error) {
+        if (error instanceof AttachmentTooLargeError) return respondError(set, 413, "profile_banner_too_large");
+        if (error instanceof ProfileImageInvalidError) return respondError(set, 400, "invalid_profile_banner");
+        throw error;
+      }
+
+      let previousStorageKey: string | null = null;
+      try {
+        const updated = await db.begin(async (transaction) => {
+          const [current] = await transaction<{ profile_banner_storage_key: string | null }[]>`
+            select profile_banner_storage_key
+            from users
+            where id = ${user.id}
+            for update
+          `;
+          if (!current) return null;
+          const [next] = await transaction<UserRow[]>`
+            update users
+            set profile_banner_storage_key = ${storageKey},
+              profile_banner_mime_type = ${metadata.mimeType},
+              profile_banner_size_bytes = ${stored.size}
+            where id = ${user.id}
+            returning id, username, display_name, created_at,
+              profile_image_storage_key, profile_banner_storage_key
+          `;
+          previousStorageKey = current.profile_banner_storage_key;
+          return next;
+        });
+        if (!updated) {
+          await removeProfileImage(storageKey);
+          return respondError(set, 404, "user_not_found");
+        }
+        if (previousStorageKey && previousStorageKey !== storageKey) await removeProfileImage(previousStorageKey);
+        return { user: toPublicUser(updated) };
+      } catch (error) {
+        await removeProfileImage(storageKey);
+        throw error;
+      }
+    })
+    .delete("/v1/me/banner", async ({ headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const deleted = await db.begin(async (transaction) => {
+        const [current] = await transaction<{ profile_banner_storage_key: string | null }[]>`
+          select profile_banner_storage_key
+          from users
+          where id = ${user.id}
+          for update
+        `;
+        if (!current) return null;
+        await transaction`
+          update users
+          set profile_banner_storage_key = null,
+            profile_banner_mime_type = null,
+            profile_banner_size_bytes = null
+          where id = ${user.id}
+        `;
+        return current.profile_banner_storage_key;
+      });
+      if (deleted) await removeProfileImage(deleted);
+      return { deleted: Boolean(deleted) };
+    })
     .get("/v1/users/:userId", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
       const [profile] = await db<UserRow[]>`
-        select id, username, display_name, created_at, profile_image_storage_key
+         select id, username, display_name, created_at,
+           profile_image_storage_key, profile_banner_storage_key
         from users
         where id = ${params.userId}
       `;
@@ -1157,11 +1293,13 @@ export function createApp() {
           returning id, position, created_at
         `;
         await transaction`
-          update servers set onboarding_channel_id = ${channel.id}
+          update servers
+          set onboarding_channel_id = ${channel.id}, landing_channel_id = ${channel.id}
           where id = ${server.id}
         `;
         return { server, channel, conversationId: conversation.id };
       });
+      await recordServerAudit(created.server.id, user.id, "server.created", created.server.id);
 
       set.status = 201;
       return {
@@ -1173,6 +1311,9 @@ export function createApp() {
           permissions: defaultRolePermissions("owner"),
           channelCount: 1,
           onboardingChannelId: created.channel.id,
+          landingChannelId: created.channel.id,
+          iconUrl: null,
+          bannerUrl: null,
           createdAt: created.server.created_at,
         },
         channel: {
@@ -1200,15 +1341,22 @@ export function createApp() {
         role: "owner" | "admin" | "member";
         channel_count: number;
         onboarding_channel_id: string | null;
+        landing_channel_id: string | null;
+        icon_storage_key: string | null;
+        banner_storage_key: string | null;
         created_at: Date;
       }[]>`
         select s.id, s.owner_id, s.encrypted_metadata, sm.role,
-          count(c.id)::int as channel_count, s.onboarding_channel_id, s.created_at
+          count(c.id)::int as channel_count, s.onboarding_channel_id,
+          s.landing_channel_id,
+          s.icon_storage_key, s.banner_storage_key, s.created_at
         from servers s
         join server_members sm on sm.server_id = s.id
         left join channels c on c.server_id = s.id and c.archived_at is null
         where sm.user_id = ${user.id} and sm.left_at is null
-        group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at, s.onboarding_channel_id
+          group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at,
+            s.onboarding_channel_id, s.landing_channel_id,
+            s.icon_storage_key, s.banner_storage_key
         order by s.created_at asc
       `;
 
@@ -1221,6 +1369,9 @@ export function createApp() {
           permissions: (await serverAuthorization(server.id, user.id))?.permissions ?? permissionMap(undefined),
           channelCount: server.channel_count,
           onboardingChannelId: server.onboarding_channel_id,
+          landingChannelId: server.landing_channel_id,
+          iconUrl: serverBrandingUrl(server.id, "icon", server.icon_storage_key),
+          bannerUrl: serverBrandingUrl(server.id, "banner", server.banner_storage_key),
           createdAt: server.created_at,
         }))),
       };
@@ -1235,15 +1386,22 @@ export function createApp() {
         role: "owner" | "admin" | "member";
         channel_count: number;
         onboarding_channel_id: string | null;
+        landing_channel_id: string | null;
+        icon_storage_key: string | null;
+        banner_storage_key: string | null;
         created_at: Date;
       }[]>`
-        select s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at,
-          s.onboarding_channel_id, count(c.id)::int as channel_count
+         select s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at,
+           s.onboarding_channel_id, s.landing_channel_id,
+           s.icon_storage_key, s.banner_storage_key,
+           count(c.id)::int as channel_count
         from servers s
         join server_members sm on sm.server_id = s.id
         left join channels c on c.server_id = s.id and c.archived_at is null
         where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
-         group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at, s.onboarding_channel_id
+         group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at,
+            s.onboarding_channel_id, s.landing_channel_id,
+            s.icon_storage_key, s.banner_storage_key
       `;
       if (!server) return respondError(set, 404, "server_not_found");
       const authorization = await serverAuthorization(params.serverId, user.id);
@@ -1256,6 +1414,9 @@ export function createApp() {
           permissions: authorization?.permissions ?? permissionMap(undefined),
           channelCount: server.channel_count,
           onboardingChannelId: server.onboarding_channel_id,
+          landingChannelId: server.landing_channel_id,
+          iconUrl: serverBrandingUrl(server.id, "icon", server.icon_storage_key),
+          bannerUrl: serverBrandingUrl(server.id, "banner", server.banner_storage_key),
           createdAt: server.created_at,
         },
       };
@@ -1278,13 +1439,21 @@ export function createApp() {
         throw error;
       }
 
-      if (body.onboardingChannelId) {
-        const [channel] = await db<{ id: string }[]>`
+      if (body.onboardingChannelId || body.landingChannelId) {
+        const requestedChannels = [body.onboardingChannelId, body.landingChannelId].filter(
+          (channelId): channelId is string => typeof channelId === "string",
+        );
+        const channels = await db<{ id: string }[]>`
           select id from channels
-          where id = ${body.onboardingChannelId}
+          where id in ${db(requestedChannels)}
             and server_id = ${params.serverId} and archived_at is null
         `;
-        if (!channel) return respondError(set, 404, "onboarding_channel_not_found");
+        if (body.onboardingChannelId && !channels.some((channel) => channel.id === body.onboardingChannelId)) {
+          return respondError(set, 404, "onboarding_channel_not_found");
+        }
+        if (body.landingChannelId && !channels.some((channel) => channel.id === body.landingChannelId)) {
+          return respondError(set, 404, "landing_channel_not_found");
+        }
       }
 
       type ServerUpdateRow = {
@@ -1294,29 +1463,33 @@ export function createApp() {
         role: "owner" | "admin" | "member";
         channel_count: number;
         onboarding_channel_id: string | null;
+        landing_channel_id: string | null;
+        icon_storage_key: string | null;
+        banner_storage_key: string | null;
         created_at: Date;
       };
-      const [server] = body.onboardingChannelId === undefined
-        ? await db<ServerUpdateRow[]>`
-            update servers s
-            set encrypted_metadata = coalesce(${metadata ?? null}, s.encrypted_metadata), updated_at = now()
-            where s.id = ${params.serverId}
-            returning s.id, s.owner_id, s.encrypted_metadata, s.onboarding_channel_id,
-              (select role from server_members where server_id = s.id and user_id = ${user.id} and left_at is null) as role,
-              (select count(*)::int from channels where server_id = s.id and archived_at is null) as channel_count,
-              s.created_at
-          `
-        : await db<ServerUpdateRow[]>`
-            update servers s
-            set encrypted_metadata = coalesce(${metadata ?? null}, s.encrypted_metadata),
-                onboarding_channel_id = ${body.onboardingChannelId}, updated_at = now()
-            where s.id = ${params.serverId}
-            returning s.id, s.owner_id, s.encrypted_metadata, s.onboarding_channel_id,
-              (select role from server_members where server_id = s.id and user_id = ${user.id} and left_at is null) as role,
-              (select count(*)::int from channels where server_id = s.id and archived_at is null) as channel_count,
-              s.created_at
-          `;
+      const onboardingChannel = body.onboardingChannelId === undefined
+        ? db`s.onboarding_channel_id`
+        : db`${body.onboardingChannelId}`;
+      const landingChannel = body.landingChannelId === undefined
+        ? db`s.landing_channel_id`
+        : db`${body.landingChannelId}`;
+      const [server] = await db<ServerUpdateRow[]>`
+        update servers s
+        set encrypted_metadata = coalesce(${metadata ?? null}, s.encrypted_metadata),
+            onboarding_channel_id = ${onboardingChannel},
+            landing_channel_id = ${landingChannel},
+            updated_at = now()
+        where s.id = ${params.serverId}
+        returning s.id, s.owner_id, s.encrypted_metadata, s.onboarding_channel_id,
+          s.landing_channel_id,
+          s.icon_storage_key, s.banner_storage_key,
+          (select role from server_members where server_id = s.id and user_id = ${user.id} and left_at is null) as role,
+          (select count(*)::int from channels where server_id = s.id and archived_at is null) as channel_count,
+          s.created_at
+      `;
       if (!server) return respondError(set, 404, "server_not_found");
+      await recordServerAudit(params.serverId, user.id, "server.settings_updated", params.serverId);
       return {
         server: {
           id: server.id,
@@ -1326,6 +1499,9 @@ export function createApp() {
           permissions: membership.permissions,
           channelCount: server.channel_count,
           onboardingChannelId: server.onboarding_channel_id,
+          landingChannelId: server.landing_channel_id,
+          iconUrl: serverBrandingUrl(server.id, "icon", server.icon_storage_key),
+          bannerUrl: serverBrandingUrl(server.id, "banner", server.banner_storage_key),
           createdAt: server.created_at,
         },
       };
@@ -1334,7 +1510,403 @@ export function createApp() {
       body: t.Object({
         encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
         onboardingChannelId: t.Optional(t.Union([t.String({ format: "uuid" }), t.Null()])),
+        landingChannelId: t.Optional(t.Union([t.String({ format: "uuid" }), t.Null()])),
       }),
+    })
+    .get("/v1/servers/:serverId/branding/:asset", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [server] = params.asset === "icon"
+        ? await db<{ storage_key: string | null; mime_type: string | null }[]>`
+            select s.icon_storage_key as storage_key, s.icon_mime_type as mime_type
+            from servers s join server_members sm on sm.server_id = s.id
+            where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
+          `
+        : await db<{ storage_key: string | null; mime_type: string | null }[]>`
+            select s.banner_storage_key as storage_key, s.banner_mime_type as mime_type
+            from servers s join server_members sm on sm.server_id = s.id
+            where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
+          `;
+      if (!server?.storage_key || !server.mime_type) return respondError(set, 404, "server_branding_not_found");
+      const path = profileImagePath(server.storage_key);
+      if (!(await Bun.file(path).exists())) return respondError(set, 404, "server_branding_not_found");
+      return new Response(Bun.file(path), {
+        headers: {
+          "cache-control": "private, max-age=3600",
+          "content-type": server.mime_type,
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }, {
+      params: t.Object({
+        serverId: t.String({ format: "uuid" }),
+        asset: t.Union([t.Literal("icon"), t.Literal("banner")]),
+      }),
+    })
+    .put("/v1/servers/:serverId/branding/:asset", async ({ headers, params, request, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasServerPermission(authorization, "manage_server")) return respondError(set, 403, "insufficient_server_permissions");
+      const metadata = profileImageMetadata(headers["content-type"]);
+      if (!metadata) return respondError(set, 400, "unsupported_server_branding_type");
+      const storageKey = `${crypto.randomUUID()}.${metadata.extension}`;
+      let stored: { size: number };
+      try {
+        stored = await storeProfileImage(
+          request,
+          storageKey,
+          config.maxProfileImageBytes,
+          (bytes) => validProfileImageBytes(bytes, metadata.mimeType),
+        );
+      } catch (error) {
+        if (error instanceof AttachmentTooLargeError) return respondError(set, 413, "server_branding_too_large");
+        if (error instanceof ProfileImageInvalidError) return respondError(set, 400, "invalid_server_branding");
+        throw error;
+      }
+
+      let previousStorageKey: string | null = null;
+      try {
+        const updated = params.asset === "icon"
+          ? await db.begin(async (transaction) => {
+              const [current] = await transaction<{ storage_key: string | null }[]>`
+                select icon_storage_key as storage_key from servers where id = ${params.serverId} for update
+              `;
+              if (!current) return false;
+              await transaction`
+                update servers
+                set icon_storage_key = ${storageKey}, icon_mime_type = ${metadata.mimeType},
+                  icon_size_bytes = ${stored.size}, updated_at = now()
+                where id = ${params.serverId}
+              `;
+              previousStorageKey = current.storage_key;
+              return true;
+            })
+          : await db.begin(async (transaction) => {
+              const [current] = await transaction<{ storage_key: string | null }[]>`
+                select banner_storage_key as storage_key from servers where id = ${params.serverId} for update
+              `;
+              if (!current) return false;
+              await transaction`
+                update servers
+                set banner_storage_key = ${storageKey}, banner_mime_type = ${metadata.mimeType},
+                  banner_size_bytes = ${stored.size}, updated_at = now()
+                where id = ${params.serverId}
+              `;
+              previousStorageKey = current.storage_key;
+              return true;
+            });
+        if (!updated) {
+          await removeProfileImage(storageKey);
+          return respondError(set, 404, "server_not_found");
+        }
+        if (previousStorageKey && previousStorageKey !== storageKey) await removeProfileImage(previousStorageKey);
+        await recordServerAudit(params.serverId, user.id, `server.${params.asset}_updated`);
+        return { url: serverBrandingUrl(params.serverId, params.asset, storageKey) };
+      } catch (error) {
+        await removeProfileImage(storageKey);
+        throw error;
+      }
+    }, {
+      params: t.Object({
+        serverId: t.String({ format: "uuid" }),
+        asset: t.Union([t.Literal("icon"), t.Literal("banner")]),
+      }),
+    })
+    .delete("/v1/servers/:serverId/branding/:asset", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasServerPermission(authorization, "manage_server")) return respondError(set, 403, "insufficient_server_permissions");
+      const deleted = params.asset === "icon"
+        ? await db.begin(async (transaction) => {
+            const [current] = await transaction<{ storage_key: string | null }[]>`
+              select icon_storage_key as storage_key from servers where id = ${params.serverId} for update
+            `;
+            if (!current?.storage_key) return null;
+            await transaction`
+              update servers
+              set icon_storage_key = null, icon_mime_type = null, icon_size_bytes = null, updated_at = now()
+              where id = ${params.serverId}
+            `;
+            return current.storage_key;
+          })
+        : await db.begin(async (transaction) => {
+            const [current] = await transaction<{ storage_key: string | null }[]>`
+              select banner_storage_key as storage_key from servers where id = ${params.serverId} for update
+            `;
+            if (!current?.storage_key) return null;
+            await transaction`
+              update servers
+              set banner_storage_key = null, banner_mime_type = null, banner_size_bytes = null, updated_at = now()
+              where id = ${params.serverId}
+            `;
+            return current.storage_key;
+          });
+      if (deleted) {
+        await removeProfileImage(deleted);
+        await recordServerAudit(params.serverId, user.id, `server.${params.asset}_removed`);
+      }
+      return { deleted: Boolean(deleted) };
+    }, {
+      params: t.Object({
+        serverId: t.String({ format: "uuid" }),
+        asset: t.Union([t.Literal("icon"), t.Literal("banner")]),
+      }),
+    })
+    .get("/v1/servers/:serverId/emojis", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      const emojis = await db<{
+        id: string;
+        server_id: string;
+        encrypted_metadata: Buffer;
+        storage_key: string;
+        expected_size_bytes: number | string;
+        size_bytes: number | string | null;
+        status: "pending" | "uploaded";
+        created_at: Date;
+        uploaded_at: Date | null;
+      }[]>`
+        select id, server_id, encrypted_metadata, storage_key, expected_size_bytes,
+          size_bytes, status, created_at, uploaded_at
+        from server_custom_emojis
+        where server_id = ${params.serverId}
+        order by created_at desc, id desc
+      `;
+      return {
+        emojis: emojis.map((emoji) => ({
+          id: emoji.id,
+          serverId: emoji.server_id,
+          encryptedMetadata: encodeBase64(emoji.encrypted_metadata),
+          fileUrl: emoji.status === "uploaded"
+            ? `/v1/servers/${encodeURIComponent(params.serverId)}/emojis/${encodeURIComponent(emoji.id)}/file`
+            : null,
+          expectedSizeBytes: Number(emoji.expected_size_bytes),
+          sizeBytes: emoji.size_bytes === null ? null : Number(emoji.size_bytes),
+          status: emoji.status,
+          createdAt: emoji.created_at,
+          uploadedAt: emoji.uploaded_at,
+        })),
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/servers/:serverId/emojis", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasServerPermission(authorization, "manage_custom_emoji")) return respondError(set, 403, "insufficient_server_permissions");
+      let metadata: Buffer;
+      try {
+        metadata = decodeEncryptedMetadata(body.encryptedMetadata);
+      } catch (error) {
+        if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_encrypted_metadata");
+        throw error;
+      }
+      const id = crypto.randomUUID();
+      const storageKey = `${id}.bin`;
+      const [emoji] = await db<{
+        id: string;
+        server_id: string;
+        encrypted_metadata: Buffer;
+        expected_size_bytes: number | string;
+        created_at: Date;
+      }[]>`
+        insert into server_custom_emojis (
+          id, server_id, created_by, encrypted_metadata, storage_key, expected_size_bytes
+        ) values (
+          ${id}, ${params.serverId}, ${user.id}, ${metadata}, ${storageKey}, ${body.expectedSizeBytes}
+        )
+        returning id, server_id, encrypted_metadata, expected_size_bytes, created_at
+      `;
+      await recordServerAudit(params.serverId, user.id, "custom_emoji.created", id);
+      set.status = 201;
+      return {
+        emoji: {
+          id: emoji.id,
+          serverId: emoji.server_id,
+          encryptedMetadata: encodeBase64(emoji.encrypted_metadata),
+          fileUrl: null,
+          uploadPath: `/v1/servers/${encodeURIComponent(params.serverId)}/emojis/${encodeURIComponent(id)}/file`,
+          expectedSizeBytes: Number(emoji.expected_size_bytes),
+          sizeBytes: null,
+          status: "pending" as const,
+          createdAt: emoji.created_at,
+          uploadedAt: null,
+        },
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        encryptedMetadata: t.String({ minLength: 1, maxLength: 90_000 }),
+        expectedSizeBytes: t.Integer({ minimum: 1, maximum: maxCustomEmojiBytes }),
+      }),
+    })
+    .put("/v1/servers/:serverId/emojis/:emojiId/file", async ({ headers, params, request, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasServerPermission(authorization, "manage_custom_emoji")) return respondError(set, 403, "insufficient_server_permissions");
+      const [emoji] = await db<{
+        id: string;
+        storage_key: string;
+        expected_size_bytes: number | string;
+        status: "pending" | "uploaded";
+      }[]>`
+        select id, storage_key, expected_size_bytes, status
+        from server_custom_emojis
+        where id = ${params.emojiId} and server_id = ${params.serverId}
+      `;
+      if (!emoji) return respondError(set, 404, "custom_emoji_not_found");
+      if (emoji.status === "uploaded") return respondError(set, 409, "custom_emoji_already_uploaded");
+      let stored: { size: number };
+      try {
+        stored = await storeEncryptedAttachment(request, emoji.storage_key, Number(emoji.expected_size_bytes));
+      } catch (error) {
+        if (error instanceof AttachmentTooLargeError) return respondError(set, 413, "custom_emoji_too_large");
+        if (error instanceof AttachmentSizeMismatchError) return respondError(set, 400, "custom_emoji_size_mismatch");
+        throw error;
+      }
+      try {
+        const [updated] = await db<{
+          id: string;
+          server_id: string;
+          encrypted_metadata: Buffer;
+          expected_size_bytes: number | string;
+          size_bytes: number | string;
+          status: "pending" | "uploaded";
+          created_at: Date;
+          uploaded_at: Date;
+        }[]>`
+          update server_custom_emojis
+          set status = 'uploaded', size_bytes = ${stored.size}, uploaded_at = now()
+          where id = ${emoji.id} and server_id = ${params.serverId} and status = 'pending'
+          returning id, server_id, encrypted_metadata, expected_size_bytes, size_bytes,
+            status, created_at, uploaded_at
+        `;
+        if (!updated) {
+          await removeEncryptedAttachment(emoji.storage_key);
+          return respondError(set, 409, "custom_emoji_already_uploaded");
+        }
+        await recordServerAudit(params.serverId, user.id, "custom_emoji.uploaded", emoji.id);
+        return {
+          emoji: {
+            id: updated.id,
+            serverId: updated.server_id,
+            encryptedMetadata: encodeBase64(updated.encrypted_metadata),
+            fileUrl: `/v1/servers/${encodeURIComponent(params.serverId)}/emojis/${encodeURIComponent(updated.id)}/file`,
+            expectedSizeBytes: Number(updated.expected_size_bytes),
+            sizeBytes: Number(updated.size_bytes),
+            status: updated.status,
+            createdAt: updated.created_at,
+            uploadedAt: updated.uploaded_at,
+          },
+        };
+      } catch (error) {
+        await removeEncryptedAttachment(emoji.storage_key);
+        throw error;
+      }
+    }, {
+      params: t.Object({
+        serverId: t.String({ format: "uuid" }),
+        emojiId: t.String({ format: "uuid" }),
+      }),
+    })
+    .get("/v1/servers/:serverId/emojis/:emojiId/file", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      const [emoji] = await db<{ id: string; storage_key: string; status: "pending" | "uploaded" }[]>`
+        select id, storage_key, status from server_custom_emojis
+        where id = ${params.emojiId} and server_id = ${params.serverId}
+      `;
+      if (!emoji || emoji.status !== "uploaded") return respondError(set, 404, "custom_emoji_not_found");
+      if (!(await encryptedAttachmentExists(emoji.storage_key))) return respondError(set, 404, "custom_emoji_storage_missing");
+      return new Response(Bun.file(attachmentPath(emoji.storage_key)), {
+        headers: {
+          "cache-control": "private, max-age=3600",
+          "content-type": "application/octet-stream",
+          "content-disposition": `attachment; filename="${emoji.id}.bin"`,
+        },
+      });
+    }, {
+      params: t.Object({
+        serverId: t.String({ format: "uuid" }),
+        emojiId: t.String({ format: "uuid" }),
+      }),
+    })
+    .delete("/v1/servers/:serverId/emojis/:emojiId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasServerPermission(authorization, "manage_custom_emoji")) return respondError(set, 403, "insufficient_server_permissions");
+      const [deleted] = await db<{ id: string; storage_key: string }[]>`
+        delete from server_custom_emojis
+        where id = ${params.emojiId} and server_id = ${params.serverId}
+        returning id, storage_key
+      `;
+      if (!deleted) return respondError(set, 404, "custom_emoji_not_found");
+      await removeEncryptedAttachment(deleted.storage_key);
+      await recordServerAudit(params.serverId, user.id, "custom_emoji.deleted", deleted.id);
+      return { deleted: true };
+    }, {
+      params: t.Object({
+        serverId: t.String({ format: "uuid" }),
+        emojiId: t.String({ format: "uuid" }),
+      }),
+    })
+    .get("/v1/servers/:serverId/audit-logs", async ({ headers, params, query, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasServerPermission(authorization, "view_audit_logs")) return respondError(set, 403, "insufficient_server_permissions");
+      const parsedLimit = Number(query.limit ?? 100);
+      const limit = Number.isInteger(parsedLimit) ? Math.min(100, Math.max(1, parsedLimit)) : 100;
+      const logs = await db<{
+        id: bigint | number | string;
+        action: string;
+        target_id: string | null;
+        target_user_id: string | null;
+        actor_id: string;
+        actor_username: string;
+        actor_display_name: string;
+        created_at: Date;
+      }[]>`
+        select l.id, l.action, l.target_id, l.target_user_id, l.actor_id,
+          actor.username as actor_username, actor.display_name as actor_display_name, l.created_at
+        from server_audit_logs l
+        join users actor on actor.id = l.actor_id
+        where l.server_id = ${params.serverId}
+        order by l.created_at desc, l.id desc
+        limit ${limit}
+      `;
+      return {
+        logs: logs.map((log) => ({
+          id: String(log.id),
+          action: log.action,
+          targetId: log.target_id,
+          targetUserId: log.target_user_id,
+          actor: {
+            id: log.actor_id,
+            username: log.actor_username,
+            displayName: log.actor_display_name,
+          },
+          createdAt: log.created_at,
+        })),
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+      query: t.Object({ limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })) }),
     })
     .delete("/v1/servers/:serverId", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -1349,6 +1921,12 @@ export function createApp() {
         join channels c on c.conversation_id = a.conversation_id
         where c.server_id = ${params.serverId}
       `;
+      const [branding] = await db<{ icon_storage_key: string | null; banner_storage_key: string | null }[]>`
+        select icon_storage_key, banner_storage_key from servers where id = ${params.serverId}
+      `;
+      const emojiFiles = await db<{ storage_key: string }[]>`
+        select storage_key from server_custom_emojis where server_id = ${params.serverId}
+      `;
       const [deleted] = await db<{ id: string }[]>`
         delete from servers
         where id = ${params.serverId} and owner_id = ${user.id}
@@ -1356,6 +1934,11 @@ export function createApp() {
       `;
       if (!deleted) return respondError(set, 404, "server_not_found");
       await Promise.all(attachments.map((attachment) => removeEncryptedAttachment(attachment.storage_key)));
+      await Promise.all([
+        branding?.icon_storage_key ? removeProfileImage(branding.icon_storage_key) : Promise.resolve(),
+        branding?.banner_storage_key ? removeProfileImage(branding.banner_storage_key) : Promise.resolve(),
+        ...emojiFiles.map((emoji) => removeEncryptedAttachment(emoji.storage_key)),
+      ]);
       return { deleted: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }) }),
@@ -1461,6 +2044,7 @@ export function createApp() {
       });
 
       if ("error" in created) return respondError(set, 404, "category_not_found");
+      await recordServerAudit(params.serverId, user.id, "channel.created", created.channel.id);
       set.status = 201;
       return {
         channel: {
@@ -1548,6 +2132,7 @@ export function createApp() {
       const channel = channelRows[0];
       if (!channel) return respondError(set, 404, "channel_not_found");
       const access = await channelAuthorization(params.serverId, user.id, channel.id);
+      await recordServerAudit(params.serverId, user.id, "channel.updated", channel.id);
       return {
         channel: {
           id: channel.id,
@@ -1595,6 +2180,7 @@ export function createApp() {
         returning id
       `;
       if (!archived) return respondError(set, 404, "channel_not_found");
+      await recordServerAudit(params.serverId, user.id, "channel.archived", archived.id);
       return { archived: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), channelId: t.String({ format: "uuid" }) }),
@@ -1656,6 +2242,7 @@ export function createApp() {
         values (${params.serverId}, ${user.id}, ${metadata}, ${body.position ?? position.next_position})
         returning id, server_id, encrypted_metadata, position, created_at
       `;
+      await recordServerAudit(params.serverId, user.id, "category.created", category.id);
       set.status = 201;
       return {
         category: {
@@ -1705,6 +2292,7 @@ export function createApp() {
         where id = ${existing.id}
         returning id, server_id, encrypted_metadata, position, created_at
       `;
+      await recordServerAudit(params.serverId, user.id, "category.updated", category.id);
       return {
         category: {
           id: category.id,
@@ -1741,6 +2329,7 @@ export function createApp() {
         return true;
       });
       if (!archived) return respondError(set, 404, "category_not_found");
+      await recordServerAudit(params.serverId, user.id, "category.archived", params.categoryId);
       return { archived: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), categoryId: t.String({ format: "uuid" }) }),
@@ -1757,18 +2346,21 @@ export function createApp() {
         username: string;
         display_name: string;
         profile_image_storage_key: string | null;
+        profile_banner_storage_key: string | null;
         role: "owner" | "admin" | "member";
         role_ids: string[];
         joined_at: Date;
       }[]>`
-        select u.id, u.username, u.display_name, u.profile_image_storage_key, sm.role,
+        select u.id, u.username, u.display_name, u.profile_image_storage_key,
+          u.profile_banner_storage_key, sm.role,
           coalesce(array_agg(smr.role_id order by smr.assigned_at asc) filter (where smr.role_id is not null), array[]::uuid[]) as role_ids,
           sm.joined_at
         from server_members sm
         join users u on u.id = sm.user_id
         left join server_member_roles smr on smr.server_id = sm.server_id and smr.user_id = sm.user_id
         where sm.server_id = ${params.serverId} and sm.left_at is null
-        group by u.id, u.username, u.display_name, u.profile_image_storage_key, sm.role, sm.joined_at
+        group by u.id, u.username, u.display_name, u.profile_image_storage_key,
+          u.profile_banner_storage_key, sm.role, sm.joined_at
         order by sm.joined_at asc
       `;
       return {
@@ -1777,6 +2369,7 @@ export function createApp() {
           username: member.username,
           displayName: member.display_name,
           avatarUrl: profileImageUrl(member.id, member.profile_image_storage_key),
+          bannerUrl: profileBannerUrl(member.id, member.profile_banner_storage_key),
           role: member.role,
           roleIds: stringArray(member.role_ids),
           joinedAt: member.joined_at,
@@ -1875,6 +2468,7 @@ export function createApp() {
           mentionable, view_all_channels, is_system, system_key, created_at, updated_at
       `;
       set.status = 201;
+      await recordServerAudit(params.serverId, user.id, "role.created", role.id);
       return { role: publicServerRole(role) };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }) }),
@@ -1964,6 +2558,7 @@ export function createApp() {
           mentionable, view_all_channels, is_system, system_key, created_at, updated_at
       `;
       await syncServerChannelMemberships(params.serverId);
+      await recordServerAudit(params.serverId, user.id, "role.updated", role.id);
       return { role: publicServerRole(role) };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), roleId: t.String({ format: "uuid" }) }),
@@ -1989,6 +2584,7 @@ export function createApp() {
       if (!canManageRole(authorization, role, "delete_roles")) return respondError(set, 403, "insufficient_server_permissions");
       await db`delete from server_roles where id = ${role.id}`;
       await syncServerChannelMemberships(params.serverId);
+      await recordServerAudit(params.serverId, user.id, "role.deleted", role.id);
       return { deleted: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), roleId: t.String({ format: "uuid" }) }),
@@ -2018,6 +2614,7 @@ export function createApp() {
           can_upload = excluded.can_upload
       `;
       await syncChannelConversationMembership(params.serverId, channel.id);
+      await recordServerAudit(params.serverId, user.id, "role.channel_access_updated", channel.id);
       return { updated: true, canView, canUpload };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), roleId: t.String({ format: "uuid" }), channelId: t.String({ format: "uuid" }) }),
@@ -2048,6 +2645,7 @@ export function createApp() {
           and c.id = ${params.channelId} and c.server_id = ${params.serverId}
       `;
       await syncChannelConversationMembership(params.serverId, params.channelId);
+      await recordServerAudit(params.serverId, user.id, "role.channel_access_removed", params.channelId);
       return { deleted: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), roleId: t.String({ format: "uuid" }), channelId: t.String({ format: "uuid" }) }),
@@ -2079,6 +2677,7 @@ export function createApp() {
           can_upload = excluded.can_upload
       `;
       await syncServerChannelMemberships(params.serverId);
+      await recordServerAudit(params.serverId, user.id, "role.category_access_updated", category.id);
       return { updated: true, canView, canUpload };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), roleId: t.String({ format: "uuid" }), categoryId: t.String({ format: "uuid" }) }),
@@ -2106,6 +2705,7 @@ export function createApp() {
         where role_id = ${role.id} and category_id = ${category.id}
       `;
       await syncServerChannelMemberships(params.serverId);
+      await recordServerAudit(params.serverId, user.id, "role.category_access_removed", category.id);
       return { deleted: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), roleId: t.String({ format: "uuid" }), categoryId: t.String({ format: "uuid" }) }),
@@ -2168,6 +2768,7 @@ export function createApp() {
         `;
       });
       await syncServerChannelMemberships(params.serverId);
+      await recordServerAudit(params.serverId, user.id, "member.roles_updated", params.userId, params.userId);
       return { updated: true, roleIds: effectiveRoleIds };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
@@ -2268,6 +2869,7 @@ export function createApp() {
             and cm.user_id = ${params.userId} and cm.left_at is null
         `;
       });
+      await recordServerAudit(params.serverId, user.id, "member.banned", params.userId, params.userId);
       return { banned: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
@@ -2288,6 +2890,7 @@ export function createApp() {
         returning id
       `;
       if (!revoked) return respondError(set, 404, "ban_not_found");
+      await recordServerAudit(params.serverId, user.id, "member.unbanned", params.userId, params.userId);
       return { revoked: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
@@ -2316,6 +2919,7 @@ export function createApp() {
           revoked_at = null
         returning id, expires_at
       `;
+      await recordServerAudit(params.serverId, user.id, "member.timed_out", params.userId, params.userId);
       return { timedOut: true, expiresAt: timeout.expires_at };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
@@ -2336,6 +2940,7 @@ export function createApp() {
         returning id
       `;
       if (!revoked) return respondError(set, 404, "timeout_not_found");
+      await recordServerAudit(params.serverId, user.id, "member.timeout_removed", params.userId, params.userId);
       return { revoked: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
@@ -2406,6 +3011,7 @@ export function createApp() {
         `;
       });
       set.status = 201;
+      await recordServerAudit(params.serverId, user.id, "invite.created", invite.id);
       return { invite: { id: invite.id, token, maxUses: invite.max_uses, expiresAt: invite.expires_at } };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }) }),
@@ -2518,6 +3124,7 @@ export function createApp() {
         const error = result.error ?? "invite_not_found";
         return respondError(set, error === "invite_not_found" ? 404 : 409, error);
       }
+      if (result.joined) await recordServerAudit(result.serverId, user.id, "member.joined", user.id, user.id);
       return { serverId: result.serverId, onboardingChannelId: result.onboardingChannelId, joined: result.joined };
     }, {
       params: t.Object({ token: t.String({ minLength: 20, maxLength: 255 }) }),
@@ -2556,6 +3163,7 @@ export function createApp() {
             and cm.left_at is null
         `;
       });
+      await recordServerAudit(params.serverId, user.id, "member.kicked", params.userId, params.userId);
       return { removed: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
@@ -2602,6 +3210,7 @@ export function createApp() {
         }
       });
       await syncServerChannelMemberships(params.serverId);
+      await recordServerAudit(params.serverId, user.id, "member.legacy_role_updated", params.userId, params.userId);
       return { updated: true, role: body.role };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
@@ -2629,6 +3238,7 @@ export function createApp() {
             and cm.left_at is null
         `;
       });
+      await recordServerAudit(params.serverId, user.id, "member.left", user.id, user.id);
       return { left: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }) }),
@@ -2646,6 +3256,7 @@ export function createApp() {
         returning id
       `;
       if (!revoked) return respondError(set, 404, "invite_not_found");
+      await recordServerAudit(params.serverId, user.id, "invite.revoked", params.inviteId);
       return { revoked: true };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }), inviteId: t.String({ format: "uuid" }) }),
@@ -3347,15 +3958,24 @@ export function createApp() {
       `;
       if (!membership) return respondError(set, 403, "not_a_conversation_member");
 
-      const members = await db<{ id: string; username: string; display_name: string; profile_image_storage_key: string | null; role_ids: string[] }[]>`
+      const members = await db<{
+        id: string;
+        username: string;
+        display_name: string;
+        profile_image_storage_key: string | null;
+        profile_banner_storage_key: string | null;
+        role_ids: string[];
+      }[]>`
         select u.id, u.username, u.display_name, u.profile_image_storage_key,
+          u.profile_banner_storage_key,
           coalesce(array_agg(smr.role_id order by smr.assigned_at asc) filter (where smr.role_id is not null), array[]::uuid[]) as role_ids
         from conversation_members m
         join users u on u.id = m.user_id
         left join channels c on c.conversation_id = m.conversation_id
         left join server_member_roles smr on smr.server_id = c.server_id and smr.user_id = m.user_id
         where m.conversation_id = ${params.conversationId} and m.left_at is null
-        group by u.id, u.username, u.display_name, u.profile_image_storage_key, m.joined_at
+        group by u.id, u.username, u.display_name, u.profile_image_storage_key,
+          u.profile_banner_storage_key, m.joined_at
         order by m.joined_at asc
       `;
       return {
@@ -3365,6 +3985,7 @@ export function createApp() {
             username: member.username,
             displayName: member.display_name,
             avatarUrl: profileImageUrl(member.id, member.profile_image_storage_key),
+            bannerUrl: profileBannerUrl(member.id, member.profile_banner_storage_key),
             roleIds: stringArray(member.role_ids),
           })),
       };

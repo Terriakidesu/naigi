@@ -21,6 +21,8 @@
         <a class="settings-nav-item server-settings-nav-item" data-settings-tab href="#access"><i data-lucide="shield"></i><span>Access</span></a>
         <a class="settings-nav-item server-settings-nav-item" data-settings-tab href="#moderation"><i data-lucide="gavel"></i><span>Moderation</span></a>
         <a class="settings-nav-item server-settings-nav-item" data-settings-tab href="#invites"><i data-lucide="link"></i><span>Invites</span></a>
+        <a class="settings-nav-item server-settings-nav-item" data-settings-tab href="#emoji"><i data-lucide="smile"></i><span>Emoji</span></a>
+        <a class="settings-nav-item server-settings-nav-item" data-settings-tab href="#audit"><i data-lucide="clipboard-list"></i><span>Audit log</span></a>
       </nav>
       <section class="server-settings-content">
         <div id="overview" class="settings-view" data-settings-view>
@@ -33,8 +35,38 @@
               <label for="server-description">Description<textarea id="server-description" rows="3" maxlength="240"></textarea></label>
               <label for="onboarding-channel">Join announcements room<select id="onboarding-channel"><option value="">No join announcements</option></select></label>
               <p class="muted small">A joining member’s browser can publish an end-to-end encrypted notice to this room. The server never creates or reads that message.</p>
+              <label for="landing-channel">Default room on open<select id="landing-channel"><option value="">First visible room</option></select></label>
+              <p class="muted small">This controls where the space opens. It is independent from the encrypted join-announcement destination.</p>
               <button id="save-server-button" type="submit">Save space</button>
             </form>
+          </section>
+          <section class="settings-section panel">
+            <div class="settings-section-heading"><div><p class="eyebrow">BRANDING</p><h2>Space appearance</h2></div><span class="muted small">Visible only to space members</span></div>
+            <div class="server-branding-grid">
+              <div class="server-branding-card">
+                <div id="server-icon-preview" class="server-icon-preview" aria-hidden="true">N</div>
+                <div class="server-branding-copy"><strong>Space icon</strong><span class="muted small">PNG, JPEG, GIF, WebP, or AVIF · 5 MiB max</span></div>
+                <label class="profile-image-button">Choose icon<input id="server-icon-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif"></label>
+                <button id="remove-server-icon" class="secondary" type="button">Remove</button>
+              </div>
+              <div class="server-branding-card server-banner-card">
+                <div id="server-banner-preview" class="server-banner-preview" aria-hidden="true"></div>
+                <div class="server-branding-copy"><strong>Space banner</strong><span class="muted small">A wide image for the space header</span></div>
+                <label class="profile-image-button">Choose banner<input id="server-banner-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif"></label>
+                <button id="remove-server-banner" class="secondary" type="button">Remove</button>
+              </div>
+            </div>
+          </section>
+          <section class="settings-section panel">
+            <div class="settings-section-heading"><div><p class="eyebrow">WELCOME SCREEN</p><h2>New member welcome</h2></div><span class="muted small">Stored as encrypted space metadata</span></div>
+            <p class="settings-section-description">Give new members a short orientation before they begin. The text is encrypted in the space metadata and is never readable by the server.</p>
+            <div class="settings-form welcome-form">
+              <label class="checkbox-label settings-checkbox"><input id="welcome-enabled" type="checkbox"><span>Show a welcome panel when a member opens this space</span></label>
+              <label for="welcome-heading">Heading<input id="welcome-heading" maxlength="120" placeholder="Welcome to our private space"></label>
+              <label for="welcome-description">Message<textarea id="welcome-description" rows="3" maxlength="500" placeholder="A short guide for new members"></textarea></label>
+              <label for="welcome-rules">Rules<textarea id="welcome-rules" rows="4" maxlength="2000" placeholder="Be kind…"></textarea></label>
+              <label class="checkbox-label settings-checkbox"><input id="welcome-acknowledgement" type="checkbox"><span>Ask members to acknowledge the rules</span></label>
+            </div>
           </section>
           <section id="danger-zone" class="settings-section panel danger-zone">
             <p class="eyebrow">DANGER ZONE</p>
@@ -97,6 +129,25 @@
           <section class="settings-section panel">
             <div class="settings-section-heading"><div><p class="eyebrow">INVITES</p><h2>Invite links</h2></div><button id="create-invite-settings" class="secondary" type="button">Create invite</button></div>
             <div id="invite-settings-list" class="settings-list"></div>
+          </section>
+        </div>
+        <div id="emoji" class="settings-view" data-settings-view hidden>
+          <section class="settings-section panel">
+            <div class="settings-section-heading"><div><p class="eyebrow">CUSTOM EMOJI</p><h2>Encrypted emoji</h2></div><span class="muted small">10 MiB max per emoji</span></div>
+            <p class="settings-section-description">Emoji files are encrypted in your browser before upload. The server stores only opaque bytes and encrypted metadata.</p>
+            <form id="emoji-form" class="inline-settings-form emoji-create-form">
+              <input id="new-emoji-name" maxlength="32" pattern="[A-Za-z0-9_+-]+" placeholder="emoji_name" aria-label="Emoji name" required>
+              <input id="new-emoji-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif" required>
+              <button type="submit">Upload emoji</button>
+            </form>
+            <div id="emoji-settings-list" class="settings-list"></div>
+          </section>
+        </div>
+        <div id="audit" class="settings-view" data-settings-view hidden>
+          <section class="settings-section panel">
+            <div class="settings-section-heading"><div><p class="eyebrow">AUDIT LOG</p><h2>Space activity</h2></div><button id="refresh-audit-log" class="secondary" type="button">Refresh</button></div>
+            <p class="settings-section-description">Only permission changes and server actions are recorded. Message content, room names, URLs, and encrypted payloads are never included.</p>
+            <div id="audit-log-list" class="settings-list"></div>
           </section>
         </div>
         <p id="server-settings-status" class="form-status" role="status"></p>

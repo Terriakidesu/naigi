@@ -55,7 +55,10 @@ the backend does not depend on that representation.
 | `GET` | `/v1/servers` | List active server memberships |
 | `POST` | `/v1/servers` | Create a server and its initial `general` channel |
 | `GET` | `/v1/servers/:serverId` | Fetch one authorized server |
-| `PATCH` | `/v1/servers/:serverId` | Replace encrypted server metadata and/or set the onboarding channel (owner/admin) |
+| `PATCH` | `/v1/servers/:serverId` | Replace encrypted server metadata and/or set the join-announcement and landing rooms (owner/admin) |
+| `GET` | `/v1/servers/:serverId/branding/:asset` | Serve an authenticated `icon` or `banner` asset |
+| `PUT` | `/v1/servers/:serverId/branding/:asset` | Replace a server icon or banner (manage server) |
+| `DELETE` | `/v1/servers/:serverId/branding/:asset` | Remove a server icon or banner (manage server) |
 | `GET` | `/v1/servers/:serverId/categories` | List ordered active categories |
 | `POST` | `/v1/servers/:serverId/categories` | Create a category (owner/admin) |
 | `PATCH` | `/v1/servers/:serverId/categories/:categoryId` | Replace metadata or set `position` |
@@ -66,6 +69,12 @@ the backend does not depend on that representation.
 | `GET` | `/v1/servers/:serverId/invites` | List invite metadata (owner/admin) |
 | `POST` | `/v1/servers/:serverId/invites` | Replace the current active invite with a hashed, expiring invite (owner/admin) |
 | `DELETE` | `/v1/servers/:serverId/invites/:inviteId` | Revoke an invite |
+| `GET` | `/v1/servers/:serverId/emojis` | List opaque custom-emoji metadata for members |
+| `POST` | `/v1/servers/:serverId/emojis` | Create an encrypted custom-emoji upload (manage custom emoji) |
+| `PUT` | `/v1/servers/:serverId/emojis/:emojiId/file` | Upload encrypted custom-emoji bytes |
+| `GET` | `/v1/servers/:serverId/emojis/:emojiId/file` | Download encrypted custom-emoji bytes |
+| `DELETE` | `/v1/servers/:serverId/emojis/:emojiId` | Remove a custom emoji |
+| `GET` | `/v1/servers/:serverId/audit-logs` | Read authorization-scoped management activity (view audit logs) |
 | `POST` | `/v1/invites/:token/accept` | Join using a one-time-presented invite token |
 | `PATCH` | `/v1/servers/:serverId/members/:userId` | Owner changes `admin`/`member` role |
 | `DELETE` | `/v1/servers/:serverId/members/:userId` | Owner/admin removes a member |
@@ -98,6 +107,14 @@ those grants in addition to any channel-specific grants. `PATCH /v1/servers/:ser
 active channel. The API exposes this ID as `onboardingChannelId`. The server only stores the
 channel ID and never creates or reads the encrypted join notice; the browser that accepts an
 invite may publish the notice as an encrypted `m.notice` event.
+`landingChannelId` independently controls the room opened when a member selects the space; it
+also defaults to the first active channel and may be `null` to use the first visible room.
+
+Server icon and banner bytes are authenticated account-style assets. Custom emoji files are
+different: the reference client encrypts them with a browser-generated key before upload and
+stores the key only inside the encrypted emoji metadata. Audit rows contain stable action codes
+and UUID targets; they never contain message content, encrypted payloads, room names, URLs, or
+media keys.
 
 ## Encrypted conversations
 
@@ -106,6 +123,9 @@ The existing conversation transport is used for both DMs/groups and server text 
 - `GET /v1/conversations/:conversationId/members`
 - `GET /v1/users/:userId`
 - `GET /v1/users/:userId/avatar`
+- `GET /v1/users/:userId/banner`
+- `PUT /v1/me/banner`
+- `DELETE /v1/me/banner`
 - `GET /v1/conversations/:conversationId/messages?limit=50&before=<sequence>`
 - `GET /v1/conversations/:conversationId/messages?limit=50&after=<sequence>`
 - `POST /v1/conversations/:conversationId/messages`

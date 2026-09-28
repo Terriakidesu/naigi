@@ -13,6 +13,7 @@
 .server-list { display: grid; align-content: start; gap: 0.5rem; width: 100%; min-height: 0; padding: 0 0.75rem; overflow: auto; scrollbar-width: none; }
 .server-list::-webkit-scrollbar { display: none; }
 .space-rail-button { position: relative; display: grid; place-items: center; width: 48px; height: 48px; padding: 0; overflow: visible; border: 1px solid transparent; border-radius: 50%; color: #fff; background: var(--avatar-color, #3f6870); font-size: 0.8rem; font-weight: 800; transition: border-radius 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
+.space-rail-image { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
 .space-rail-button:hover, .space-rail-button.selected { border-radius: 16px; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
 .server-unread-badge { position: absolute; top: -5px; right: -5px; min-width: 1.1rem; padding: 0.1rem 0.25rem; border: 2px solid var(--bg-deep); font-size: 0.58rem; }
 

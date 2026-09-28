@@ -51,6 +51,16 @@ let serverRoles: CustomServerRole[] = [];
 const serverRoleLabels = new Map<string, string>();
 let selectedServerId: string | undefined;
 let selectedChannelId: string | undefined;
+let activeServerWelcome: {
+  enabled: boolean;
+  heading: string;
+  description: string;
+  rules: string;
+  acknowledgement: boolean;
+} | undefined;
+const customEmojiAssets = new Map<string, { src: string; alt: string }>();
+let customEmojiObjectUrls: string[] = [];
+let customEmojiHydrationToken = 0;
 const serverLabels = new Map<string, string>();
 const channelLabels = new Map<string, string>();
 const categoryLabels = new Map<string, string>();
@@ -158,6 +168,42 @@ function renderEmojiSectionItems(section: HTMLElement) {
     button.addEventListener("click", () => insertEmoji(option.emoji));
     items.append(button);
   }
+}
+
+function customEmojiPickerEntries(query: string) {
+  return [...customEmojiAssets.entries()]
+    .filter(([name]) => !query || name.includes(query))
+    .sort(([left], [right]) => left.localeCompare(right));
+}
+
+function renderCustomEmojiPickerSection(query: string) {
+  const candidates = customEmojiPickerEntries(query);
+  if (candidates.length === 0) return false;
+  const section = document.createElement("section");
+  section.className = "emoji-category-section custom-emoji-category-section";
+  const heading = document.createElement("h3");
+  heading.className = "emoji-category-heading";
+  heading.textContent = "Custom emoji";
+  const items = document.createElement("div");
+  items.className = "emoji-category-items";
+  for (const [name, asset] of candidates) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.title = `Insert :${name}:`;
+    button.setAttribute("aria-label", `Insert :${name}:`);
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => insertEmoji(`:${name}:`));
+    const image = document.createElement("img");
+    image.className = "custom-emoji-picker-image";
+    image.src = asset.src;
+    image.alt = asset.alt;
+    image.draggable = false;
+    button.append(image);
+    items.append(button);
+  }
+  section.append(heading, items);
+  emojiPickerGrid.append(section);
+  return true;
 }
 let editTarget: EditTarget | undefined;
 let contextMessage: ContextMessage | undefined;
@@ -285,6 +331,7 @@ let mediaViewerIndex = 0;
 let mediaViewerRenderToken = 0;
 const profileModal = byId<HTMLElement>("profile-modal");
 const profileModalClose = byId<HTMLButtonElement>("profile-modal-close");
+const profileModalBanner = byId<HTMLElement>("profile-modal-banner");
 const profileModalAvatar = byId<HTMLElement>("profile-modal-avatar");
 const profileModalName = byId<HTMLElement>("profile-modal-name");
 const profileModalUsername = byId<HTMLElement>("profile-modal-username");
@@ -826,6 +873,7 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
   if (body) appendMarkdown(content, body, {
     mentionUsernames: mentionNames,
     mentionRoleNames,
+    customEmoji: customEmojiAssets,
     roomReferences: roomReferenceMap(),
     onRoomReference: (channelId) => void selectChannel(channelId),
   });
@@ -1225,6 +1273,8 @@ async function openUserProfile(userId: string) {
   profileModalName.textContent = "Loading profile…";
   profileModalUsername.textContent = "";
   profileModalCreated.textContent = "";
+  profileModalBanner.replaceChildren();
+  profileModalBanner.dataset.empty = "true";
   renderAvatar(profileModalAvatar, "?", userId, null);
   profileModalEdit.hidden = true;
   showDialog(profileModal, profileModalClose);
@@ -1232,6 +1282,16 @@ async function openUserProfile(userId: string) {
     const result = await api.user(userId);
     if (request !== profileRequest || profileModal.hidden) return;
     const user = result.user;
+    profileModalBanner.replaceChildren();
+    if (user.bannerUrl) {
+      const banner = document.createElement("img");
+      banner.src = user.bannerUrl;
+      banner.alt = "";
+      profileModalBanner.append(banner);
+      delete profileModalBanner.dataset.empty;
+    } else {
+      profileModalBanner.dataset.empty = "true";
+    }
     renderAvatar(profileModalAvatar, user.displayName, user.id, user.avatarUrl, user.displayName);
     profileModalName.textContent = user.displayName;
     profileModalUsername.textContent = `@${user.username}`;
@@ -1516,7 +1576,7 @@ function renderEmojiPickerGrid() {
   emojiPickerObserver = undefined;
   emojiPickerGrid.replaceChildren();
   const lazySections: HTMLElement[] = [];
-  let sectionCount = 0;
+  let sectionCount = renderCustomEmojiPickerSection(query) ? 1 : 0;
   for (const category of emojiPickerCategories) {
     const candidates = emojiOptions.filter((option) => option.category === category.id
       && (!query || [option.name, ...option.aliases].some((name) => name.includes(query))));
@@ -1662,14 +1722,49 @@ function renderEmojiSuggestions() {
     hideEmojiSuggestions();
     return;
   }
-  const candidates = emojiShortcodeMatches(token.query).slice(0, 8);
+  const customCandidates = customEmojiPickerEntries(token.query).slice(0, 8);
+  const candidates = emojiShortcodeMatches(token.query)
+    .filter((candidate) => !customEmojiAssets.has(candidate.name.toLowerCase()))
+    .slice(0, Math.max(0, 8 - customCandidates.length));
   activeSuggestionIndex = -1;
   emojiSuggestions.replaceChildren();
-  if (candidates.length === 0) {
+  if (customCandidates.length === 0 && candidates.length === 0) {
     hideEmojiSuggestions();
     return;
   }
   hideMentionSuggestions();
+  for (const [name, asset] of customCandidates) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "emoji-suggestion";
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", "false");
+    const preview = document.createElement("span");
+    preview.className = "emoji-suggestion-preview";
+    const image = document.createElement("img");
+    image.className = "custom-emoji-picker-image";
+    image.src = asset.src;
+    image.alt = asset.alt;
+    image.draggable = false;
+    preview.append(image);
+    const label = document.createElement("span");
+    label.className = "emoji-suggestion-label";
+    label.textContent = `:${name}:`;
+    option.append(preview, label);
+    option.addEventListener("mousedown", (event) => event.preventDefault());
+    option.addEventListener("click", () => {
+      const replacement = `:${name}:`;
+      messageInput.value = `${messageInput.value.slice(0, token.start)}${replacement}${messageInput.value.slice(token.end)}`;
+      const nextCursor = token.start + replacement.length;
+      messageInput.setSelectionRange(nextCursor, nextCursor);
+      hideEmojiSuggestions();
+      rememberDraft();
+      resizeMessageInput();
+      updateLocalTyping();
+      messageInput.focus();
+    });
+    emojiSuggestions.append(option);
+  }
   for (const candidate of candidates) {
     const option = document.createElement("button");
     option.type = "button";
@@ -2299,8 +2394,16 @@ function renderServers() {
     button.setAttribute("aria-label", button.title);
     button.setAttribute("aria-pressed", String(server.id === selectedServerId));
     button.classList.toggle("selected", server.id === selectedServerId);
-    button.textContent = serverDisplayName(server).slice(0, 1).toUpperCase();
-    setAvatarStyle(button, server.id);
+    if (server.iconUrl) {
+      const icon = document.createElement("img");
+      icon.className = "space-rail-image";
+      icon.src = server.iconUrl;
+      icon.alt = "";
+      button.append(icon);
+    } else {
+      button.textContent = serverDisplayName(server).slice(0, 1).toUpperCase();
+      setAvatarStyle(button, server.id);
+    }
     if (unread > 0) {
       const badge = document.createElement("span");
       badge.className = "unread-badge server-unread-badge";
@@ -2371,6 +2474,8 @@ function renderServers() {
     || activeServer.permissions.unban_members
     || activeServer.permissions.timeout_members
     || activeServer.permissions.remove_timeouts
+    || activeServer.permissions.manage_custom_emoji
+    || activeServer.permissions.view_audit_logs
   ));
   createChannelButton.hidden = !canManageChannels;
   serverInviteButton.hidden = !canManageInvites;
@@ -2646,6 +2751,66 @@ async function refreshServers() {
   renderChannels();
 }
 
+function decodeBase64Bytes(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(normalized + "=".repeat((4 - normalized.length % 4) % 4));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function clearCustomEmojiAssets() {
+  for (const url of customEmojiObjectUrls) URL.revokeObjectURL(url);
+  customEmojiObjectUrls = [];
+  customEmojiAssets.clear();
+  customEmojiHydrationToken += 1;
+}
+
+async function hydrateServerCustomEmojis(serverId: string, metadataConversationId: string, selectionTokenForServer: number) {
+  const activeCrypto = cryptoClient;
+  if (!activeCrypto) return;
+  const hydrationToken = ++customEmojiHydrationToken;
+  try {
+    const result = await api.serverCustomEmojis(serverId);
+    const definitions = await Promise.all(result.emojis.map(async (emoji) => {
+      if (emoji.status !== "uploaded" || !emoji.fileUrl) return undefined;
+      try {
+        const metadata = await activeCrypto.decryptMetadata(metadataConversationId, emoji.encryptedMetadata);
+        const name = typeof metadata.name === "string" ? metadata.name.trim() : "";
+        const key = typeof metadata.key === "string" ? decodeBase64Bytes(metadata.key) : undefined;
+        const iv = typeof metadata.iv === "string" ? decodeBase64Bytes(metadata.iv) : undefined;
+        const mimeType = typeof metadata.mimeType === "string" && /^image\/(?:avif|gif|jpeg|png|webp)$/i.test(metadata.mimeType)
+          ? metadata.mimeType
+          : undefined;
+        if (!/^[A-Za-z0-9_+-]{1,32}$/.test(name) || !key || !iv || !mimeType || ![16, 24, 32].includes(key.byteLength) || iv.byteLength !== 12) return undefined;
+        const response = await fetch(emoji.fileUrl, { credentials: "include" });
+        if (!response.ok) return undefined;
+        const encrypted = new Uint8Array(await response.arrayBuffer());
+        if (encrypted.byteLength < 13 || encrypted.byteLength > 10 * 1024 * 1024) return undefined;
+        const cryptoKey = await crypto.subtle.importKey("raw", key, { name: "AES-GCM" }, false, ["decrypt"]);
+        const clear = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, encrypted.subarray(12));
+        return { name: name.toLowerCase(), blob: new Blob([clear], { type: mimeType }) };
+      } catch {
+        return undefined;
+      }
+    }));
+    if (selectionTokenForServer !== serverSelectionToken || selectedServerId !== serverId || cryptoClient !== activeCrypto || hydrationToken !== customEmojiHydrationToken) return;
+    clearCustomEmojiAssets();
+    for (const definition of definitions) {
+      if (!definition || customEmojiAssets.has(definition.name)) continue;
+      const src = URL.createObjectURL(definition.blob);
+      customEmojiObjectUrls.push(src);
+      customEmojiAssets.set(definition.name, { src, alt: `:${definition.name}:` });
+    }
+    if (!emojiPicker.hidden) renderEmojiPicker();
+    if (loadedMessages.length > 0 && selectedServerId === serverId) {
+      await renderMessageHistory({ scrollToBottom: false });
+    }
+  } catch {
+    // Custom emoji are optional encrypted metadata and must not block chat.
+  }
+}
+
 async function selectServer(serverId: string, requestedChannelId?: string) {
   rememberDraft();
   uploadAbortController?.abort();
@@ -2653,6 +2818,8 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   const token = ++serverSelectionToken;
   selectedServerId = serverId;
   selectedChannelId = undefined;
+  activeServerWelcome = undefined;
+  clearCustomEmojiAssets();
   selectedConversationId = undefined;
   conversationReady = false;
   selectedMembers = [];
@@ -2702,10 +2869,13 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
         // Role labels are encrypted metadata and are optional for opening a channel.
       }
     }
+    if (roleResult.metadataConversationId && cryptoClient) {
+      void hydrateServerCustomEmojis(serverId, roleResult.metadataConversationId, token);
+    }
     subscribeKnownConversations();
     renderChannels();
     renderServers();
-    const configuredLandingChannel = servers.find((server) => server.id === serverId)?.onboardingChannelId;
+    const configuredLandingChannel = servers.find((server) => server.id === serverId)?.landingChannelId;
     const requested = requestedChannelId && channels.find((channel) => channel.id === requestedChannelId);
     const landing = configuredLandingChannel && channels.find((channel) => channel.id === configuredLandingChannel);
     const channel = requested ?? landing ?? channels[0];
@@ -2776,6 +2946,7 @@ async function openDirectMessage(conversationId: string) {
   channels = [];
   categories = [];
   serverRoles = [];
+  clearCustomEmojiAssets();
   serverRoleLabels.clear();
   selectedMembers = [];
   ++serverSelectionToken;
@@ -2792,6 +2963,7 @@ async function showDirectMessages() {
   selectionToken += 1;
   selectedServerId = undefined;
   selectedChannelId = undefined;
+  clearCustomEmojiAssets();
   channels = [];
   categories = [];
   serverRoles = [];
@@ -2912,6 +3084,47 @@ function renderConversationWelcome(title: string, description: string) {
   const body = document.createElement("p");
   body.textContent = description;
   empty.append(icon, heading, body);
+  messagesPanel.append(empty);
+}
+
+function renderServerWelcome() {
+  const welcome = activeServerWelcome;
+  if (!welcome?.enabled) {
+    renderConversationWelcome("This is the beginning", "Send a message to start this encrypted conversation.");
+    return;
+  }
+  releaseMediaResources(messagesPanel);
+  messagesPanel.replaceChildren();
+  const empty = document.createElement("div");
+  empty.className = "conversation-welcome server-welcome";
+  const icon = document.createElement("div");
+  icon.className = "conversation-welcome-icon";
+  const server = selectedServerId ? servers.find((candidate) => candidate.id === selectedServerId) : undefined;
+  if (server?.iconUrl) {
+    const image = document.createElement("img");
+    image.src = server.iconUrl;
+    image.alt = "";
+    icon.append(image);
+  } else {
+    icon.textContent = server ? serverDisplayName(server).slice(0, 1).toUpperCase() : "N";
+  }
+  const heading = document.createElement("h3");
+  heading.textContent = welcome.heading || "Welcome";
+  const body = document.createElement("p");
+  body.textContent = welcome.description || "Welcome to this private space.";
+  empty.append(icon, heading, body);
+  if (welcome.rules) {
+    const rules = document.createElement("pre");
+    rules.className = "server-welcome-rules";
+    rules.textContent = welcome.rules;
+    empty.append(rules);
+  }
+  if (welcome.acknowledgement) {
+    const acknowledgement = document.createElement("span");
+    acknowledgement.className = "muted small server-welcome-acknowledgement";
+    acknowledgement.textContent = "Please acknowledge these rules before participating.";
+    empty.append(acknowledgement);
+  }
   messagesPanel.append(empty);
 }
 
@@ -3401,8 +3614,19 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
         if (typeof metadata.name === "string" && metadata.name.trim()) {
           serverLabels.set(activeServer.id, metadata.name.trim().slice(0, 80));
         }
+        const welcome = metadata.welcome && typeof metadata.welcome === "object" && !Array.isArray(metadata.welcome)
+          ? metadata.welcome as Record<string, unknown>
+          : undefined;
+        activeServerWelcome = welcome ? {
+          enabled: welcome.enabled === true,
+          heading: typeof welcome.heading === "string" ? welcome.heading.slice(0, 120) : "",
+          description: typeof welcome.description === "string" ? welcome.description.slice(0, 500) : "",
+          rules: typeof welcome.rules === "string" ? welcome.rules.slice(0, 2_000) : "",
+          acknowledgement: welcome.acknowledgement === true,
+        } : undefined;
       } catch {
         // See the channel metadata note above.
+        activeServerWelcome = undefined;
       }
     }
     if (metadataChannel && categories.length > 0) {
@@ -4165,6 +4389,7 @@ function renderMessage(
     appendMarkdown(messageContent, body, {
       mentionUsernames: mentionNames,
       mentionRoleNames,
+      customEmoji: customEmojiAssets,
       roomReferences: roomReferenceMap(),
       onRoomReference: (channelId) => void selectChannel(channelId),
     });
@@ -4274,7 +4499,10 @@ async function renderMessageHistoryInternal(options: { scrollAnchor?: ScrollAnch
   messagesPanel.append(loadOlderButton);
   loadOlderButton.hidden = !nextBefore;
   if (loadedMessages.length === 0) {
-    renderConversationWelcome("This is the beginning", "Send a message to start this encrypted conversation.");
+    const activeServer = selectedServerId ? servers.find((server) => server.id === selectedServerId) : undefined;
+    const landingChannelId = activeServer?.landingChannelId ?? channels[0]?.id;
+    if (activeServer && selectedChannelId === landingChannelId) renderServerWelcome();
+    else renderConversationWelcome("This is the beginning", "Send a message to start this encrypted conversation.");
     return;
   }
 

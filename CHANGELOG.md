@@ -4,6 +4,23 @@
 
 _No unreleased changes._
 
+## [0.16.0] - 2026-09-28
+
+### Added
+
+- Server settings now support member-visible icon and banner branding, an encrypted welcome-screen editor, encrypted custom emoji uploads/removal, and a permission-scoped audit log.
+- Profile settings now support banners, encrypted room-key recovery export/import, and explicit local-data cleanup controls.
+- Space landing-room selection is independent from encrypted join-announcement routing; empty landing rooms can render the configured encrypted welcome heading, message, rules, and acknowledgement prompt.
+
+### Changed
+
+- Space icons now appear in the workspace rail and branding uploads are managed separately from encrypted conversation media.
+- Custom emoji are decrypted only in memory on authorized browsers and render locally in encrypted messages; recovery passphrases and local cleanup state never leave the device.
+
+### Security
+
+- Custom emoji bytes are encrypted in the browser before upload; the server stores only opaque bytes, encrypted metadata, IDs, timestamps, and action codes. Audit logs never include message content, room names, URLs, embeds, or media keys.
+
 ## [0.15.0] - 2026-09-28
 
 ### Added
@@ -70,6 +87,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.16.0](docs/changelogs/0.16.0.md) — 2026-09-28
 - [0.15.0](docs/changelogs/0.15.0.md) — 2026-09-28
 - [0.14.0](docs/changelogs/0.14.0.md) — 2026-09-28
 - [0.13.0](docs/changelogs/0.13.0.md) — 2026-09-28

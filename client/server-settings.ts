@@ -4,8 +4,10 @@ import {
   type ConversationMember,
   type CustomServerRole,
   type Server,
+  type ServerAuditLog,
   type ServerCategory,
   type ServerChannel,
+  type ServerCustomEmoji,
   type ServerMember,
   type ServerModeration,
   type ServerPermission,
@@ -30,6 +32,18 @@ const serverForm = document.getElementById("server-form") as HTMLFormElement;
 const serverName = document.getElementById("server-name") as HTMLInputElement;
 const serverDescription = document.getElementById("server-description") as HTMLTextAreaElement;
 const onboardingChannel = document.getElementById("onboarding-channel") as HTMLSelectElement;
+const landingChannel = document.getElementById("landing-channel") as HTMLSelectElement;
+const serverIconPreview = document.getElementById("server-icon-preview") as HTMLElement;
+const serverIconInput = document.getElementById("server-icon-input") as HTMLInputElement;
+const removeServerIcon = document.getElementById("remove-server-icon") as HTMLButtonElement;
+const serverBannerPreview = document.getElementById("server-banner-preview") as HTMLElement;
+const serverBannerInput = document.getElementById("server-banner-input") as HTMLInputElement;
+const removeServerBanner = document.getElementById("remove-server-banner") as HTMLButtonElement;
+const welcomeEnabled = document.getElementById("welcome-enabled") as HTMLInputElement;
+const welcomeHeading = document.getElementById("welcome-heading") as HTMLInputElement;
+const welcomeDescription = document.getElementById("welcome-description") as HTMLTextAreaElement;
+const welcomeRules = document.getElementById("welcome-rules") as HTMLTextAreaElement;
+const welcomeAcknowledgement = document.getElementById("welcome-acknowledgement") as HTMLInputElement;
 const saveServer = document.getElementById("save-server-button") as HTMLButtonElement;
 const deleteServer = document.getElementById("delete-server-button") as HTMLButtonElement;
 const categoryForm = document.getElementById("category-form") as HTMLFormElement;
@@ -52,6 +66,12 @@ const memberList = document.getElementById("member-settings-list") as HTMLElemen
 const moderationList = document.getElementById("moderation-settings-list") as HTMLElement;
 const createInvite = document.getElementById("create-invite-settings") as HTMLButtonElement;
 const inviteList = document.getElementById("invite-settings-list") as HTMLElement;
+const emojiForm = document.getElementById("emoji-form") as HTMLFormElement;
+const newEmojiName = document.getElementById("new-emoji-name") as HTMLInputElement;
+const newEmojiFile = document.getElementById("new-emoji-file") as HTMLInputElement;
+const emojiList = document.getElementById("emoji-settings-list") as HTMLElement;
+const auditList = document.getElementById("audit-log-list") as HTMLElement;
+const refreshAuditLog = document.getElementById("refresh-audit-log") as HTMLButtonElement;
 const status = document.getElementById("server-settings-status") as HTMLElement;
 const backToServer = document.getElementById("back-to-server") as HTMLAnchorElement;
 const logout = document.getElementById("server-logout-button") as HTMLButtonElement;
@@ -64,6 +84,8 @@ let members: ServerMember[] = [];
 let roles: CustomServerRole[] = [];
 let roleAssignments = new Map<string, string[]>();
 let moderation: ServerModeration = { bans: [], timeouts: [] };
+let customEmojis: ServerCustomEmoji[] = [];
+let auditLogs: ServerAuditLog[] = [];
 let cryptoClient: CryptoClient | undefined;
 let metadataConversationId: string | undefined;
 let metadataMembers: Awaited<ReturnType<ApiClient["conversationMembers"]>>["members"] = [];
@@ -76,6 +98,7 @@ let metadataHydrationVersion = 0;
 const categoryNames = new Map<string, string>();
 const channelNames = new Map<string, string>();
 const roleNames = new Map<string, string>();
+const customEmojiNames = new Map<string, string>();
 
 const permissionDefinitions: Array<{ id: ServerPermission; label: string; description: string }> = [
   { id: "view_channels", label: "View rooms", description: "See rooms and read encrypted history." },
@@ -86,6 +109,8 @@ const permissionDefinitions: Array<{ id: ServerPermission; label: string; descri
   { id: "mention_here", label: "Mention active people", description: "Use the active-people broadcast mention." },
   { id: "mention_roles", label: "Mention roles", description: "Ping roles marked as mentionable." },
   { id: "manage_server", label: "Manage space", description: "Edit space details and space-wide settings." },
+  { id: "manage_custom_emoji", label: "Manage custom emoji", description: "Upload and remove encrypted custom emoji." },
+  { id: "view_audit_logs", label: "View audit log", description: "Review space management actions." },
   { id: "manage_channels", label: "Manage all rooms", description: "Legacy shortcut for every room management action." },
   { id: "create_channels", label: "Create rooms", description: "Create new encrypted rooms." },
   { id: "edit_channels", label: "Edit rooms", description: "Rename rooms and change their groups." },
@@ -124,7 +149,7 @@ const previewPermissionGroups: Array<{ label: string; permissions: ServerPermiss
   { label: "Rooms", permissions: ["manage_channels", "create_channels", "edit_channels", "reorder_channels", "archive_channels", "manage_categories", "manage_channel_access"] },
   { label: "Invites", permissions: ["manage_invites", "view_invites", "create_invites", "revoke_invites", "manage_invite_limits"] },
   { label: "Roles", permissions: ["manage_roles", "create_roles", "edit_roles", "delete_roles", "assign_roles", "reorder_roles", "manage_role_permissions", "manage_role_appearance"] },
-  { label: "Moderation", permissions: ["manage_server", "manage_members", "kick_members", "view_moderation_records", "ban_members", "unban_members", "timeout_members", "remove_timeouts"] },
+  { label: "Moderation", permissions: ["manage_server", "manage_members", "kick_members", "view_moderation_records", "ban_members", "unban_members", "timeout_members", "remove_timeouts", "manage_custom_emoji", "view_audit_logs"] },
 ];
 
 function normalizeRoleIds(value: unknown) {
@@ -170,6 +195,12 @@ function readableError(error: unknown) {
     if (error.code === "server_banned") return "This account is banned from the server.";
     if (error.code === "cannot_archive_last_channel") return "A space must keep one active encrypted room.";
     if (error.code === "cannot_archive_metadata_channel") return "The original channel anchors encrypted server metadata and cannot be archived.";
+    if (error.code === "unsupported_server_branding_type") return "That image type is not supported.";
+    if (error.code === "invalid_server_branding") return "The image bytes were not valid.";
+    if (error.code === "server_branding_too_large") return "That image is larger than 5 MiB.";
+    if (error.code === "custom_emoji_too_large") return "That emoji is larger than 10 MiB.";
+    if (error.code === "custom_emoji_size_mismatch") return "The encrypted emoji upload was incomplete.";
+    if (error.code === "insufficient_server_permissions" && window.location.hash === "#audit") return "You do not have permission to view the audit log.";
     return error.code;
   }
   return error instanceof Error ? error.message : "request_failed";
@@ -454,6 +485,158 @@ function renderOnboardingOptions() {
   onboardingChannel.disabled = !hasPermission("manage_server");
 }
 
+function renderLandingOptions() {
+  landingChannel.replaceChildren();
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "First visible room";
+  none.selected = !currentServer?.landingChannelId;
+  landingChannel.append(none);
+  for (const channel of [...channels].sort((left, right) => left.position - right.position)) {
+    const option = document.createElement("option");
+    option.value = channel.id;
+    option.textContent = channelName(channel);
+    option.selected = channel.id === currentServer?.landingChannelId;
+    landingChannel.append(option);
+  }
+  landingChannel.disabled = !hasPermission("manage_server");
+}
+
+function renderBranding() {
+  serverIconPreview.replaceChildren();
+  if (currentServer?.iconUrl) {
+    const image = document.createElement("img");
+    image.src = currentServer.iconUrl;
+    image.alt = "";
+    serverIconPreview.append(image);
+  } else {
+    serverIconPreview.textContent = serverName.value.trim().slice(0, 1).toUpperCase() || "N";
+  }
+  serverBannerPreview.replaceChildren();
+  if (currentServer?.bannerUrl) {
+    const image = document.createElement("img");
+    image.src = currentServer.bannerUrl;
+    image.alt = "";
+    serverBannerPreview.append(image);
+    delete serverBannerPreview.dataset.empty;
+  } else {
+    serverBannerPreview.dataset.empty = "true";
+  }
+  removeServerIcon.disabled = !currentServer?.iconUrl || !hasPermission("manage_server");
+  removeServerBanner.disabled = !currentServer?.bannerUrl || !hasPermission("manage_server");
+  serverIconInput.disabled = !hasPermission("manage_server");
+  serverBannerInput.disabled = !hasPermission("manage_server");
+}
+
+function renderWelcome(metadata?: Record<string, unknown>) {
+  const welcome = metadata?.welcome && typeof metadata.welcome === "object" && !Array.isArray(metadata.welcome)
+    ? metadata.welcome as Record<string, unknown>
+    : {};
+  welcomeEnabled.checked = welcome.enabled === true;
+  welcomeHeading.value = typeof welcome.heading === "string" ? welcome.heading : "";
+  welcomeDescription.value = typeof welcome.description === "string" ? welcome.description : "";
+  welcomeRules.value = typeof welcome.rules === "string" ? welcome.rules : "";
+  welcomeAcknowledgement.checked = welcome.acknowledgement === true;
+}
+
+function renderAuditLogs() {
+  auditList.replaceChildren();
+  if (auditLogs.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted small";
+    empty.textContent = hasPermission("view_audit_logs") ? "No space activity has been recorded yet." : "You do not have permission to view this log.";
+    auditList.append(empty);
+    return;
+  }
+  for (const log of auditLogs) {
+    const row = document.createElement("div");
+    row.className = "settings-list-row audit-log-row";
+    const icon = document.createElement("span");
+    icon.className = "audit-log-icon";
+    icon.textContent = "•";
+    const copy = document.createElement("div");
+    copy.className = "settings-row-copy";
+    const action = document.createElement("strong");
+    action.textContent = log.action.replaceAll(".", " · ");
+    const details = document.createElement("span");
+    const target = log.targetId ? ` · ${log.targetId.slice(0, 8)}` : "";
+    details.textContent = `${log.actor.displayName} (@${log.actor.username})${target} · ${new Date(log.createdAt).toLocaleString()}`;
+    copy.append(action, details);
+    row.append(icon, copy);
+    auditList.append(row);
+  }
+}
+
+function renderCustomEmojis() {
+  emojiList.replaceChildren();
+  if (customEmojis.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted small";
+    empty.textContent = "No custom emoji yet.";
+    emojiList.append(empty);
+    return;
+  }
+  for (const emoji of customEmojis) {
+    const row = document.createElement("div");
+    row.className = "settings-list-row custom-emoji-row";
+    const preview = document.createElement("span");
+    preview.className = "custom-emoji-preview";
+    preview.textContent = "✦";
+    const copy = document.createElement("div");
+    copy.className = "settings-row-copy";
+    const name = document.createElement("strong");
+    name.textContent = `:${customEmojiNames.get(emoji.id) ?? "encrypted_emoji"}:`;
+    const details = document.createElement("span");
+    details.textContent = emoji.status === "uploaded"
+      ? `${Math.round((emoji.sizeBytes ?? emoji.expectedSizeBytes) / 1024)} KiB · encrypted`
+      : "Upload pending";
+    copy.append(name, details);
+    row.append(preview, copy);
+    if (hasPermission("manage_custom_emoji")) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger-button";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", async () => {
+        remove.disabled = true;
+        try {
+          await api.removeServerCustomEmoji(currentServer!.id, emoji.id);
+          customEmojiNames.delete(emoji.id);
+          await loadData();
+          setStatus("Custom emoji removed.");
+        } catch (error) {
+          setStatus(readableError(error), true);
+          remove.disabled = false;
+        }
+      });
+      row.append(remove);
+    }
+    emojiList.append(row);
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+async function encryptCustomEmoji(file: File) {
+  const plaintext = new Uint8Array(await file.arrayBuffer());
+  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext));
+  const rawKey = new Uint8Array(await crypto.subtle.exportKey("raw", key));
+  const bytes = new Uint8Array(iv.byteLength + encrypted.byteLength);
+  bytes.set(iv, 0);
+  bytes.set(encrypted, iv.byteLength);
+  return {
+    bytes,
+    key: bytesToBase64(rawKey),
+    iv: bytesToBase64(iv),
+  };
+}
+
 function renderCategories() {
   categoryList.replaceChildren();
   if (categories.length === 0) {
@@ -615,6 +798,7 @@ function renderRoles() {
     roleList.append(empty);
     renderRolePreview();
     renderOnboardingOptions();
+    renderLandingOptions();
     return;
   }
   const editableRoles = roles.filter((role) => role.systemKey !== "owner");
@@ -1284,6 +1468,14 @@ function updateSettingsControls() {
   channelForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_channels", "create_channels"));
   roleForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_roles", "create_roles") || !metadataReady);
   createInvite.disabled = !hasAnyPermission("manage_invites", "create_invites");
+  const canManageBranding = hasPermission("manage_server");
+  serverIconInput.disabled = !canManageBranding;
+  serverBannerInput.disabled = !canManageBranding;
+  removeServerIcon.disabled = !canManageBranding || !currentServer.iconUrl;
+  removeServerBanner.disabled = !canManageBranding || !currentServer.bannerUrl;
+  for (const control of [welcomeEnabled, welcomeHeading, welcomeDescription, welcomeRules, welcomeAcknowledgement]) control.disabled = !canManageBranding || !metadataReady;
+  emojiForm.querySelector("button")!.toggleAttribute("disabled", !hasPermission("manage_custom_emoji") || !metadataReady);
+  refreshAuditLog.disabled = !hasPermission("view_audit_logs");
 }
 
 async function hydrateChannelMetadata(version: number, channelSnapshot: ServerChannel[]) {
@@ -1328,6 +1520,7 @@ async function hydrateMetadata(version: number, channelSnapshot: ServerChannel[]
     renderCategories();
     renderChannels();
     renderOnboardingOptions();
+    renderLandingOptions();
     renderRoles();
     return;
   }
@@ -1341,6 +1534,7 @@ async function hydrateMetadata(version: number, channelSnapshot: ServerChannel[]
     if (version !== metadataHydrationVersion || metadataConversationId !== conversationId) return;
     serverName.value = typeof metadata.name === "string" ? metadata.name : "";
     serverDescription.value = typeof metadata.description === "string" ? metadata.description : "";
+    renderWelcome(metadata);
     for (let index = 0; index < roles.length; index += 1) {
       const name = roleMetadata[index].name;
       if (typeof name === "string" && name.trim()) roleNames.set(roles[index].id, name.trim().slice(0, 80));
@@ -1354,10 +1548,13 @@ async function hydrateMetadata(version: number, channelSnapshot: ServerChannel[]
     renderCategories();
     renderChannels();
     renderOnboardingOptions();
+    renderLandingOptions();
     renderRoles();
     renderMembers();
+    renderBranding();
     if (status.textContent === "Loading encrypted settings…") setStatus("");
     void hydrateChannelMetadata(version, channelSnapshot);
+    void hydrateCustomEmojiMetadata(version);
   } catch (error) {
     if (version !== metadataHydrationVersion) return;
     updateSettingsControls();
@@ -1366,12 +1563,24 @@ async function hydrateMetadata(version: number, channelSnapshot: ServerChannel[]
   }
 }
 
+async function hydrateCustomEmojiMetadata(version: number) {
+  if (!metadataConversationId || !cryptoClient) return;
+  const values = await Promise.all(customEmojis.map((emoji) => decryptMetadata(metadataConversationId!, emoji.encryptedMetadata)));
+  if (version !== metadataHydrationVersion) return;
+  customEmojiNames.clear();
+  for (let index = 0; index < customEmojis.length; index += 1) {
+    const name = values[index].name;
+    if (typeof name === "string" && /^[A-Za-z0-9_+-]{1,32}$/.test(name)) customEmojiNames.set(customEmojis[index].id, name);
+  }
+  renderCustomEmojis();
+}
+
 async function loadData() {
   if (!serverId) throw new Error("server_not_selected");
   const version = ++metadataHydrationVersion;
   metadataReady = false;
   metadataMembers = [];
-  const [serverResult, channelResult, categoryResult, memberResult, roleResult, moderationResult, inviteResult] = await Promise.all([
+  const [serverResult, channelResult, categoryResult, memberResult, roleResult, moderationResult, inviteResult, emojiResult, auditResult] = await Promise.all([
     api.server(serverId),
     api.serverChannels(serverId),
     api.serverCategories(serverId),
@@ -1385,6 +1594,11 @@ async function loadData() {
       if (error instanceof ApiError && error.status === 403) return { invites: [] };
       throw error;
     }),
+    api.serverCustomEmojis(serverId),
+    api.serverAuditLogs(serverId).catch((error) => {
+      if (error instanceof ApiError && error.status === 403) return { logs: [] };
+      throw error;
+    }),
   ]);
   currentServer = serverResult.server;
   channels = channelResult.channels;
@@ -1393,12 +1607,18 @@ async function loadData() {
   roles = roleResult.roles;
   roleAssignments = new Map(roleResult.assignments.map((assignment) => [assignment.userId, normalizeRoleIds(assignment.roleIds)]));
   moderation = moderationResult;
+  customEmojis = emojiResult.emojis;
+  auditLogs = auditResult.logs;
   roleNames.clear();
   categoryNames.clear();
   channelNames.clear();
+  customEmojiNames.clear();
   title.textContent = "Space settings";
   roleLabel.textContent = `${currentServer.role} · ${channels.length} encrypted room${channels.length === 1 ? "" : "s"}`;
-  backToServer.href = destination(channels[0]?.id);
+  backToServer.href = destination(currentServer.landingChannelId ?? channels[0]?.id);
+  renderBranding();
+  renderCustomEmojis();
+  renderAuditLogs();
 
   const metadataChannel = roleResult.metadataConversationId
     ? channels.find((channel) => channel.conversationId === roleResult.metadataConversationId)
@@ -1408,6 +1628,7 @@ async function loadData() {
   renderCategories();
   renderChannels();
   renderOnboardingOptions();
+  renderLandingOptions();
   renderRoles();
   renderMembers();
   renderModeration();
@@ -1421,7 +1642,11 @@ async function loadData() {
     renderCategories();
     renderChannels();
     renderOnboardingOptions();
+    renderLandingOptions();
     renderRoles();
+    renderBranding();
+    renderCustomEmojis();
+    renderAuditLogs();
   }
 }
 
@@ -1433,18 +1658,133 @@ serverForm.addEventListener("submit", async (event) => {
     const encryptedMetadata = await encryptMetadata(metadataConversationId, {
       name: serverName.value.trim(),
       description: serverDescription.value.trim().slice(0, 240),
+      welcome: {
+        enabled: welcomeEnabled.checked,
+        heading: welcomeHeading.value.trim().slice(0, 120),
+        description: welcomeDescription.value.trim().slice(0, 500),
+        rules: welcomeRules.value.trim().slice(0, 2_000),
+        acknowledgement: welcomeAcknowledgement.checked,
+      },
       kind: "server",
     });
     const updated = await api.updateServerSettings(currentServer.id, {
       encryptedMetadata,
       onboardingChannelId: onboardingChannel.value || null,
+      landingChannelId: landingChannel.value || null,
     });
     currentServer = updated.server;
+    backToServer.href = destination(currentServer.landingChannelId ?? channels[0]?.id);
+    renderBranding();
     setStatus("Space settings saved.");
   } catch (error) {
     setStatus(readableError(error), true);
   } finally {
     saveServer.disabled = !currentServer.permissions.manage_server || !metadataReady;
+  }
+});
+
+async function uploadBranding(asset: "icon" | "banner", input: HTMLInputElement) {
+  const file = input.files?.[0];
+  if (!currentServer || !file) return;
+  input.disabled = true;
+  try {
+    const result = await api.uploadServerBranding(currentServer.id, asset, file);
+    currentServer = {
+      ...currentServer,
+      ...(asset === "icon" ? { iconUrl: result.url } : { bannerUrl: result.url }),
+    };
+    renderBranding();
+    setStatus(`${asset === "icon" ? "Icon" : "Banner"} updated.`);
+  } catch (error) {
+    setStatus(readableError(error), true);
+  } finally {
+    input.value = "";
+    input.disabled = !hasPermission("manage_server");
+  }
+}
+
+async function removeBranding(asset: "icon" | "banner") {
+  if (!currentServer) return;
+  const button = asset === "icon" ? removeServerIcon : removeServerBanner;
+  button.disabled = true;
+  try {
+    await api.removeServerBranding(currentServer.id, asset);
+    currentServer = {
+      ...currentServer,
+      ...(asset === "icon" ? { iconUrl: null } : { bannerUrl: null }),
+    };
+    renderBranding();
+    setStatus(`${asset === "icon" ? "Icon" : "Banner"} removed.`);
+  } catch (error) {
+    setStatus(readableError(error), true);
+    button.disabled = false;
+  }
+}
+
+serverIconInput.addEventListener("change", () => void uploadBranding("icon", serverIconInput));
+serverBannerInput.addEventListener("change", () => void uploadBranding("banner", serverBannerInput));
+removeServerIcon.addEventListener("click", () => void removeBranding("icon"));
+removeServerBanner.addEventListener("click", () => void removeBranding("banner"));
+
+emojiForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const file = newEmojiFile.files?.[0];
+  const name = newEmojiName.value.trim();
+  const button = emojiForm.querySelector<HTMLButtonElement>("button");
+  if (!currentServer || !metadataConversationId || !metadataReady || !file || !/^[A-Za-z0-9_+-]{1,32}$/.test(name)) return;
+  if (!/^image\/(?:avif|gif|jpeg|png|webp)$/i.test(file.type)) {
+    setStatus("Choose a PNG, JPG, GIF, WebP, or AVIF image.", true);
+    return;
+  }
+  if ([...customEmojiNames.values()].some((existing) => existing.toLowerCase() === name.toLowerCase())) {
+    setStatus("That custom emoji name is already in use.", true);
+    return;
+  }
+  if (file.size > 10 * 1024 * 1024 - 64) {
+    setStatus("That emoji is larger than 10 MiB.", true);
+    return;
+  }
+  if (button) button.disabled = true;
+  let pendingEmojiId: string | undefined;
+  try {
+    const encrypted = await encryptCustomEmoji(file);
+    const metadata = await encryptMetadata(metadataConversationId, {
+      kind: "custom-emoji",
+      name,
+      mimeType: file.type || "application/octet-stream",
+      key: encrypted.key,
+      iv: encrypted.iv,
+    });
+    const created = await api.createServerCustomEmoji(currentServer.id, {
+      encryptedMetadata: metadata,
+      expectedSizeBytes: encrypted.bytes.byteLength,
+    });
+    pendingEmojiId = created.emoji.id;
+    await api.uploadServerCustomEmoji(currentServer.id, created.emoji.id, encrypted.bytes);
+    pendingEmojiId = undefined;
+    newEmojiName.value = "";
+    newEmojiFile.value = "";
+    await loadData();
+    setStatus(`:${name}: uploaded as encrypted emoji.`);
+  } catch (error) {
+    if (pendingEmojiId) await api.removeServerCustomEmoji(currentServer.id, pendingEmojiId).catch(() => undefined);
+    setStatus(readableError(error), true);
+  } finally {
+    if (button) button.disabled = !hasPermission("manage_custom_emoji") || !metadataReady;
+  }
+});
+
+refreshAuditLog.addEventListener("click", async () => {
+  if (!currentServer || !hasPermission("view_audit_logs")) return;
+  refreshAuditLog.disabled = true;
+  try {
+    auditLogs = (await api.serverAuditLogs(currentServer.id)).logs;
+    renderAuditLogs();
+    setStatus("Audit log refreshed.");
+  } catch (error) {
+    setStatus(readableError(error), true);
+  } finally {
+    refreshAuditLog.disabled = !hasPermission("view_audit_logs");
   }
 });
 

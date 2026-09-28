@@ -40,6 +40,18 @@ try {
       return { status: response.status, body: await response.json() };
     }, { path, data: { method, body: data } });
   }
+  async function binaryRequest(page: Page, path: string, bytes: Uint8Array, contentType: string, method = "PUT") {
+    return page.evaluate(async ({ path, bytes, contentType, method }) => {
+      const init: RequestInit = {
+        method,
+        credentials: "include",
+        headers: { "content-type": contentType },
+      };
+      if (method !== "GET" && method !== "HEAD") init.body = new Uint8Array(bytes);
+      const response = await fetch(path, init);
+      return { status: response.status, body: [...new Uint8Array(await response.arrayBuffer())] };
+    }, { path, bytes: [...bytes], contentType, method });
+  }
   const users: Array<{ id: string; username: string }> = [];
   for (const [page, name] of [[a, "alice"], [b, "bob"]] as const) {
     await page.goto(origin);
@@ -128,6 +140,56 @@ try {
 
   const createdServer = await request(a, "/v1/servers", {});
   assert.equal(createdServer.status, 201, JSON.stringify(createdServer.body));
+  assert.equal(createdServer.body.server.landingChannelId, createdServer.body.channel.id);
+  const bannerUpload = await binaryRequest(a, "/v1/me/banner", onePixelPng, "image/png");
+  assert.equal(bannerUpload.status, 200);
+  const bannerProfile = await request(a, "/v1/me");
+  assert.match(bannerProfile.body.user.bannerUrl, /^\/v1\/users\/[0-9a-f-]+\/banner\?/);
+  const bannerFetch = await binaryRequest(a, bannerProfile.body.user.bannerUrl, new Uint8Array(), "application/octet-stream", "GET");
+  assert.equal(bannerFetch.status, 200);
+  const independentRouting = await request(a, `/v1/servers/${createdServer.body.server.id}`, {
+    onboardingChannelId: null,
+    landingChannelId: createdServer.body.channel.id,
+  }, "PATCH");
+  assert.equal(independentRouting.status, 200, JSON.stringify(independentRouting.body));
+  assert.equal(independentRouting.body.server.onboardingChannelId, null);
+  assert.equal(independentRouting.body.server.landingChannelId, createdServer.body.channel.id);
+  const metadataOnlyUpdate = await request(a, `/v1/servers/${createdServer.body.server.id}`, { encryptedMetadata: "AQI" }, "PATCH");
+  assert.equal(metadataOnlyUpdate.status, 200, JSON.stringify(metadataOnlyUpdate.body));
+  assert.equal(metadataOnlyUpdate.body.server.onboardingChannelId, null);
+  assert.equal(metadataOnlyUpdate.body.server.landingChannelId, createdServer.body.channel.id);
+  const brandingUpload = await binaryRequest(a, `/v1/servers/${createdServer.body.server.id}/branding/icon`, onePixelPng, "image/png");
+  assert.equal(brandingUpload.status, 200);
+  const brandedServer = await request(a, `/v1/servers/${createdServer.body.server.id}`);
+  assert.match(brandedServer.body.server.iconUrl, /^\/v1\/servers\/[0-9a-f-]+\/branding\/icon\?/);
+  const emoji = await request(a, `/v1/servers/${createdServer.body.server.id}/emojis`, {
+    encryptedMetadata: "AQI",
+    expectedSizeBytes: 3,
+  });
+  assert.equal(emoji.status, 201, JSON.stringify(emoji.body));
+  const emojiBytes = Uint8Array.from([7, 8, 9]);
+  const emojiUpload = await binaryRequest(a, `/v1/servers/${createdServer.body.server.id}/emojis/${emoji.body.emoji.id}/file`, emojiBytes, "application/octet-stream");
+  assert.equal(emojiUpload.status, 200);
+  const emojiFile = await binaryRequest(a, `/v1/servers/${createdServer.body.server.id}/emojis/${emoji.body.emoji.id}/file`, new Uint8Array(), "application/octet-stream", "GET");
+  assert.deepEqual(emojiFile.body, [...emojiBytes]);
+  const pendingEmoji = await request(a, `/v1/servers/${createdServer.body.server.id}/emojis`, {
+    encryptedMetadata: "AQI",
+    expectedSizeBytes: 4,
+  });
+  assert.equal(pendingEmoji.status, 201, JSON.stringify(pendingEmoji.body));
+  const rejectedEmojiUpload = await binaryRequest(a, `/v1/servers/${createdServer.body.server.id}/emojis/${pendingEmoji.body.emoji.id}/file`, emojiBytes, "application/octet-stream");
+  assert.equal(rejectedEmojiUpload.status, 400);
+  const pendingEmojiFile = await binaryRequest(a, `/v1/servers/${createdServer.body.server.id}/emojis/${pendingEmoji.body.emoji.id}/file`, new Uint8Array(), "application/octet-stream", "GET");
+  assert.equal(pendingEmojiFile.status, 404);
+  const deletedPendingEmoji = await request(a, `/v1/servers/${createdServer.body.server.id}/emojis/${pendingEmoji.body.emoji.id}`, undefined, "DELETE");
+  assert.equal(deletedPendingEmoji.status, 200, JSON.stringify(deletedPendingEmoji.body));
+  const unauthorizedEmoji = await request(b, `/v1/servers/${createdServer.body.server.id}/emojis`, undefined, "GET");
+  assert.equal(unauthorizedEmoji.status, 403, JSON.stringify(unauthorizedEmoji.body));
+  const unauthorizedAudit = await request(b, `/v1/servers/${createdServer.body.server.id}/audit-logs`);
+  assert.equal(unauthorizedAudit.status, 403, JSON.stringify(unauthorizedAudit.body));
+  const audit = await request(a, `/v1/servers/${createdServer.body.server.id}/audit-logs`);
+  assert.equal(audit.status, 200, JSON.stringify(audit.body));
+  assert.ok(audit.body.logs.some((log: { action: string }) => log.action === "custom_emoji.uploaded"));
   const invite = await request(a, `/v1/servers/${createdServer.body.server.id}/invites`, { maxUses: 1 });
   assert.equal(invite.status, 201, JSON.stringify(invite.body));
   const joined = await request(b, `/v1/invites/${encodeURIComponent(invite.body.invite.token)}/accept`, {});
@@ -148,6 +210,24 @@ try {
 
   await unlock(a, "/app");
   await unlock(b, "/app");
+  await a.goto(`${origin}/settings#recovery`);
+  await a.locator("#recovery").waitFor({ state: "visible", timeout: 20_000 });
+  await a.locator("#recovery-local-passphrase").fill("Independent-local-vault-passphrase!");
+  await a.locator("#recovery-export-passphrase").fill("Recovery-passphrase-for-e2e-test!");
+  await a.locator("#recovery-export-confirm").fill("Recovery-passphrase-for-e2e-test!");
+  const recoveryDownloadPromise = a.waitForEvent("download");
+  await a.locator("#export-recovery-button").click();
+  const recoveryDownload = await recoveryDownloadPromise;
+  const recoveryPath = await recoveryDownload.path();
+  assert.ok(recoveryPath, "recovery backup should be downloadable");
+  await a.locator("#settings-status").filter({ hasText: "Encrypted recovery backup downloaded." }).waitFor({ timeout: 20_000 });
+  await a.locator("#recovery-file").setInputFiles(recoveryPath);
+  await a.locator("#recovery-import-passphrase").fill("Recovery-passphrase-for-e2e-test!");
+  await a.locator("#import-recovery-button").click();
+  await a.locator("#settings-status").filter({ hasText: "Imported " }).waitFor({ timeout: 20_000 });
+  await recoveryDownload.delete();
+  await a.goto(`${origin}/app`);
+  await a.locator("#status-line").filter({ hasText: "Connected" }).waitFor({ timeout: 20_000 });
   await recoverAfterDeviceIdLoss(a, users[0].id);
   await b.locator("#home-rail-button").click();
 

@@ -4,6 +4,7 @@ export type User = {
   displayName: string;
   createdAt: string;
   avatarUrl: string | null;
+  bannerUrl: string | null;
 };
 
 export type Conversation = {
@@ -54,7 +55,9 @@ export type ServerPermission =
   | "remove_timeouts"
   | "pin_messages"
   | "delete_others_messages"
-  | "delete_messages";
+  | "delete_messages"
+  | "manage_custom_emoji"
+  | "view_audit_logs";
 
 export type ServerPermissionMap = Record<ServerPermission, boolean>;
 
@@ -66,6 +69,9 @@ export type Server = {
   permissions: ServerPermissionMap;
   channelCount: number;
   onboardingChannelId: string | null;
+  landingChannelId: string | null;
+  iconUrl: string | null;
+  bannerUrl: string | null;
   createdAt: string;
 };
 
@@ -96,6 +102,7 @@ export type ServerMember = {
   username: string;
   displayName: string;
   avatarUrl: string | null;
+  bannerUrl?: string | null;
   role: ServerRole;
   roleIds: string[];
   joinedAt: string;
@@ -107,6 +114,7 @@ export type ConversationMember = {
   username: string;
   displayName: string;
   avatarUrl: string | null;
+  bannerUrl?: string | null;
   roleIds?: string[];
 };
 
@@ -160,6 +168,31 @@ export type ServerModeration = {
     expiresAt: string;
     createdAt: string;
   }>;
+};
+
+export type ServerCustomEmoji = {
+  id: string;
+  serverId: string;
+  encryptedMetadata: string;
+  fileUrl: string | null;
+  expectedSizeBytes: number;
+  sizeBytes: number | null;
+  status: "pending" | "uploaded";
+  createdAt: string;
+  uploadedAt: string | null;
+};
+
+export type ServerAuditLog = {
+  id: string;
+  action: string;
+  targetId: string | null;
+  targetUserId: string | null;
+  actor: {
+    id: string;
+    username: string;
+    displayName: string;
+  };
+  createdAt: string;
 };
 
 export type MessageEnvelope = {
@@ -414,6 +447,17 @@ export class ApiClient {
     return this.delete<{ deleted: boolean }>("/v1/me/avatar");
   }
 
+  async uploadProfileBanner(file: File, options: UploadOptions = {}) {
+    return this.putBytes<{ user: User }>("/v1/me/banner", new Uint8Array(await file.arrayBuffer()), {
+      ...options,
+      contentType: file.type,
+    });
+  }
+
+  removeProfileBanner() {
+    return this.delete<{ deleted: boolean }>("/v1/me/banner");
+  }
+
   updatePassword(currentPassword: string, newPassword: string) {
     return this.post<{ updated: boolean }>("/v1/auth/password", { currentPassword, newPassword });
   }
@@ -546,8 +590,43 @@ export class ApiClient {
     return this.patch<{ server: Server }>(`/v1/servers/${serverId}`, { encryptedMetadata });
   }
 
-  updateServerSettings(serverId: string, body: { encryptedMetadata?: string; onboardingChannelId?: string | null }) {
+  updateServerSettings(serverId: string, body: {
+    encryptedMetadata?: string;
+    onboardingChannelId?: string | null;
+    landingChannelId?: string | null;
+  }) {
     return this.patch<{ server: Server }>(`/v1/servers/${serverId}`, body);
+  }
+
+  async uploadServerBranding(serverId: string, asset: "icon" | "banner", file: File, options: UploadOptions = {}) {
+    return this.putBytes<{ url: string }>(`/v1/servers/${serverId}/branding/${asset}`, new Uint8Array(await file.arrayBuffer()), {
+      ...options,
+      contentType: file.type,
+    });
+  }
+
+  removeServerBranding(serverId: string, asset: "icon" | "banner") {
+    return this.delete<{ deleted: boolean }>(`/v1/servers/${serverId}/branding/${asset}`);
+  }
+
+  serverCustomEmojis(serverId: string) {
+    return this.get<{ emojis: ServerCustomEmoji[] }>(`/v1/servers/${serverId}/emojis`);
+  }
+
+  createServerCustomEmoji(serverId: string, body: { encryptedMetadata: string; expectedSizeBytes: number }) {
+    return this.post<{ emoji: ServerCustomEmoji & { uploadPath: string } }>(`/v1/servers/${serverId}/emojis`, body);
+  }
+
+  uploadServerCustomEmoji(serverId: string, emojiId: string, bytes: Uint8Array, options: UploadOptions = {}) {
+    return this.putBytes<{ emoji: ServerCustomEmoji }>(`/v1/servers/${serverId}/emojis/${emojiId}/file`, bytes, options);
+  }
+
+  removeServerCustomEmoji(serverId: string, emojiId: string) {
+    return this.delete<{ deleted: boolean }>(`/v1/servers/${serverId}/emojis/${emojiId}`);
+  }
+
+  serverAuditLogs(serverId: string, limit = 100) {
+    return this.get<{ logs: ServerAuditLog[] }>(`/v1/servers/${serverId}/audit-logs?limit=${Math.min(100, Math.max(1, limit))}`);
   }
 
   deleteServer(serverId: string) {

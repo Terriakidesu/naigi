@@ -1,6 +1,8 @@
 import { ApiClient, ApiError } from "./api";
 import { applyAppPreferences, defaultAppPreferences, loadAppPreferences, saveAppPreferences, type AppPreferences } from "./app-preferences";
+import { CryptoClient, LocalCryptoStoreError } from "./crypto";
 import { iconElement, renderIcons } from "./icons";
+import { clearLocalData } from "./local-data";
 import { setupProfileSettings } from "./profile-settings";
 import { clearSessionPassphrase, forgetRememberedPassphrase, lockLocalSession } from "./unlock-vault";
 
@@ -14,6 +16,7 @@ type Device = {
 const api = new ApiClient();
 const name = document.getElementById("settings-name") as HTMLElement;
 const avatar = document.getElementById("settings-avatar") as HTMLElement;
+const banner = document.getElementById("settings-banner") as HTMLElement;
 const username = document.getElementById("settings-username") as HTMLElement;
 const deviceList = document.getElementById("device-list") as HTMLElement;
 const status = document.getElementById("settings-status") as HTMLElement;
@@ -22,6 +25,8 @@ const profileForm = document.getElementById("profile-form") as HTMLFormElement;
 const displayNameInput = document.getElementById("settings-display-name") as HTMLInputElement;
 const profileImageInput = document.getElementById("profile-image-input") as HTMLInputElement;
 const removeProfileImage = document.getElementById("remove-profile-image") as HTMLButtonElement;
+const profileBannerInput = document.getElementById("profile-banner-input") as HTMLInputElement;
+const removeProfileBanner = document.getElementById("remove-profile-banner") as HTMLButtonElement;
 const passwordForm = document.getElementById("password-form") as HTMLFormElement;
 const currentPassword = document.getElementById("current-password") as HTMLInputElement;
 const newPassword = document.getElementById("new-password") as HTMLInputElement;
@@ -29,6 +34,14 @@ const confirmPassword = document.getElementById("confirm-password") as HTMLInput
 const lockNow = document.getElementById("lock-now-button") as HTMLButtonElement;
 const forgetDevice = document.getElementById("forget-device-button") as HTMLButtonElement;
 const localUnlockStatus = document.getElementById("local-unlock-status") as HTMLElement;
+const recoveryLocalPassphrase = document.getElementById("recovery-local-passphrase") as HTMLInputElement;
+const recoveryExportPassphrase = document.getElementById("recovery-export-passphrase") as HTMLInputElement;
+const recoveryExportConfirm = document.getElementById("recovery-export-confirm") as HTMLInputElement;
+const exportRecoveryButton = document.getElementById("export-recovery-button") as HTMLButtonElement;
+const recoveryFile = document.getElementById("recovery-file") as HTMLInputElement;
+const recoveryImportPassphrase = document.getElementById("recovery-import-passphrase") as HTMLInputElement;
+const importRecoveryButton = document.getElementById("import-recovery-button") as HTMLButtonElement;
+const clearLocalDataButton = document.getElementById("clear-local-data-button") as HTMLButtonElement;
 const appPreferencesForm = document.getElementById("app-preferences-form") as HTMLFormElement;
 const appTheme = document.getElementById("app-theme") as HTMLSelectElement;
 const appAccent = document.getElementById("app-accent") as HTMLInputElement;
@@ -41,6 +54,7 @@ const appCompactMessages = document.getElementById("app-compact-messages") as HT
 const appReducedMotion = document.getElementById("app-reduced-motion") as HTMLInputElement;
 let currentUserId: string | undefined;
 let appPreferences: AppPreferences = { ...defaultAppPreferences };
+let recoveryCrypto: CryptoClient | undefined;
 
 function setStatus(message: string, error = false) {
   status.textContent = message;
@@ -132,11 +146,14 @@ function renderAppPreferences(preferences: AppPreferences) {
 const profileSettings = setupProfileSettings(api, {
   name,
   avatar,
+  banner,
   username,
   profileForm,
   displayNameInput,
   profileImageInput,
   removeProfileImage,
+  profileBannerInput,
+  removeProfileBanner,
 }, setStatus);
 
 async function loadDevices() {
@@ -194,6 +211,93 @@ passwordForm.addEventListener("submit", async (event) => {
   }
 });
 
+async function ensureRecoveryCrypto() {
+  if (!currentUserId) throw new Error("not_authenticated");
+  if (recoveryCrypto) return recoveryCrypto;
+  const passphrase = recoveryLocalPassphrase.value;
+  if (!passphrase) throw new Error("Enter this browser's local encryption passphrase first.");
+  const client = new CryptoClient(api, currentUserId, passphrase);
+  try {
+    await client.initialize();
+  } catch (error) {
+    await client.close().catch(() => undefined);
+    if (error instanceof LocalCryptoStoreError) throw new Error("The browser passphrase did not unlock this device.");
+    throw error;
+  }
+  recoveryLocalPassphrase.value = "";
+  recoveryCrypto = client;
+  return client;
+}
+
+exportRecoveryButton.addEventListener("click", async () => {
+  if (recoveryExportPassphrase.value.length < 12) {
+    setStatus("Use a recovery passphrase of at least 12 characters.", true);
+    return;
+  }
+  if (recoveryExportPassphrase.value !== recoveryExportConfirm.value) {
+    setStatus("The recovery passphrases do not match.", true);
+    return;
+  }
+  exportRecoveryButton.disabled = true;
+  try {
+    const encrypted = await (await ensureRecoveryCrypto()).exportRecovery(recoveryExportPassphrase.value);
+    const payload = JSON.stringify({ format: "naigi-room-key-recovery", version: 1, encrypted });
+    const url = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `naigi-recovery-${new Date().toISOString().slice(0, 10)}.naigi-recovery`;
+    link.click();
+    URL.revokeObjectURL(url);
+    recoveryExportPassphrase.value = "";
+    recoveryExportConfirm.value = "";
+    setStatus("Encrypted recovery backup downloaded. Store it separately from its passphrase.");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Unable to export room keys.", true);
+  } finally {
+    exportRecoveryButton.disabled = false;
+  }
+});
+
+importRecoveryButton.addEventListener("click", async () => {
+  const file = recoveryFile.files?.[0];
+  if (!file || !recoveryImportPassphrase.value) {
+    setStatus("Choose a recovery file and enter its passphrase.", true);
+    return;
+  }
+  importRecoveryButton.disabled = true;
+  try {
+    const raw = await file.text();
+    if (raw.length > 50 * 1024 * 1024) throw new Error("Recovery backup is too large.");
+    const parsed = JSON.parse(raw) as { format?: unknown; version?: unknown; encrypted?: unknown };
+    if (parsed.format !== "naigi-room-key-recovery" || parsed.version !== 1 || typeof parsed.encrypted !== "string") {
+      throw new Error("That is not a Naigi recovery backup.");
+    }
+    const result = await (await ensureRecoveryCrypto()).importRecovery(parsed.encrypted, recoveryImportPassphrase.value);
+    recoveryImportPassphrase.value = "";
+    setStatus(`Imported ${result.imported} of ${result.total} room keys.`, false);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Unable to import room keys.", true);
+  } finally {
+    importRecoveryButton.disabled = false;
+  }
+});
+
+clearLocalDataButton.addEventListener("click", async () => {
+  if (!currentUserId) return;
+  if (!window.confirm("Clear encrypted caches, local keys, remembered unlock, and device-only settings from this browser?")) return;
+  clearLocalDataButton.disabled = true;
+  try {
+    if (recoveryCrypto) await recoveryCrypto.close().catch(() => undefined);
+    recoveryCrypto = undefined;
+    const result = await clearLocalData(currentUserId);
+    setStatus(result.cleared ? "Local data cleared from this browser." : "Local data was mostly cleared; a browser tab is still using one local database.", !result.cleared);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Unable to clear local data.", true);
+  } finally {
+    clearLocalDataButton.disabled = false;
+  }
+});
+
 lockNow.addEventListener("click", () => {
   lockLocalSession();
   window.location.assign(`/unlock?manual=1&return=${encodeURIComponent("/settings")}`);
@@ -214,6 +318,8 @@ forgetDevice.addEventListener("click", async () => {
 
 logout.addEventListener("click", async () => {
   await api.logout().catch(() => undefined);
+  if (recoveryCrypto) await recoveryCrypto.close().catch(() => undefined);
+  recoveryCrypto = undefined;
   clearSessionPassphrase();
   if (currentUserId) await forgetRememberedPassphrase(currentUserId).catch(() => undefined);
   window.location.assign("/");

@@ -257,6 +257,23 @@ export class CryptoClient {
     }
   }
 
+  async exportRecovery(passphrase: string) {
+    if (!passphrase) throw new Error("recovery_passphrase_required");
+    return this.runCryptoOperation(async () => {
+      const exported = await this.state.exportRoomKeys(() => true);
+      return OlmMachine.encryptExportedRoomKeys(exported, passphrase, 100_000);
+    });
+  }
+
+  async importRecovery(encryptedExport: string, passphrase: string) {
+    if (!passphrase) throw new Error("recovery_passphrase_required");
+    return this.runCryptoOperation(async () => {
+      const exported = OlmMachine.decryptExportedRoomKeys(encryptedExport, passphrase);
+      const result = await this.state.importExportedRoomKeys(exported, () => undefined);
+      return { imported: result.importedCount, total: result.totalCount };
+    });
+  }
+
   private get state() {
     if (!this.machine || !this.initialized) throw new Error("crypto_not_initialized");
     return this.machine;

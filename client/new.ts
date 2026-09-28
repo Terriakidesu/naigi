@@ -122,6 +122,7 @@ function memberToUser(member: ServerMember): User {
     displayName: member.displayName,
     createdAt: member.joinedAt,
     avatarUrl: member.avatarUrl,
+    bannerUrl: member.bannerUrl ?? null,
   };
 }
 

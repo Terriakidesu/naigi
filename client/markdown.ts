@@ -13,6 +13,7 @@ export type MarkdownBlock =
 export type MarkdownRenderOptions = {
   mentionUsernames?: Set<string>;
   mentionRoleNames?: Set<string>;
+  customEmoji?: ReadonlyMap<string, { src: string; alt: string }>;
   roomReferences?: Map<string, string>;
   onRoomReference?: (channelId: string) => void;
 };
@@ -148,14 +149,43 @@ function appendTextChunk(parent: HTMLElement, value: string) {
 function appendText(parent: HTMLElement, value: string, options: MarkdownRenderOptions = {}) {
   const pattern = /@&([A-Za-z0-9_.-]+)|@([A-Za-z0-9_.-]+)/g;
   const roomPattern = /(^|[^A-Za-z0-9_.-])#([A-Za-z0-9_.-]+)/g;
+  const customEmojiPattern = /:([A-Za-z0-9_+-]{1,32}):/g;
   let offset = 0;
   while (offset < value.length) {
     pattern.lastIndex = offset;
     roomPattern.lastIndex = offset;
+    customEmojiPattern.lastIndex = offset;
     const mentionMatch = pattern.exec(value);
     const roomMatch = roomPattern.exec(value);
+    let customEmojiMatch: RegExpExecArray | null = null;
+    while (true) {
+      const candidate = customEmojiPattern.exec(value);
+      if (!candidate) break;
+      if (options.customEmoji?.has(candidate[1].toLowerCase())) {
+        customEmojiMatch = candidate;
+        break;
+      }
+    }
     const mentionIndex = mentionMatch?.index ?? Number.POSITIVE_INFINITY;
     const roomIndex = roomMatch ? (roomMatch.index ?? offset) + roomMatch[1].length : Number.POSITIVE_INFINITY;
+    const customEmojiIndex = customEmojiMatch
+      ? customEmojiMatch.index ?? offset
+      : Number.POSITIVE_INFINITY;
+    if (customEmojiMatch && customEmojiIndex <= mentionIndex && customEmojiIndex <= roomIndex) {
+      const asset = options.customEmoji?.get(customEmojiMatch[1].toLowerCase());
+      if (asset) {
+        appendTextChunk(parent, value.slice(offset, customEmojiIndex));
+        const image = document.createElement("img");
+        image.className = "custom-emoji inline-custom-emoji";
+        image.src = asset.src;
+        image.alt = asset.alt;
+        image.title = `:${customEmojiMatch[1]}:`;
+        image.draggable = false;
+        parent.append(image);
+        offset = customEmojiIndex + customEmojiMatch[0].length;
+        continue;
+      }
+    }
     let emojiIndex = Number.POSITIVE_INFINITY;
     let emojiMatch: ReturnType<typeof emojiEntryAt> = undefined;
     for (let index = offset; index < value.length; index += Math.max(1, value.codePointAt(index)! > 0xffff ? 2 : 1)) {

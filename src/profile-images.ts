@@ -11,6 +11,10 @@ export function profileImageUrl(userId: string, storageKey: string | null | unde
   return storageKey ? `/v1/users/${userId}/avatar?v=${encodeURIComponent(storageKey)}` : null;
 }
 
+export function profileBannerUrl(userId: string, storageKey: string | null | undefined) {
+  return storageKey ? `/v1/users/${userId}/banner?v=${encodeURIComponent(storageKey)}` : null;
+}
+
 const profileImageExtensions: Record<string, string> = {
   "image/avif": "avif",
   "image/gif": "gif",

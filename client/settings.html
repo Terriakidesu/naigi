@@ -18,14 +18,17 @@
          <p class="eyebrow">PROFILE SETTINGS</p>
           <a class="settings-nav-item active" data-settings-tab href="#profile"><i data-lucide="user-round"></i><span>Profile</span></a>
           <a class="settings-nav-item" data-settings-tab href="#security"><i data-lucide="key-round"></i><span>Security</span></a>
-          <a class="settings-nav-item" data-settings-tab href="#devices"><i data-lucide="monitor-smartphone"></i><span>Devices</span></a>
-          <a class="settings-nav-item" data-settings-tab href="#privacy"><i data-lucide="shield-check"></i><span>Privacy</span></a>
-          <a class="settings-nav-item" data-settings-tab href="#app"><i data-lucide="sliders-horizontal"></i><span>App</span></a>
+           <a class="settings-nav-item" data-settings-tab href="#devices"><i data-lucide="monitor-smartphone"></i><span>Devices</span></a>
+           <a class="settings-nav-item" data-settings-tab href="#privacy"><i data-lucide="shield-check"></i><span>Privacy</span></a>
+           <a class="settings-nav-item" data-settings-tab href="#recovery"><i data-lucide="key-round"></i><span>Recovery</span></a>
+           <a class="settings-nav-item" data-settings-tab href="#local-data"><i data-lucide="trash-2"></i><span>Local data</span></a>
+           <a class="settings-nav-item" data-settings-tab href="#app"><i data-lucide="sliders-horizontal"></i><span>App</span></a>
       </nav>
       <section class="settings-content">
          <section id="profile" class="settings-section panel" data-settings-view>
            <p class="eyebrow">PROFILE</p>
-           <h1>Your account</h1>
+             <h1>Your account</h1>
+             <div id="settings-banner" class="profile-banner" aria-hidden="true"></div>
              <div class="profile-card">
                <div id="settings-avatar" class="large-avatar" aria-hidden="true">N</div>
                <div class="profile-card-copy"><strong id="settings-name">Loading…</strong><span id="settings-username" class="muted"></span></div>
@@ -34,7 +37,12 @@
                  <button id="remove-profile-image" class="secondary" type="button" hidden>Remove</button>
                </div>
              </div>
-            <p class="muted small profile-image-help">PNG, JPG, GIF, WebP, or AVIF · up to 5 MB · animated GIFs supported</p>
+             <p class="muted small profile-image-help">PNG, JPG, GIF, WebP, or AVIF · up to 5 MB · animated GIFs supported</p>
+             <div class="profile-banner-actions">
+               <label id="profile-banner-button" class="profile-image-button">Choose banner<input id="profile-banner-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif"></label>
+               <button id="remove-profile-banner" class="secondary" type="button" hidden>Remove banner</button>
+               <span class="muted small">Optional profile banner · up to 5 MB</span>
+             </div>
            <form id="profile-form" class="settings-form">
              <label for="settings-display-name">Display name<input id="settings-display-name" maxlength="80" required></label>
              <button type="submit">Save profile</button>
@@ -65,9 +73,32 @@
              <button id="lock-now-button" class="secondary" type="button">Lock this browser</button>
              <button id="forget-device-button" class="danger-button" type="button">Forget remembered unlock</button>
            </div>
-            <p id="local-unlock-status" class="muted small"></p>
+           <p id="local-unlock-status" class="muted small"></p>
           </section>
-          <section id="app" class="settings-section panel" data-settings-view hidden>
+          <section id="recovery" class="settings-section panel" data-settings-view hidden>
+            <p class="eyebrow">RECOVERY</p>
+            <h2>Encrypted room-key backup</h2>
+            <p class="muted">Export an encrypted copy of this browser’s room keys for safekeeping or import one on another browser. The recovery passphrase is used only in this page and is never uploaded or remembered.</p>
+            <div class="settings-form">
+              <label for="recovery-local-passphrase">This browser’s local passphrase<input id="recovery-local-passphrase" type="password" autocomplete="off"></label>
+              <label for="recovery-export-passphrase">New recovery passphrase<input id="recovery-export-passphrase" type="password" autocomplete="new-password" minlength="12"></label>
+              <label for="recovery-export-confirm">Confirm recovery passphrase<input id="recovery-export-confirm" type="password" autocomplete="new-password" minlength="12"></label>
+              <button id="export-recovery-button" type="button">Download recovery backup</button>
+            </div>
+            <hr>
+            <div class="settings-form">
+              <label for="recovery-file">Recovery backup file<input id="recovery-file" type="file" accept=".naigi-recovery,application/json,text/plain"></label>
+              <label for="recovery-import-passphrase">Recovery passphrase<input id="recovery-import-passphrase" type="password" autocomplete="off"></label>
+              <button id="import-recovery-button" class="secondary" type="button">Import room keys</button>
+            </div>
+          </section>
+          <section id="local-data" class="settings-section panel danger-zone" data-settings-view hidden>
+            <p class="eyebrow">LOCAL DATA</p>
+            <h2>Clear this browser</h2>
+            <p class="muted">Removes cached encrypted envelopes, queued encrypted messages, local crypto keys, remembered unlock, device identity, and device-only preferences from this browser. It does not delete your account or server history.</p>
+            <button id="clear-local-data-button" class="danger-button" type="button">Clear local data</button>
+          </section>
+           <section id="app" class="settings-section panel" data-settings-view hidden>
             <p class="eyebrow">APP SETTINGS</p>
             <h2>Customize this browser</h2>
             <p class="muted">These preferences stay on this device. They are never uploaded or included in encrypted messages.</p>

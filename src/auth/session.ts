@@ -1,7 +1,7 @@
 import { password } from "bun";
 import { config } from "../config";
 import { db } from "../db/client";
-import { profileImageUrl } from "../profile-images";
+import { profileBannerUrl, profileImageUrl } from "../profile-images";
 
 type UserRow = {
   id: string;
@@ -10,6 +10,7 @@ type UserRow = {
   password_hash: string;
   created_at: Date;
   profile_image_storage_key?: string | null;
+  profile_banner_storage_key?: string | null;
 };
 
 type SessionRow = {
@@ -21,6 +22,7 @@ export type AuthenticatedUser = {
   username: string;
   displayName: string;
   avatarUrl: string | null;
+  bannerUrl: string | null;
 };
 
 export function normalizeUsername(username: string) {
@@ -74,7 +76,8 @@ export async function authenticate(
 
   const tokenHash = await hashSessionToken(token);
   const [user] = await db<UserRow[]>`
-    select u.id, u.username, u.display_name, u.password_hash, u.created_at, u.profile_image_storage_key
+    select u.id, u.username, u.display_name, u.password_hash, u.created_at,
+      u.profile_image_storage_key, u.profile_banner_storage_key
     from sessions s
     join users u on u.id = s.user_id
     where s.token_hash = ${tokenHash} and s.expires_at > now()
@@ -88,6 +91,7 @@ export async function authenticate(
     username: user.username,
     displayName: user.display_name,
     avatarUrl: profileImageUrl(user.id, user.profile_image_storage_key),
+    bannerUrl: profileBannerUrl(user.id, user.profile_banner_storage_key),
   };
 }
 
