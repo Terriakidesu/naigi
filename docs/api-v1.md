@@ -36,6 +36,14 @@ validated numeric status ID to the explicitly configured preview-provider chain;
 persist or log the URL or returned preview. The browser encrypts any returned card data inside
 the message before sending it.
 
+`GET /v1/gifs/providers` returns the explicitly configured Klipy and/or GIPHY browser integration
+keys plus the encrypted attachment size limit to an authenticated client. Those are public,
+origin-restricted browser keys: the browser contacts the provider directly for GIF searches and
+downloads, then encrypts a selected GIF through the normal attachment flow. The server does not
+receive, persist, proxy, or log search terms, provider URLs, GIF bytes, or media keys. Tenor's
+retired API is not used; provider-page preview information remains inside encrypted message
+content.
+
 ## Servers and channels
 
 Servers are invite-only. Server membership, roles, channel order, IDs, and timestamps are

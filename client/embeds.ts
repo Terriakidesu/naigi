@@ -1,9 +1,11 @@
-import { confirmExternalLink, guardExternalLink } from "./external-link";
+import { confirmExternalLink, confirmExternalMedia, guardExternalLink } from "./external-link";
 import type { TwitterPreview } from "./api";
+import { gifProviderLabel, parseGifLink, resolveGifLink, safeGifMediaUrl, type GifLink } from "./gifs";
 
 export type SafeEmbed =
   | { kind: "youtube"; id: string; url: string; embedUrl: string }
   | ({ kind: "social"; network: "x"; url: string; statusId: string } & Partial<TwitterPreview>)
+  | ({ kind: "gif" } & GifLink & { mediaUrl?: string; previewUrl?: string })
   | { kind: "media"; mediaType: "image" | "video"; url: string }
   | { kind: "link"; url: string; title: string; imageUrl?: string };
 
@@ -92,6 +94,9 @@ export function parseSafeEmbed(value: string): SafeEmbed | null {
     if (status) return { kind: "social", network: "x", url: url.toString(), statusId: status[1] };
   }
 
+  const gif = parseGifLink(url);
+  if (gif) return { kind: "gif", ...gif };
+
   const mediaType = directMediaType(url);
   if (mediaType) return { kind: "media", mediaType, url: url.toString() };
   return { kind: "link", url: url.toString(), title: siteTitle(url) };
@@ -174,7 +179,17 @@ export function normalizeStoredEmbeds(value: unknown): SafeEmbed[] {
       embeds.push(parsed);
     } else if (stored.kind === "social" && parsed.kind === "social") {
       embeds.push({ ...parsed, ...normalizeTwitterPreview(stored) });
+    } else if (stored.kind === "gif" && parsed.kind === "gif") {
+      const mediaUrl = safeGifMediaUrl(parsed.provider, stored.mediaUrl);
+      const previewUrl = safeGifMediaUrl(parsed.provider, stored.previewUrl);
+      embeds.push({
+        ...parsed,
+        ...(mediaUrl ? { mediaUrl } : {}),
+        ...(previewUrl ? { previewUrl } : {}),
+      });
     } else if (parsed.kind === "youtube" && (stored.kind === "youtube" || stored.kind === "link")) {
+      embeds.push(parsed);
+    } else if (parsed.kind === "gif" && stored.kind === "link") {
       embeds.push(parsed);
     } else if (stored.kind === "link" && parsed.kind === "social") {
       embeds.push({ ...parsed, ...normalizeTwitterPreview(stored) });
@@ -335,6 +350,14 @@ export async function prepareEmbeds(text: string) {
       const preview = await loadTwitterPreview(embed.url);
       return preview ? { ...embed, ...preview, id: embed.statusId } : embed;
     }
+    if (embed.kind === "gif") {
+      try {
+        const resolved = await resolveGifLink(embed);
+        return resolved ? { ...embed, ...resolved } : embed;
+      } catch {
+        return embed;
+      }
+    }
     if (embed.kind !== "link") return embed;
     const metadata = await loadLinkMetadata(embed.url);
     return {
@@ -354,20 +377,38 @@ function createExternalAnchor(url: string, className?: string) {
   return link;
 }
 
-function appendMediaEmbed(parent: HTMLElement, embed: Extract<SafeEmbed, { kind: "media" }>) {
+function appendMediaEmbed(
+  parent: HTMLElement,
+  embed: Extract<SafeEmbed, { kind: "media" }>,
+  onOpenImage?: (url: string, title: string) => void,
+) {
   const card = document.createElement("div");
   card.className = "embed-card embed-media-card";
   if (embed.mediaType === "image") {
-    const link = createExternalAnchor(embed.url, "embed-media-link");
     const image = document.createElement("img");
     image.className = "embed-media-image";
     image.src = embed.url;
     image.alt = "Linked image";
     image.loading = "lazy";
     image.referrerPolicy = "no-referrer";
-    image.addEventListener("error", () => image.remove(), { once: true });
-    link.append(image);
-    card.append(link);
+    if (onOpenImage) {
+      image.tabIndex = 0;
+      image.setAttribute("role", "button");
+      image.setAttribute("aria-label", "Enlarge linked image");
+      const open = () => onOpenImage(embed.url, image.alt);
+      image.addEventListener("click", open);
+      image.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        open();
+      });
+    }
+    image.addEventListener("error", () => {
+      const link = createExternalAnchor(embed.url, "embed-link");
+      link.textContent = embed.url;
+      card.replaceChildren(link);
+    }, { once: true });
+    card.append(image);
   } else {
     const video = document.createElement("video");
     video.className = "embed-media-video";
@@ -375,16 +416,25 @@ function appendMediaEmbed(parent: HTMLElement, embed: Extract<SafeEmbed, { kind:
     video.preload = "metadata";
     video.src = embed.url;
     video.setAttribute("referrerpolicy", "no-referrer");
-    video.addEventListener("play", () => {
-      if (!confirmExternalMedia(embed.url)) video.pause();
-    });
+    video.addEventListener("play", () => requestExternalVideoPlayback(embed.url, video));
     card.append(video);
   }
   parent.append(card);
 }
 
-function confirmExternalMedia(url: string) {
-  return confirmExternalLink(url);
+function requestExternalVideoPlayback(url: string, video: HTMLVideoElement) {
+  if (video.dataset.externalLinkConfirmation === "approved" || video.dataset.externalLinkConfirmation === "pending") return;
+  video.dataset.externalLinkConfirmation = "pending";
+  video.pause();
+  void confirmExternalMedia(url).then((approved) => {
+    if (!video.isConnected) return;
+    if (!approved) {
+      delete video.dataset.externalLinkConfirmation;
+      return;
+    }
+    video.dataset.externalLinkConfirmation = "approved";
+    void video.play().catch(() => undefined);
+  });
 }
 
 function createExternalMediaAnchor(url: string, className?: string) {
@@ -408,6 +458,53 @@ function appendYoutubeEmbed(parent: HTMLElement, embed: Extract<SafeEmbed, { kin
   frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation");
   frame.setAttribute("allow", "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share");
   card.append(frame);
+  parent.append(card);
+}
+
+function appendGifEmbed(parent: HTMLElement, embed: Extract<SafeEmbed, { kind: "gif" }>) {
+  if (!embed.mediaUrl) {
+    if (embed.embedUrl) {
+      const card = document.createElement("div");
+      card.className = "embed-card gif-embed-card";
+      const frame = document.createElement("iframe");
+      frame.className = "gif-embed-frame";
+      frame.src = embed.embedUrl;
+      frame.title = `${gifProviderLabel(embed.provider)} GIF preview`;
+      frame.loading = "lazy";
+      frame.referrerPolicy = "no-referrer";
+      frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation");
+      card.append(frame);
+      parent.append(card);
+      return;
+    }
+    appendLinkEmbed(parent, asLinkEmbed(embed));
+    return;
+  }
+  const card = document.createElement("div");
+  card.className = "embed-card embed-media-card gif-embed-card";
+  const link = createExternalAnchor(embed.url, "embed-media-link");
+  link.setAttribute("aria-label", `Open GIF on ${gifProviderLabel(embed.provider)} (external link)`);
+  const image = document.createElement("img");
+  image.className = "embed-media-image";
+  image.src = embed.mediaUrl;
+  image.alt = embed.title || `${gifProviderLabel(embed.provider)} GIF`;
+  image.loading = "lazy";
+  image.referrerPolicy = "no-referrer";
+  image.addEventListener("error", () => {
+    if (embed.provider !== "tenor") {
+      card.remove();
+      return;
+    }
+    const unavailable = document.createElement("span");
+    unavailable.className = "gif-embed-unavailable";
+    unavailable.textContent = "Preview unavailable · Open on Tenor";
+    link.replaceChildren(unavailable);
+  }, { once: true });
+  const source = document.createElement("span");
+  source.className = "gif-embed-source";
+  source.textContent = `GIF · ${gifProviderLabel(embed.provider)}`;
+  link.append(image, source);
+  card.append(link);
   parent.append(card);
 }
 
@@ -539,9 +636,10 @@ function appendLinkEmbed(parent: HTMLElement, source: Extract<SafeEmbed, { kind:
   }
 }
 
-export function appendSafeEmbed(parent: HTMLElement, embed: SafeEmbed) {
-  if (embed.kind === "media") appendMediaEmbed(parent, embed);
+export function appendSafeEmbed(parent: HTMLElement, embed: SafeEmbed, onOpenImage?: (url: string, title: string) => void) {
+  if (embed.kind === "media") appendMediaEmbed(parent, embed, onOpenImage);
   else if (embed.kind === "social") appendTwitterEmbed(parent, embed);
+  else if (embed.kind === "gif") appendGifEmbed(parent, embed);
   else if (embed.kind === "youtube") appendYoutubeEmbed(parent, embed);
   else appendLinkEmbed(parent, asLinkEmbed(embed));
 }

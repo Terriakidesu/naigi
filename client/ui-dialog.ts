@@ -12,6 +12,70 @@ function createDialog(title: string, description: string) {
   return dialog;
 }
 
+let externalDialogId = 0;
+
+export function confirmExternalUrl(url: URL, mode: "link" | "media" = "link") {
+  return new Promise<boolean>((resolve) => {
+    const dialog = createDialog(
+      mode === "link" ? "You’re leaving Naigi" : "Play external video?",
+      mode === "link"
+        ? "This link opens an external website. Check the destination before continuing."
+        : "This video is hosted outside Naigi and will load from the destination below.",
+    );
+    dialog.classList.add("external-link-dialog");
+    const heading = dialog.querySelector("h2")!;
+    const hint = dialog.querySelector("p.muted")!;
+    heading.id = `external-link-dialog-title-${++externalDialogId}`;
+    hint.id = `${heading.id}-description`;
+    dialog.setAttribute("aria-labelledby", heading.id);
+    dialog.setAttribute("aria-describedby", hint.id);
+    const mark = document.createElement("span");
+    mark.className = "external-link-mark";
+    mark.setAttribute("aria-hidden", "true");
+    mark.textContent = "↗";
+    heading.prepend(mark);
+
+    const destination = document.createElement("section");
+    destination.className = "external-link-destination";
+    const label = document.createElement("span");
+    label.className = "external-link-destination-label";
+    label.textContent = "External destination";
+    const host = document.createElement("strong");
+    host.className = "external-link-host";
+    host.textContent = url.host;
+    const address = document.createElement("code");
+    address.className = "external-link-address";
+    address.textContent = url.href;
+    destination.append(label, host, address);
+
+    const warning = document.createElement("p");
+    warning.className = "external-link-warning";
+    warning.textContent = "External websites may collect information about your visit or playback. Only continue if you trust this destination.";
+
+    const actions = document.createElement("div");
+    actions.className = "app-dialog-actions";
+    const cancel = document.createElement("button");
+    cancel.className = "secondary";
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = mode === "link" ? "Open link" : "Play video";
+    actions.append(cancel, open);
+    dialog.append(destination, warning, actions);
+
+    let approved = false;
+    cancel.addEventListener("click", () => dialog.close());
+    open.addEventListener("click", () => {
+      approved = true;
+      dialog.close();
+    });
+    dialog.addEventListener("close", () => resolve(approved), { once: true });
+    dialog.showModal();
+    cancel.focus();
+  });
+}
+
 export function askText(title: string, description: string, label: string, initialValue = "") {
   return new Promise<string | null>((resolve) => {
     const dialog = createDialog(title, description);

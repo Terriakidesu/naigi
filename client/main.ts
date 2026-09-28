@@ -4,6 +4,8 @@ import {
   type Conversation,
   type ConversationMember,
   type CustomServerRole,
+  type GifProvider,
+  type GifProviderConfiguration,
   type MessageEnvelope,
   type MessagePage,
   type Server,
@@ -15,6 +17,7 @@ import {
 import { CryptoClient, LocalCryptoStoreError, MAX_MESSAGE_TEXT_LENGTH, type DecryptedMessage, type ReplyReference } from "./crypto";
 import { roomKeyUnavailable } from "./decryption";
 import { appendSafeEmbed, extractEmbeds, normalizeStoredEmbeds, prepareEmbeds, type SafeEmbed } from "./embeds";
+import { gifProviderLabel, loadGifProviderConfiguration, searchGifs, trendingGifs, type GifSearchResult } from "./gifs";
 import { applyAppPreferences, defaultAppPreferences, loadAppPreferences, type AppPreferences } from "./app-preferences";
 import {
   emojiEntryAt,
@@ -29,9 +32,11 @@ import type { EmojiCategory } from "./emoji-data";
 import { appendMarkdown } from "./markdown";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { isEmojiOnlyMessage } from "./message-format";
+import { renderHighlightedCode } from "./code-highlight";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
+import { canReconcileLatestMessagePage } from "./message-window";
 import { roomReferenceSlug, roomReferenceToken } from "./room-reference";
-import { isPlaintextAttachment, readTextPreview, textLanguage } from "./text-file";
+import { isPlaintextAttachment, readTextPreview, textLanguage, textPreviewExcerpt } from "./text-file";
 import { confirmLocalUnlock, lockLocalSession, resolveLocalPassphrase } from "./unlock-vault";
 import { iconElement, renderIcons } from "./icons";
 import { askText, showOneTimeToken } from "./ui-dialog";
@@ -150,6 +155,13 @@ const emojiPickerCategories: Array<{ id: EmojiPickerCategory; label: string; ico
 let emojiPickerCategory: EmojiPickerCategory = "Smileys & Emotion";
 let emojiPickerObserver: IntersectionObserver | undefined;
 const lazyEmojiOptions = new WeakMap<HTMLElement, EmojiPickerOption[]>();
+let gifProviderConfiguration: GifProviderConfiguration | undefined;
+let gifPickerProviderId: GifProvider["id"] | undefined;
+let gifPickerSearchTimer: number | undefined;
+let gifPickerSearchAbort: AbortController | undefined;
+let gifPickerDownloadAbort: AbortController | undefined;
+let gifPickerToken = 0;
+let gifPickerDownloadInProgress = false;
 
 function renderEmojiSectionItems(section: HTMLElement) {
   const items = section.querySelector<HTMLElement>(".emoji-category-items");
@@ -272,6 +284,8 @@ const serverInviteButton = byId<HTMLButtonElement>("server-invite-button");
 const serverSettingsButton = byId<HTMLAnchorElement>("server-settings-button");
 const workspaceName = byId<HTMLElement>("workspace-name");
 const workspaceSubtitle = byId<HTMLElement>("workspace-subtitle");
+const chatContent = byId<HTMLElement>("chat-content");
+const fileDropOverlay = byId<HTMLElement>("file-drop-overlay");
 const composer = byId<HTMLFormElement>("composer");
 const messageInputRendered = byId<HTMLElement>("message-input-rendered");
 const messageInput = byId<HTMLTextAreaElement>("message-input");
@@ -296,6 +310,14 @@ const emojiPickerSearch = byId<HTMLInputElement>("emoji-picker-search");
 const emojiCategoryTabs = byId<HTMLElement>("emoji-category-tabs");
 const emojiPickerGrid = byId<HTMLElement>("emoji-picker-grid");
 const emojiToggle = byId<HTMLButtonElement>("emoji-toggle");
+const gifPicker = byId<HTMLElement>("gif-picker");
+const gifPickerProvider = byId<HTMLSelectElement>("gif-picker-provider");
+const gifPickerSearch = byId<HTMLInputElement>("gif-picker-search");
+const gifPickerClose = byId<HTMLButtonElement>("gif-picker-close");
+const gifPickerNotice = byId<HTMLElement>("gif-picker-notice");
+const gifPickerAttribution = byId<HTMLAnchorElement>("gif-picker-attribution");
+const gifPickerResults = byId<HTMLElement>("gif-picker-results");
+const gifToggle = byId<HTMLButtonElement>("gif-toggle");
 const lockButton = byId<HTMLButtonElement>("lock-button");
 const mobileSidebarToggle = byId<HTMLButtonElement>("mobile-sidebar-toggle");
 const mobileSidebarClose = byId<HTMLButtonElement>("mobile-sidebar-close");
@@ -844,6 +866,14 @@ function applyPinEvent(targetId: string, action: "add" | "remove") {
   }
 }
 
+function embeddedImageLinks(embeds: SafeEmbed[]) {
+  return new Set(embeds.flatMap((embed) => {
+    if (embed.kind === "media" && embed.mediaType === "image") return [embed.url];
+    if (embed.kind === "gif" && embed.mediaUrl) return [embed.url];
+    return [];
+  }));
+}
+
 function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], mentions: string[], roleMentions: string[] = []) {
   editedMessageBodies.set(messageId, { body, embeds, mentions, roleMentions });
   if (redactedMessageIds.has(messageId)) return;
@@ -875,9 +905,10 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
     mentionRoleNames,
     customEmoji: customEmojiAssets,
     roomReferences: roomReferenceMap(),
+    hideBareLinks: embeddedImageLinks(embeds),
     onRoomReference: (channelId) => void selectChannel(channelId),
   });
-  for (const embed of embeds) appendSafeEmbed(content, embed);
+  for (const embed of embeds) appendSafeEmbed(content, embed, openExternalImageViewer);
   article.classList.toggle("message-emoji-only", isEmojiOnlyMessage(body));
   if (reply) article.insertBefore(reply, article.querySelector(".message-avatar") ?? content);
   const editable = isOwnMessage(message);
@@ -1125,6 +1156,26 @@ function closeMediaViewer() {
   hideDialog(mediaViewer);
 }
 
+function openExternalImageViewer(url: string, title: string) {
+  closeMediaViewer();
+  mediaViewerTitle.textContent = title || "Image";
+  mediaViewerCopy.hidden = true;
+  mediaViewerPrevious.hidden = true;
+  mediaViewerNext.hidden = true;
+  mediaViewerCount.hidden = true;
+  mediaViewerDownload.hidden = true;
+  mediaViewerDownload.removeAttribute("href");
+  const image = document.createElement("img");
+  image.className = "media-viewer-image";
+  image.src = url;
+  image.alt = title || "Linked image";
+  image.referrerPolicy = "no-referrer";
+  mediaViewerElement = image;
+  mediaViewerStage.append(image);
+  showDialog(mediaViewer, mediaViewerClose);
+  setMediaZoom(1);
+}
+
 function setMediaZoom(value: number) {
   const zoom = Math.max(1, Math.min(3, Math.round(value * 10) / 10));
   mediaViewerZoom.value = String(zoom);
@@ -1230,11 +1281,12 @@ async function openTextViewer(blob: Blob, filename: string, mimeType: string) {
   try {
     const preview = await readTextPreview(blob);
     if (mediaViewer.hidden === false) closeMediaViewer();
+    const language = textLanguage(filename, mimeType);
     mediaViewerText = preview.text;
-    mediaViewerTitle.textContent = `${filename || "Text file"} · ${textLanguage(filename, mimeType)}`;
+    mediaViewerTitle.textContent = `${filename || "Text file"} · ${language}`;
     const pre = document.createElement("pre");
     pre.className = "text-file-viewer";
-    pre.textContent = preview.text;
+    renderHighlightedCode(pre, preview.text, language);
     mediaViewerElement = pre;
     mediaViewerCopy.hidden = false;
     mediaViewerStage.replaceChildren(pre);
@@ -1649,6 +1701,7 @@ function renderEmojiPicker() {
 
 function toggleEmojiPicker() {
   if (emojiPicker.hidden) {
+    closeGifPicker();
     renderEmojiPicker();
     emojiPicker.hidden = false;
     emojiToggle.setAttribute("aria-expanded", "true");
@@ -1656,6 +1709,281 @@ function toggleEmojiPicker() {
   } else {
     closeEmojiPicker();
   }
+}
+
+function activeGifProvider() {
+  return gifProviderConfiguration?.providers.find((provider) => provider.id === gifPickerProviderId);
+}
+
+function gifPickerHelpText(provider: GifProvider) {
+  return `Searches go directly to ${gifProviderLabel(provider.id)}. Selected GIFs are encrypted before upload.`;
+}
+
+function setGifPickerNotice(message: string) {
+  gifPickerNotice.textContent = message;
+}
+
+function renderGifPickerEmpty(message: string) {
+  gifPickerResults.replaceChildren();
+  const empty = document.createElement("p");
+  empty.className = "gif-picker-empty";
+  empty.textContent = message;
+  gifPickerResults.append(empty);
+}
+
+function renderGifPickerAttribution(provider?: GifProvider) {
+  gifPickerAttribution.hidden = !provider;
+  if (!provider) return;
+  gifPickerAttribution.href = provider.id === "klipy" ? "https://klipy.com" : "https://giphy.com";
+  gifPickerAttribution.textContent = provider.id === "klipy" ? "Powered by KLIPY" : "GIFs by GIPHY";
+}
+
+function renderGifPickerProviders() {
+  gifPickerProvider.replaceChildren();
+  const providers = gifProviderConfiguration?.providers ?? [];
+  if (providers.length === 0) {
+    gifPickerProvider.hidden = true;
+    gifPickerProvider.disabled = true;
+    gifPickerSearch.disabled = true;
+    renderGifPickerAttribution();
+    return;
+  }
+  gifPickerProvider.hidden = false;
+  gifPickerProvider.disabled = false;
+  gifPickerSearch.disabled = false;
+  if (!gifPickerProviderId || !providers.some((provider) => provider.id === gifPickerProviderId)) {
+    gifPickerProviderId = providers[0]?.id;
+  }
+  for (const provider of providers) {
+    const option = document.createElement("option");
+    option.value = provider.id;
+    option.textContent = gifProviderLabel(provider.id);
+    gifPickerProvider.append(option);
+  }
+  if (gifPickerProviderId) gifPickerProvider.value = gifPickerProviderId;
+  renderGifPickerAttribution(activeGifProvider());
+}
+
+function closeGifPicker() {
+  gifPickerToken += 1;
+  if (gifPickerSearchTimer !== undefined) {
+    window.clearTimeout(gifPickerSearchTimer);
+    gifPickerSearchTimer = undefined;
+  }
+  gifPickerSearchAbort?.abort();
+  gifPickerSearchAbort = undefined;
+  gifPickerDownloadAbort?.abort();
+  gifPickerDownloadAbort = undefined;
+  gifPickerDownloadInProgress = false;
+  gifPicker.hidden = true;
+  gifToggle.setAttribute("aria-expanded", "false");
+  gifPickerSearch.value = "";
+  setGifPickerNotice("");
+  gifPickerResults.replaceChildren();
+}
+
+function gifDownloadError(error: unknown) {
+  if (error instanceof Error && error.name === "AbortError") return "GIF download canceled.";
+  if (error instanceof Error && error.message === "gif_download_too_large") return "That GIF is too large to send as an encrypted attachment.";
+  if (error instanceof Error && error.message === "gif_download_not_gif") return "The provider did not return a GIF file.";
+  return "Unable to download that GIF from the provider.";
+}
+
+async function readBoundedGifBlob(response: Response, maxBytes: number) {
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (contentType && contentType !== "image/gif") throw new Error("gif_download_not_gif");
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (contentLength > maxBytes) throw new Error("gif_download_too_large");
+  if (!response.body) {
+    const blob = await response.blob();
+    if (blob.size === 0 || blob.size > maxBytes) throw new Error("gif_download_too_large");
+    return blob;
+  }
+  const chunks: ArrayBuffer[] = [];
+  const reader = response.body.getReader();
+  let total = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error("gif_download_too_large");
+      }
+      const copy = new Uint8Array(chunk.value.byteLength);
+      copy.set(chunk.value);
+      chunks.push(copy.buffer);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (total === 0) throw new Error("gif_download_too_large");
+  return new Blob(chunks, { type: "image/gif" });
+}
+
+async function isGifBlob(blob: Blob) {
+  const header = new Uint8Array(await blob.slice(0, 6).arrayBuffer());
+  const signature = String.fromCharCode(...header);
+  return signature === "GIF87a" || signature === "GIF89a";
+}
+
+async function queueGifAttachment(result: GifSearchResult) {
+  if (gifPickerDownloadInProgress) return;
+  const configuration = gifProviderConfiguration;
+  if (!configuration) return;
+  if (result.sizeBytes && result.sizeBytes > configuration.maxAttachmentBytes) {
+    setGifPickerNotice("That GIF is too large to send as an encrypted attachment.");
+    return;
+  }
+  gifPickerDownloadInProgress = true;
+  gifPickerSearchAbort?.abort();
+  for (const button of gifPickerResults.querySelectorAll<HTMLButtonElement>("button")) button.disabled = true;
+  setGifPickerNotice("Downloading GIF for encrypted upload…");
+  const pickerToken = gifPickerToken;
+  const controller = new AbortController();
+  gifPickerDownloadAbort = controller;
+  try {
+    const response = await fetch(result.mediaUrl, {
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error("gif_download_failed");
+    const blob = await readBoundedGifBlob(response, configuration.maxAttachmentBytes);
+    if (!await isGifBlob(blob)) throw new Error("gif_download_not_gif");
+    const filenameId = result.id.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80) || "animation";
+    const added = addComposerFiles([new File([blob], `${result.provider}-${filenameId}.gif`, { type: "image/gif" })]);
+    if (added === 0) {
+      setGifPickerNotice("The attachment queue is full.");
+      return;
+    }
+    closeGifPicker();
+    setStatus("GIF added as an encrypted attachment.");
+    messageInput.focus();
+  } catch (error) {
+    if (pickerToken === gifPickerToken && !gifPicker.hidden && !(error instanceof Error && error.name === "AbortError")) {
+      setGifPickerNotice(gifDownloadError(error));
+    }
+  } finally {
+    if (gifPickerDownloadAbort === controller) {
+      gifPickerDownloadAbort = undefined;
+      gifPickerDownloadInProgress = false;
+      if (!gifPicker.hidden) {
+        for (const button of gifPickerResults.querySelectorAll<HTMLButtonElement>("button")) button.disabled = false;
+      }
+    }
+  }
+}
+
+function renderGifSearchResults(results: GifSearchResult[]) {
+  gifPickerResults.replaceChildren();
+  const maxAttachmentBytes = gifProviderConfiguration?.maxAttachmentBytes ?? 0;
+  const sendable = results.filter((result) => !result.sizeBytes || result.sizeBytes <= maxAttachmentBytes);
+  if (sendable.length === 0) {
+    renderGifPickerEmpty(results.length > 0 ? "The available GIFs are too large to send." : "No GIFs found.");
+    return;
+  }
+  for (const result of sendable) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "gif-picker-result";
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-label", `Add ${result.title} as an encrypted GIF attachment`);
+    button.title = `Add ${result.title}`;
+    const image = document.createElement("img");
+    image.src = result.previewUrl;
+    image.alt = "";
+    image.loading = "lazy";
+    image.referrerPolicy = "no-referrer";
+    image.addEventListener("error", () => button.remove(), { once: true });
+    const label = document.createElement("span");
+    label.className = "gif-picker-result-label";
+    label.textContent = result.title;
+    button.append(image, label);
+    button.addEventListener("click", () => void queueGifAttachment(result));
+    gifPickerResults.append(button);
+  }
+}
+
+async function searchGifPicker() {
+  const provider = activeGifProvider();
+  const query = gifPickerSearch.value.trim();
+  gifPickerSearchAbort?.abort();
+  gifPickerSearchAbort = undefined;
+  const token = ++gifPickerToken;
+  if (!provider) {
+    renderGifPickerEmpty("No GIF provider is configured.");
+    return;
+  }
+  if (query.length === 1) {
+    renderGifPickerEmpty("Type at least two characters to search.");
+    setGifPickerNotice(gifPickerHelpText(provider));
+    return;
+  }
+  const controller = new AbortController();
+  gifPickerSearchAbort = controller;
+  renderGifPickerEmpty(query ? "Searching…" : "Loading trending GIFs…");
+  setGifPickerNotice(query ? `Searching ${gifProviderLabel(provider.id)}…` : `Loading trending GIFs from ${gifProviderLabel(provider.id)}…`);
+  try {
+    const results = query
+      ? await searchGifs(provider, query, controller.signal, gifProviderConfiguration?.maxAttachmentBytes)
+      : await trendingGifs(provider, controller.signal, gifProviderConfiguration?.maxAttachmentBytes);
+    if (token !== gifPickerToken || gifPicker.hidden) return;
+    renderGifSearchResults(results);
+    setGifPickerNotice(results.length > 0
+      ? gifPickerHelpText(provider)
+      : query ? "No GIFs found. Try a different search." : "No trending GIFs are available right now.");
+  } catch (error) {
+    if (token !== gifPickerToken || gifPicker.hidden || error instanceof Error && error.name === "AbortError") return;
+    renderGifPickerEmpty(query ? "GIF search is unavailable." : "Trending GIFs are unavailable.");
+    setGifPickerNotice(query
+      ? `Unable to search ${gifProviderLabel(provider.id)} right now.`
+      : `Unable to load trending GIFs from ${gifProviderLabel(provider.id)} right now.`);
+  } finally {
+    if (gifPickerSearchAbort === controller) gifPickerSearchAbort = undefined;
+  }
+}
+
+function scheduleGifSearch() {
+  if (gifPickerSearchTimer !== undefined) window.clearTimeout(gifPickerSearchTimer);
+  gifPickerSearchTimer = window.setTimeout(() => {
+    gifPickerSearchTimer = undefined;
+    void searchGifPicker();
+  }, 220);
+}
+
+async function openGifPicker() {
+  closeEmojiPicker();
+  gifPicker.hidden = false;
+  gifToggle.setAttribute("aria-expanded", "true");
+  renderGifPickerEmpty("Loading GIF providers…");
+  setGifPickerNotice("Loading GIF providers…");
+  const token = ++gifPickerToken;
+  try {
+    gifProviderConfiguration ??= await loadGifProviderConfiguration();
+    if (token !== gifPickerToken || gifPicker.hidden) return;
+    renderGifPickerProviders();
+    const provider = activeGifProvider();
+    if (!provider) {
+      renderGifPickerEmpty("No GIF provider is configured. Ask your server operator to enable Klipy or GIPHY.");
+      setGifPickerNotice("GIF provider searches stay in your browser and are never sent through Naigi.");
+      return;
+    }
+    setGifPickerNotice(gifPickerHelpText(provider));
+    gifPickerSearch.focus();
+    void searchGifPicker();
+  } catch {
+    if (token !== gifPickerToken || gifPicker.hidden) return;
+    renderGifPickerEmpty("GIF providers are unavailable.");
+    setGifPickerNotice("Unable to load GIF provider settings.");
+  }
+}
+
+function toggleGifPicker() {
+  if (gifPicker.hidden) void openGifPicker();
+  else closeGifPicker();
 }
 
 function renderMentionSuggestions() {
@@ -2795,6 +3123,7 @@ async function hydrateServerCustomEmojis(serverId: string, metadataConversationI
       }
     }));
     if (selectionTokenForServer !== serverSelectionToken || selectedServerId !== serverId || cryptoClient !== activeCrypto || hydrationToken !== customEmojiHydrationToken) return;
+    const hadCustomEmojiAssets = customEmojiAssets.size > 0;
     clearCustomEmojiAssets();
     for (const definition of definitions) {
       if (!definition || customEmojiAssets.has(definition.name)) continue;
@@ -2803,8 +3132,8 @@ async function hydrateServerCustomEmojis(serverId: string, metadataConversationI
       customEmojiAssets.set(definition.name, { src, alt: `:${definition.name}:` });
     }
     if (!emojiPicker.hidden) renderEmojiPicker();
-    if (loadedMessages.length > 0 && selectedServerId === serverId) {
-      await renderMessageHistory({ scrollToBottom: false });
+    if ((hadCustomEmojiAssets || customEmojiAssets.size > 0) && loadedMessages.length > 0 && selectedServerId === serverId) {
+      refreshRenderedMessageMarkdown();
     }
   } catch {
     // Custom emoji are optional encrypted metadata and must not block chat.
@@ -2932,11 +3261,10 @@ async function hydrateChannelLabels(serverId: string, snapshot: ServerChannel[],
       channelLabels.set(prepared[index].id, value.name.trim().slice(0, 80));
     }
   }
-  const scrollAnchor = captureScrollAnchor();
   renderChannels();
   renderInputSuggestions();
   if (loadedMessages.length > 0) {
-    await renderMessageHistory({ scrollAnchor: scrollAnchor ?? undefined, scrollToBottom: false });
+    refreshRenderedMessageMarkdown();
   }
 }
 
@@ -3216,6 +3544,7 @@ function releaseMediaResources(root: HTMLElement) {
 }
 
 const MAX_COMPOSER_ATTACHMENTS = 10;
+const MAX_AUTO_TEXT_PREVIEW_BYTES = 128 * 1024;
 
 function fileSizeLabel(size: number) {
   if (size < 1024) return `${size} B`;
@@ -3384,6 +3713,62 @@ function addComposerFiles(files: File[]) {
   return accepted.length;
 }
 
+function hasFileDrag(dataTransfer: DataTransfer | null) {
+  return Boolean(dataTransfer && (dataTransfer.types.includes("Files") || dataTransfer.files.length > 0));
+}
+
+function canDropComposerFiles() {
+  return !photoInput.disabled && !editTarget && !sendInProgress;
+}
+
+function resetFileDropOverlay() {
+  fileDropOverlay.hidden = true;
+  chatContent.classList.remove("file-drop-active");
+}
+
+function handleFileDrop(event: DragEvent) {
+  if (!hasFileDrag(event.dataTransfer)) return;
+  // I have nothing but my burger and I want nothing more
+  event.preventDefault();
+  const droppedInsideChat = event.target instanceof Node && chatContent.contains(event.target);
+  resetFileDropOverlay();
+  if (!droppedInsideChat) return;
+  if (editTarget) {
+    setStatus("Attachments cannot be added while editing a message.", true);
+    return;
+  }
+  if (!canDropComposerFiles()) {
+    setStatus("You cannot upload files in this conversation right now.", true);
+    return;
+  }
+  const files = [...(event.dataTransfer?.files ?? [])];
+  const added = addComposerFiles(files);
+  if (added > 0) setStatus(`${added} dropped file${added === 1 ? "" : "s"} added for encrypted upload.`);
+}
+
+function clipboardImageExtension(mimeType: string) {
+  const subtype = mimeType.toLowerCase().match(/^image\/([a-z0-9.+-]+)$/)?.[1];
+  if (subtype === "jpeg") return "jpg";
+  if (subtype && /^[a-z0-9]{1,12}$/.test(subtype)) return subtype;
+  return "png";
+}
+
+function clipboardImageFiles(clipboard: DataTransfer | null) {
+  if (!clipboard) return [];
+  const fromItems = [...clipboard.items]
+    .filter((item) => item.kind === "file" && item.type.toLowerCase().startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+  const files = fromItems.length > 0
+    ? fromItems
+    : [...clipboard.files].filter((file) => file.type.toLowerCase().startsWith("image/"));
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return files.map((file, index) => {
+    if (/\.[a-z0-9]{1,12}$/i.test(file.name)) return file;
+    return new File([file], `pasted-image-${timestamp}-${index + 1}.${clipboardImageExtension(file.type)}`, { type: file.type });
+  });
+}
+
 function setComposerAttachmentProgress(attachment: ComposerAttachment, loadedBytes: number, totalBytes: number) {
   attachment.progress = totalBytes > 0 ? Math.min(100, Math.round((loadedBytes / totalBytes) * 100)) : 0;
   if (attachment.progressElement) attachment.progressElement.value = attachment.progress;
@@ -3399,6 +3784,7 @@ function updateComposerState() {
   photoInput.disabled = !enabled || sendInProgress || Boolean(editTarget) || !channelPermissions.canUpload;
   sendButton.disabled = !enabled || sendInProgress;
   emojiToggle.disabled = !enabled || sendInProgress || Boolean(editTarget);
+  gifToggle.disabled = !enabled || sendInProgress || Boolean(editTarget) || !channelPermissions.canUpload;
   messageSearchToggle.disabled = !enabled;
   messageInput.placeholder = !enabled
     ? "Select a conversation to start chatting"
@@ -3408,6 +3794,7 @@ function updateComposerState() {
   renderMessageInput();
   if (!enabled) {
     closeEmojiPicker();
+    closeGifPicker();
     clearComposerAttachments();
   }
   if (editTarget) {
@@ -3773,6 +4160,8 @@ function markMessageDeleted(messageId: string) {
 function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sender: string, body: string, editable = false) {
   const actions = document.createElement("div");
   actions.className = "message-actions";
+  const controls = document.createElement("div");
+  controls.className = "message-actions-controls";
   const reaction = document.createElement("button");
   reaction.className = "message-action";
   reaction.type = "button";
@@ -3786,29 +4175,33 @@ function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sen
     const rect = reaction.getBoundingClientRect();
     openMessageContextMenu({ message, article, sender, body, editable }, rect.left, rect.bottom + 4);
   });
-  actions.append(reaction);
+  controls.append(reaction);
 
   if (editable) {
     const edit = document.createElement("button");
     edit.className = "message-action";
     edit.type = "button";
-    edit.textContent = "Edit";
+    edit.append(iconElement("pencil"));
+    edit.title = "Edit";
+    edit.setAttribute("aria-label", "Edit");
     edit.addEventListener("click", () => {
       parent.closest<HTMLElement>(".message")?.classList.remove("message-actions-open");
       setEditTarget({ messageId: message.id, sender, body });
     });
-    actions.append(edit);
+    controls.append(edit);
   }
 
   const reply = document.createElement("button");
   reply.className = "message-action";
   reply.type = "button";
-  reply.textContent = "Reply";
+  reply.append(iconElement("corner-up-left"));
+  reply.title = "Reply";
+  reply.setAttribute("aria-label", "Reply");
   reply.addEventListener("click", () => {
     parent.closest(".message")?.classList.remove("message-actions-open");
     setReplyTarget(replyReferenceForMessage(message, sender, body || "Encrypted message"));
   });
-  actions.append(reply);
+  controls.append(reply);
 
   const menu = document.createElement("button");
   menu.className = "message-action message-action-menu";
@@ -3827,8 +4220,9 @@ function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sen
     const rect = menu.getBoundingClientRect();
     openMessageContextMenu({ message, article, sender, body, editable }, rect.right, rect.bottom + 4);
   });
-  actions.append(menu);
-  parent.prepend(actions);
+  controls.append(menu);
+  actions.append(controls);
+  parent.append(actions);
   renderIcons(actions);
 }
 
@@ -3854,6 +4248,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!messageContextMenu.hidden && event.target instanceof Node && !messageContextMenu.contains(event.target)) closeMessageContextMenu();
   if (!navigationContextMenu.hidden && event.target instanceof Node && !navigationContextMenu.contains(event.target)) closeNavigationContextMenu();
   if (!emojiPicker.hidden && event.target instanceof Node && !emojiPicker.contains(event.target) && event.target !== emojiToggle) closeEmojiPicker();
+  if (!gifPicker.hidden && event.target instanceof Node && !gifPicker.contains(event.target) && event.target !== gifToggle) closeGifPicker();
   if (!emojiSuggestions.hidden && event.target instanceof Node && !emojiSuggestions.contains(event.target) && event.target !== messageInput) hideEmojiSuggestions();
   if (!mentionSuggestions.hidden && event.target instanceof Node && !mentionSuggestions.contains(event.target) && event.target !== messageInput) hideMentionSuggestions();
 });
@@ -3953,9 +4348,10 @@ function appendEncryptedMedia(
   const isVisual = isImage || isVideo;
   const isSpoiler = content.spoiler === true;
   const kindLabel = isText ? "text file" : fileMessage ? "file" : isVideo ? "video" : "image";
-  const size = typeof info.size === "number" && Number.isFinite(info.size) ? ` · ${fileSizeLabel(info.size)}` : "";
+  const attachmentSize = typeof info.size === "number" && Number.isFinite(info.size) ? info.size : undefined;
+  const size = attachmentSize === undefined ? "" : ` · ${fileSizeLabel(attachmentSize)}`;
   const card = document.createElement("div");
-  card.className = `encrypted-media-card ${isVisual ? "media-attachment-card" : "file-attachment-card"}`;
+  card.className = `encrypted-media-card ${isVisual ? "media-attachment-card" : "file-attachment-card"}${isText ? " text-attachment-card" : ""}`;
   card.dataset.mediaFilename = filename;
   if (album) {
     card.dataset.mediaAlbumId = album.id;
@@ -3966,7 +4362,7 @@ function appendEncryptedMedia(
   let loadPromise: Promise<Blob | undefined> | undefined;
   let mediaProgress: HTMLProgressElement | undefined;
   let mediaStatus: HTMLElement | undefined;
-  let openTextAfterLoad = false;
+  const shouldAutoPreviewText = isText && attachmentSize !== undefined && attachmentSize <= MAX_AUTO_TEXT_PREVIEW_BYTES;
 
   const renderPending = (failure?: string) => {
     card.replaceChildren();
@@ -4031,8 +4427,6 @@ function appendEncryptedMedia(
     const meta = document.createElement("span");
     meta.textContent = revealed ? `${isText ? textLanguage(filename, mimeType) : kindLabel}${size}` : "Hidden until revealed";
     copy.append(title, meta);
-    row.append(mark, copy);
-    card.append(row);
     const actions = document.createElement("div");
     actions.className = "file-attachment-actions";
     if (!revealed) {
@@ -4047,26 +4441,36 @@ function appendEncryptedMedia(
       });
       actions.append(reveal);
     } else {
-      const load = document.createElement("button");
-      load.type = "button";
-      load.className = "secondary";
-      load.textContent = isText ? "Preview" : "Prepare";
-      load.addEventListener("click", () => void loadMedia(isText));
-      actions.append(load);
+      if (!isText || !shouldAutoPreviewText) {
+        const load = document.createElement("button");
+        load.type = "button";
+        load.className = "secondary";
+        load.textContent = isText ? "Load preview" : "Prepare";
+        load.addEventListener("click", () => void loadMedia());
+        actions.append(load);
+      }
     }
     if (failure) {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "secondary";
       retry.textContent = "Retry";
-      retry.addEventListener("click", () => void loadMedia(isText));
+      retry.addEventListener("click", () => void loadMedia());
       actions.append(retry);
     }
-    card.append(actions);
+    row.append(mark, copy, actions);
+    card.append(row);
+    if (isText && revealed) {
+      const previewState = document.createElement("div");
+      previewState.className = "text-attachment-state";
+      previewState.textContent = failure
+        ? "Preview unavailable"
+        : shouldAutoPreviewText ? "Preview will load when visible" : "Preview not loaded";
+      card.append(previewState);
+    }
   };
 
-  const loadMedia = (openText = false): Promise<Blob | undefined> => {
-    openTextAfterLoad ||= openText;
+  const loadMedia = (): Promise<Blob | undefined> => {
     if (loadPromise) return loadPromise;
     if (!card.isConnected) return Promise.resolve(undefined);
     const activeCryptoClient = cryptoClient;
@@ -4075,6 +4479,8 @@ function appendEncryptedMedia(
     const requestController = new AbortController();
     pendingMediaLoads.set(card, requestController);
     if (mediaStatus) mediaStatus.textContent = "Loading…";
+    const textStatus = card.querySelector<HTMLElement>(".text-attachment-state");
+    if (textStatus) textStatus.textContent = "Decrypting secure preview…";
     if (mediaProgress) mediaProgress.hidden = false;
     for (const button of card.querySelectorAll<HTMLButtonElement>("button")) button.disabled = true;
     loadPromise = (async () => {
@@ -4113,18 +4519,44 @@ function appendEncryptedMedia(
           copy.append(title, meta);
           const actions = document.createElement("div");
           actions.className = "file-attachment-actions";
-          if (isText) {
-            const preview = document.createElement("button");
-            preview.type = "button";
-            preview.className = "secondary";
-            preview.textContent = "Preview";
-            preview.addEventListener("click", () => void openTextViewer(blob, filename, mimeType));
-            actions.append(preview);
-          }
           appendDownloadButton(actions, url, filename);
           row.append(mark, copy, actions);
           card.append(row);
-          if (openTextAfterLoad && isText) void openTextViewer(blob, filename, mimeType);
+          if (isText) {
+            const preview = await readTextPreview(blob);
+            const fullPreviewText = preview.truncated
+              ? preview.text.replace(/\n\n\[Preview truncated after \d+ KiB\.\]$/, "")
+              : preview.text;
+            const excerpt = textPreviewExcerpt(fullPreviewText);
+            const previewPanel = document.createElement("div");
+            previewPanel.className = "text-attachment-preview";
+            previewPanel.tabIndex = 0;
+            previewPanel.setAttribute("role", "region");
+            previewPanel.setAttribute("aria-label", `${filename || "Text file"} preview excerpt`);
+            const previewText = document.createElement("pre");
+            previewText.className = "text-attachment-preview-content";
+            renderHighlightedCode(previewText, excerpt.text, textLanguage(filename, mimeType));
+            previewPanel.append(previewText);
+            const footer = document.createElement("div");
+            footer.className = "text-attachment-footer";
+            const more = document.createElement("span");
+            more.className = "text-attachment-more";
+            more.textContent = preview.truncated
+              ? "Preview limited to first 512 KiB"
+              : excerpt.remainingCharacters > 0
+                ? `${excerpt.remainingCharacters.toLocaleString()} ${excerpt.remainingCharacters === 1 ? "character" : "characters"} more`
+                : `${fullPreviewText.length.toLocaleString()} characters · complete file`;
+            const expand = document.createElement("button");
+            expand.type = "button";
+            expand.className = "text-attachment-expand";
+            expand.title = "Expand text preview";
+            expand.setAttribute("aria-label", "Expand text preview");
+            expand.append(iconElement("expand"));
+            expand.addEventListener("click", () => void openTextViewer(blob, filename, mimeType));
+            footer.append(more, expand);
+            card.append(previewPanel, footer);
+            renderIcons(expand);
+          }
         } else {
           const preview = document.createElement(isVideo ? "video" : "img");
           preview.className = `media-preview${isVideo ? " video" : ""}`;
@@ -4196,7 +4628,7 @@ function appendEncryptedMedia(
   mediaCardControllers.set(card, controller);
   renderPending();
   parent.append(card);
-  if (isVisual && revealed) registerAutoMediaLoad(card, async () => { await loadMedia(); });
+  if ((isVisual || shouldAutoPreviewText) && revealed) registerAutoMediaLoad(card, async () => { await loadMedia(); });
   return card;
 }
 
@@ -4391,9 +4823,10 @@ function renderMessage(
       mentionRoleNames,
       customEmoji: customEmojiAssets,
       roomReferences: roomReferenceMap(),
+      hideBareLinks: embeddedImageLinks(effectiveEmbeds),
       onRoomReference: (channelId) => void selectChannel(channelId),
     });
-    for (const embed of effectiveEmbeds) appendSafeEmbed(messageContent, embed);
+    for (const embed of effectiveEmbeds) appendSafeEmbed(messageContent, embed, openExternalImageViewer);
   }
   if (edited) {
     const editedLabel = document.createElement("span");
@@ -4463,6 +4896,54 @@ function renderMessage(
   if (pinnedMessageIds.has(message.id)) applyPinEvent(message.id, "add");
   renderMessageReactions(message.id);
   return true;
+}
+
+function refreshRenderedMessageMarkdown() {
+  const conversationId = selectedConversationId;
+  if (!conversationId) return;
+  const scrollAnchor = captureScrollAnchor();
+  for (const message of loadedMessages) {
+    const article = messagesPanel.querySelector<HTMLElement>(`.message[data-message-id="${CSS.escape(message.id)}"]`);
+    const previousMarkdown = article?.querySelector<HTMLElement>(".markdown-body");
+    if (!article || !previousMarkdown || redactedMessageIds.has(message.id)) continue;
+    const decrypted = cachedDecryptedMessage(conversationId, message.id);
+    if (!decrypted) continue;
+
+    const content = decrypted.content;
+    const edited = editedMessageBodies.get(message.id);
+    const body = edited?.body ?? (typeof content.body === "string" ? content.body : "");
+    const mediaMessage = mediaAttachmentsFromContent(content).length > 0;
+    if ((mediaMessage && !body) || (content.msgtype !== "m.text" && content.msgtype !== "m.notice" && !body)) continue;
+
+    const storedEmbeds = normalizeStoredEmbeds(content.embeds);
+    const embeds = externalPreviewsEnabled()
+      ? edited?.embeds ?? (storedEmbeds.length > 0 ? storedEmbeds : extractEmbeds(body))
+      : [];
+    const mentions = edited?.mentions ?? (Array.isArray(content.mentions)
+      ? content.mentions.filter((value): value is string => typeof value === "string")
+      : []);
+    const roleMentions = edited?.roleMentions ?? (Array.isArray(content.roleMentions)
+      ? content.roleMentions.filter((value): value is string => typeof value === "string")
+      : []);
+    const mentionNames = new Set(selectedMembers.filter((member) => mentions.includes(member.userId)).map((member) => member.username.toLowerCase()));
+    const mentionRoleNames = new Set(roleMentions
+      .map((roleId) => serverRoles.find((role) => role.id === roleId))
+      .filter((role): role is CustomServerRole => role !== undefined && role.systemKey !== "owner")
+      .map(serverRoleSlug));
+    const replacement = document.createElement("div");
+    appendMarkdown(replacement, body, {
+      mentionUsernames: mentionNames,
+      mentionRoleNames,
+      customEmoji: customEmojiAssets,
+      roomReferences: roomReferenceMap(),
+      hideBareLinks: embeddedImageLinks(embeds),
+      onRoomReference: (channelId) => void selectChannel(channelId),
+    });
+    const nextMarkdown = replacement.firstElementChild;
+    if (nextMarkdown) previousMarkdown.replaceWith(nextMarkdown);
+  }
+  applyMessageSearch();
+  restoreScrollAnchor(scrollAnchor ?? undefined);
 }
 
 async function withMessageRenderLock<T>(operation: () => Promise<T>) {
@@ -4669,7 +5150,33 @@ async function refreshMessages(options: { forceScrollToBottom?: boolean; initial
         syncPromise,
       ]);
       if (selection !== selectionToken || conversationId !== selectedConversationId || activeCryptoClient !== cryptoClient) return;
-      loadedMessages = sortMessages(result.messages).slice(-MAX_RENDERED_MESSAGES);
+      const latestPage = sortMessages(result.messages).slice(-MAX_RENDERED_MESSAGES);
+      if (canReconcileLatestMessagePage(loadedMessages, latestPage)) {
+        const currentIds = new Set(loadedMessages.map((message) => message.id));
+        const newMessages = latestPage.filter((message) => !currentIds.has(message.id));
+        let trimmed = 0;
+        if (newMessages.length > 0) {
+          trimmed = mergeMessageWindow(newMessages, "newer").trimmed;
+        }
+        nextBefore = loadedMessages.length > latestPage.length
+          ? loadedMessages[0]?.serverSequence ?? result.nextBefore
+          : result.nextBefore;
+        nextAfter = null;
+        observeLatestMessages(latestPage);
+        lastMessagesKey = messagesKey();
+        if (newMessages.length > 0) {
+          if (trimmed > 0) await renderMessageHistory({ scrollToBottom: true });
+          else await appendNewMessages(newMessages, conversationId, activeCryptoClient);
+          scrollToLatest();
+        } else {
+          scrollToLatest();
+        }
+        if (currentUser) void writeCachedMessages(currentUser.id, conversationId, loadedMessages);
+        clearUnread({ clearMentionHighlights: false });
+        return;
+      }
+
+      loadedMessages = latestPage;
       nextBefore = result.nextBefore;
       nextAfter = null;
       observeLatestMessages(loadedMessages);
@@ -4925,6 +5432,7 @@ composer.addEventListener("submit", async (event) => {
   hideMentionSuggestions();
   hideEmojiSuggestions();
   closeEmojiPicker();
+  closeGifPicker();
   const uploadController = attachmentsToSend.length > 0 ? new AbortController() : undefined;
   uploadAbortController = uploadController;
   let textSent = false;
@@ -5123,6 +5631,18 @@ messageInput.addEventListener("input", () => {
 messageInput.addEventListener("input", renderInputSuggestions);
 messageInput.addEventListener("paste", (event) => {
   const pastedText = event.clipboardData?.getData("text/plain") ?? "";
+  const images = clipboardImageFiles(event.clipboardData);
+  if (images.length > 0) {
+    if (editTarget) {
+      setStatus("Images cannot be pasted while editing a message.", true);
+    } else if (photoInput.disabled) {
+      setStatus("You cannot upload images in this conversation right now.", true);
+    } else {
+      const added = addComposerFiles(images);
+      if (added > 0) setStatus(`${added} pasted image${added === 1 ? "" : "s"} added for encrypted upload.`);
+    }
+    if (!pastedText) event.preventDefault();
+  }
   if (pastedText.length <= MAX_MESSAGE_TEXT_LENGTH) return;
   event.preventDefault();
   if (editTarget) {
@@ -5136,6 +5656,36 @@ messageInput.addEventListener("paste", (event) => {
 
 photoInput.addEventListener("change", () => addComposerFiles([...photoInput.files ?? []]));
 
+document.addEventListener("dragenter", (event) => {
+  if (!hasFileDrag(event.dataTransfer)) return;
+  event.preventDefault();
+  if (!(event.target instanceof Node) || !chatContent.contains(event.target) || !canDropComposerFiles()) return;
+  fileDropOverlay.hidden = false;
+  chatContent.classList.add("file-drop-active");
+});
+
+document.addEventListener("dragover", (event) => {
+  if (!hasFileDrag(event.dataTransfer)) return;
+  // Prevent the browser from navigating to dropped files, even outside the chat target.
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  if (event.target instanceof Node && chatContent.contains(event.target) && canDropComposerFiles()) {
+    fileDropOverlay.hidden = false;
+    chatContent.classList.add("file-drop-active");
+  }
+});
+
+document.addEventListener("dragleave", (event) => {
+  if (!hasFileDrag(event.dataTransfer)) return;
+  if (event.relatedTarget instanceof Node && chatContent.contains(event.relatedTarget)) return;
+  const bounds = chatContent.getBoundingClientRect();
+  if (event.clientX >= bounds.left && event.clientX <= bounds.right
+    && event.clientY >= bounds.top && event.clientY <= bounds.bottom) return;
+  resetFileDropOverlay();
+});
+
+document.addEventListener("drop", handleFileDrop);
+
 clearAttachment.addEventListener("click", () => {
   uploadAbortController?.abort();
   clearComposerAttachments();
@@ -5144,6 +5694,25 @@ clearAttachment.addEventListener("click", () => {
 cancelReply.addEventListener("click", clearReplyTarget);
 cancelEdit.addEventListener("click", () => clearEditTarget());
 emojiToggle.addEventListener("click", toggleEmojiPicker);
+gifToggle.addEventListener("click", toggleGifPicker);
+gifPickerClose.addEventListener("click", () => {
+  closeGifPicker();
+  gifToggle.focus();
+});
+gifPickerSearch.addEventListener("input", scheduleGifSearch);
+gifPickerSearch.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  closeGifPicker();
+  gifToggle.focus();
+});
+  gifPickerProvider.addEventListener("change", () => {
+    const provider = gifProviderConfiguration?.providers.find((candidate) => candidate.id === gifPickerProvider.value);
+    if (!provider) return;
+    gifPickerProviderId = provider.id;
+    renderGifPickerAttribution(provider);
+    scheduleGifSearch();
+});
 emojiPickerSearch.addEventListener("input", () => {
   if (emojiPickerSearch.value.trim()) emojiPickerCategory = emojiPickerCategories[0].id;
   emojiPickerGrid.scrollTop = 0;
@@ -5223,7 +5792,8 @@ document.addEventListener("keydown", (event) => {
     conversationSearch.select();
   }
   if (event.key === "Escape") {
-    if (!emojiPicker.hidden) closeEmojiPicker();
+    if (!gifPicker.hidden) closeGifPicker();
+    else if (!emojiPicker.hidden) closeEmojiPicker();
     else if (!emojiSuggestions.hidden) hideEmojiSuggestions();
     else if (!mentionSuggestions.hidden) hideMentionSuggestions();
     else if (editTarget && document.activeElement === messageInput) clearEditTarget();

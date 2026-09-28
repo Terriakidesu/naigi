@@ -73,7 +73,7 @@
                  <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true"><i data-lucide="info"></i></button>
             </div>
           </header>
-          <div class="chat-content">
+          <div id="chat-content" class="chat-content">
               <div id="messages" class="messages" aria-label="Messages"><button id="load-older-button" class="load-older-button" type="button" hidden>Load older messages</button></div>
             <div id="outbox-notice" class="outbox-notice" hidden><span id="outbox-label"></span><button id="outbox-retry" class="secondary" type="button">Retry now</button></div>
             <div id="typing-indicator" class="typing-indicator" hidden role="status" aria-live="polite"></div>
@@ -82,29 +82,43 @@
              <div id="reply-preview" class="reply-preview" hidden><span id="reply-preview-text"></span><button id="reply-mention-toggle" class="reply-mention-toggle" type="button" aria-pressed="true" hidden></button><button id="cancel-reply" class="icon-button" type="button" title="Cancel reply" aria-label="Cancel reply"><i data-lucide="x"></i></button></div>
             <div id="mention-suggestions" class="mention-suggestions" hidden role="listbox" aria-label="Mention suggestions"></div>
             <div id="emoji-suggestions" class="emoji-suggestions" hidden role="listbox" aria-label="Emoji suggestions"></div>
-            <div id="emoji-picker" class="emoji-picker" hidden role="dialog" aria-label="Emoji picker">
-              <div class="emoji-picker-toolbar">
-                <input id="emoji-picker-search" class="emoji-picker-search" type="search" placeholder="Search emojis" aria-label="Search emojis" autocomplete="off">
-                <div id="emoji-category-tabs" class="emoji-category-tabs" role="tablist" aria-label="Emoji categories"></div>
+             <div id="emoji-picker" class="emoji-picker" hidden role="dialog" aria-label="Emoji picker">
+               <div class="emoji-picker-toolbar">
+                 <input id="emoji-picker-search" class="emoji-picker-search" type="search" placeholder="Search emojis" aria-label="Search emojis" autocomplete="off">
+                 <div id="emoji-category-tabs" class="emoji-category-tabs" role="tablist" aria-label="Emoji categories"></div>
+               </div>
+               <div id="emoji-picker-grid" class="emoji-picker-grid"></div>
+             </div>
+              <div id="gif-picker" class="gif-picker" hidden role="dialog" aria-label="GIF picker">
+               <div class="gif-picker-toolbar">
+                 <select id="gif-picker-provider" aria-label="GIF provider"></select>
+                 <input id="gif-picker-search" type="search" placeholder="Search GIFs" aria-label="Search GIFs" autocomplete="off" maxlength="100">
+                 <button id="gif-picker-close" class="icon-button" type="button" title="Close GIF picker" aria-label="Close GIF picker"><i data-lucide="x"></i></button>
+               </div>
+                <p id="gif-picker-notice" class="gif-picker-notice" role="status"></p>
+                <div id="gif-picker-results" class="gif-picker-results" role="listbox" aria-label="GIF search results"></div>
+                <a id="gif-picker-attribution" class="gif-picker-attribution" href="https://klipy.com" target="_blank" rel="noreferrer noopener nofollow" hidden>Powered by KLIPY</a>
               </div>
-              <div id="emoji-picker-grid" class="emoji-picker-grid"></div>
-            </div>
-            <div class="composer-box">
+              <div id="attachment-preview" class="attachment-preview" hidden>
+                <div id="attachment-preview-list" class="attachment-preview-list"></div>
+                <div class="attachment-preview-footer"><span id="attachment-label"></span><progress id="upload-progress" max="100" value="0" hidden aria-label="Upload progress"></progress><button id="clear-attachment" class="secondary" type="button" title="Remove all attachments">Clear all</button></div>
+              </div>
+              <div class="composer-box">
               <button id="jump-latest-button" class="jump-latest-button" type="button" hidden></button>
               <label class="file-button" title="Attach encrypted file, image, or video"><i data-lucide="paperclip"></i><input id="photo-input" type="file" aria-label="Attach encrypted file, image, or video" accept="*/*" multiple></label>
               <div class="composer-input-wrap">
                 <div id="message-input-rendered" class="message-input-rendered" aria-hidden="true"></div>
                  <textarea id="message-input" rows="1" maxlength="4000" placeholder="Message this conversation" aria-label="Message this conversation"></textarea>
+               </div>
+               <button id="gif-toggle" class="composer-icon-button gif-toggle" type="button" title="Search GIFs" aria-label="Search GIFs" aria-expanded="false">GIF</button>
+               <button id="emoji-toggle" class="composer-icon-button" type="button" title="Insert emoji" aria-label="Insert emoji" aria-expanded="false"><i data-lucide="smile"></i></button>
+               <button id="send-button" class="send-button" type="submit" title="Send encrypted message" aria-label="Send encrypted message"><i data-lucide="send"></i></button>
               </div>
-              <button id="emoji-toggle" class="composer-icon-button" type="button" title="Insert emoji" aria-label="Insert emoji" aria-expanded="false"><i data-lucide="smile"></i></button>
-              <button id="send-button" class="send-button" type="submit" title="Send encrypted message" aria-label="Send encrypted message"><i data-lucide="send"></i></button>
-            </div>
-             <div id="attachment-preview" class="attachment-preview" hidden>
-               <div id="attachment-preview-list" class="attachment-preview-list"></div>
-               <div class="attachment-preview-footer"><span id="attachment-label"></span><progress id="upload-progress" max="100" value="0" hidden aria-label="Upload progress"></progress><button id="clear-attachment" class="secondary" type="button" title="Remove all attachments">Clear all</button></div>
+             </form>
+             <div id="file-drop-overlay" class="file-drop-overlay" hidden aria-live="polite">
+               <div class="file-drop-message"><i data-lucide="upload"></i><strong>Drop files to attach</strong><span>Files are encrypted before upload.</span></div>
              </div>
-           </form>
-          </div>
+           </div>
           <aside class="details-panel">
             <div class="details-heading"><strong>Conversation details</strong><button id="details-close" class="icon-button details-close" type="button" title="Close conversation details" aria-label="Close conversation details"><i data-lucide="x"></i></button></div>
              <div class="privacy-card"><span class="privacy-icon" aria-hidden="true"><i data-lucide="shield-check"></i></span><div><strong>End-to-end encrypted</strong><span>Only devices with the room keys can decrypt messages.</span></div></div>

@@ -13,6 +13,11 @@ function integerEnvironment(name: string, fallback: number, min: number, max: nu
 }
 
 type TwitterPreviewProvider = "fx" | "syndication";
+export type GifSearchProviderId = "klipy" | "giphy";
+export type GifProviderConfig = {
+  id: GifSearchProviderId;
+  apiKey: string;
+};
 
 function twitterPreviewProviders() {
   const value = Bun.env.TWITTER_PREVIEW_PROVIDERS;
@@ -45,6 +50,24 @@ function twitterPreviewApiUrl() {
   return value;
 }
 
+function publicProviderKey(name: string, maxLength = 512) {
+  const value = Bun.env[name]?.trim();
+  if (!value) return undefined;
+  if (value.length > maxLength || /[\u0000-\u001f\u007f\s]/.test(value)) {
+    throw new Error(`${name} must be a non-whitespace public browser API key up to ${maxLength} characters`);
+  }
+  return value;
+}
+
+function gifProviders(): GifProviderConfig[] {
+  const providers: GifProviderConfig[] = [];
+  const klipyApiKey = publicProviderKey("KLIPY_API_KEY");
+  if (klipyApiKey) providers.push({ id: "klipy", apiKey: klipyApiKey });
+  const giphyApiKey = publicProviderKey("GIPHY_API_KEY");
+  if (giphyApiKey) providers.push({ id: "giphy", apiKey: giphyApiKey });
+  return providers;
+}
+
 if (!["development", "test", "production"].includes(environment)) {
   throw new Error("NODE_ENV must be development, test, or production");
 }
@@ -59,6 +82,7 @@ export const config = {
   profileImagesDirectory: Bun.env.PROFILE_IMAGES_DIR ?? "./data/profile-images",
   twitterPreviewApiUrl: twitterPreviewApiUrl(),
   twitterPreviewProviders: twitterPreviewProviders(),
+  gifProviders: gifProviders(),
   sessionTtlSeconds: integerEnvironment("SESSION_TTL_SECONDS", 60 * 60 * 24 * 30, 300, 60 * 60 * 24 * 365),
   maxProfileImageBytes: 5 * 1024 * 1024,
   maxEncryptedMessageBytes: integerEnvironment(

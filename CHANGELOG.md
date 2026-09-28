@@ -2,7 +2,30 @@
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Added
+
+- The composer accepts pasted clipboard images and sends them through the existing encrypted attachment flow.
+- The GIF picker opens with trending Klipy or GIPHY results and supports search; selected GIFs are added as encrypted attachments, and pasted Tenor, Klipy, and GIPHY links can render safe provider previews.
+
+### Changed
+
+- Message actions now use a compact Discord-style hover pill above the message edge instead of taking an in-flow divider row.
+- Account settings now use the workspace rail, sidebar, header, and mobile drawer visual shell used by chat.
+- External destinations now use a polished confirmation dialog with the full URL and explicit Cancel/Open actions.
+- Text attachments now show compact, scrollable inline previews with character counts and a single expand-to-view action.
+- Recognized plaintext code attachments now receive safe client-side syntax highlighting in both inline and expanded previews.
+- Files can be dragged into the chat area and are queued through the existing encrypted attachment flow.
+
+### Fixed
+
+- Encrypted media download controls now stay positioned over the displayed image or video instead of the wider attachment card.
+- Tenor short `.gif` links now load as images instead of being placed in iframes that Tenor blocks; unavailable links leave a clear open-on-Tenor fallback.
+- Direct image URLs are hidden when rendered as embeds; images align with message text and open in a screen-fitted viewer without external-link confirmation.
+- Cached chat history now stays mounted when confirmed by the server, and encrypted metadata updates refresh message text without restarting embedded media.
+
+### Security
+
+- GIF search terms and GIF downloads go directly between the browser and configured providers, while Naigi stores only the resulting encrypted attachment and encrypted preview metadata. The retired Tenor API is not called.
 
 ## [0.16.0] - 2026-09-28
 

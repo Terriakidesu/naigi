@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isPlaintextAttachment, readTextPreview, textLanguage } from "./text-file";
+import { isPlaintextAttachment, readTextPreview, textLanguage, textPreviewExcerpt } from "./text-file";
 
 describe("plaintext attachments", () => {
   test("recognizes source, markdown, and text files", () => {
@@ -12,6 +12,8 @@ describe("plaintext attachments", () => {
   test("derives a safe display language", () => {
     expect(textLanguage("app.ts", "application/octet-stream")).toBe("ts");
     expect(textLanguage("README", "text/markdown")).toBe("markdown");
+    expect(textLanguage("payload", "application/json")).toBe("json");
+    expect(textLanguage("script", "application/javascript")).toBe("javascript");
   });
 
   test("bounds previews without interpreting their contents", async () => {
@@ -19,5 +21,11 @@ describe("plaintext attachments", () => {
     expect(result.truncated).toBe(true);
     expect(result.text).toContain("<script>");
     expect(result.text).toContain("Preview truncated");
+  });
+
+  test("creates a short line-aware excerpt and counts the remaining characters", () => {
+    const result = textPreviewExcerpt("alpha\nbeta\ngamma", 8);
+    expect(result).toEqual({ text: "alpha\n…", remainingCharacters: 10 });
+    expect(textPreviewExcerpt("short text", 20)).toEqual({ text: "short text", remainingCharacters: 0 });
   });
 });

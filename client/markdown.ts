@@ -15,6 +15,7 @@ export type MarkdownRenderOptions = {
   mentionRoleNames?: Set<string>;
   customEmoji?: ReadonlyMap<string, { src: string; alt: string }>;
   roomReferences?: Map<string, string>;
+  hideBareLinks?: ReadonlySet<string>;
   onRoomReference?: (channelId: string) => void;
 };
 
@@ -257,6 +258,7 @@ function appendInline(parent: HTMLElement, value: string, options: MarkdownRende
       continue;
     }
     if (token.kind === "link") {
+      if (token.label === token.url && options.hideBareLinks?.has(token.url)) continue;
       const link = document.createElement("a");
       link.href = token.url;
       link.target = "_blank";

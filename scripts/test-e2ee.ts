@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { SQL } from "bun";
 import { applyPalette, GIFEncoder, quantize } from "gifenc";
-import { chromium, type Page } from "playwright";
+import { chromium, type Dialog, type Page } from "playwright";
 
 // I have nothing but my burger and I want nothing more
 // Use the real HTTP, PostgreSQL, Redis, WASM and IndexedDB paths. A mock key
@@ -13,6 +13,7 @@ const databaseUrl = new URL(Bun.env.DATABASE_URL ?? "postgres://localhost:5432/p
 databaseUrl.searchParams.set("options", `-c search_path=${schema}`);
 Bun.env.DATABASE_URL = databaseUrl.toString();
 Bun.env.NODE_ENV = "test";
+Bun.env.KLIPY_API_KEY = "e2ee-klipy-public-key";
 
 const { closeDatabase } = await import("../src/db/client");
 const { closeRedis } = await import("../src/redis/client");
@@ -89,6 +90,63 @@ try {
     const output = new Uint8Array(bytes.byteLength);
     output.set(bytes);
     return output;
+  }
+
+  const klipyPreviewUrl = "https://static.klipy.com/ii/e2ee/preview.gif";
+  const klipyMediaUrl = "https://static.klipy.com/ii/e2ee/full.gif";
+  const klipySearchPayload = JSON.stringify({
+    result: true,
+    data: { data: [{
+      id: "e2ee-wave",
+      slug: "test-wave",
+      title: "Test wave",
+      file: {
+        xs: { gif: { url: klipyPreviewUrl, size: animatedGif().byteLength } },
+        md: { gif: { url: klipyMediaUrl, size: animatedGif().byteLength } },
+      },
+    }] },
+  });
+  const klipyItemPayload = JSON.stringify({
+    result: true,
+    data: { data: [{
+      id: "e2ee-wave",
+      slug: "test-wave",
+      title: "Test wave",
+      file: {
+        xs: { gif: { url: klipyPreviewUrl, size: animatedGif().byteLength } },
+        md: { gif: { url: klipyMediaUrl, size: animatedGif().byteLength } },
+      },
+    }] },
+  });
+  for (const context of [alice, bob]) {
+    await context.route("https://tenor.com/uzlAQImG5tJ.gif", (route) => route.fulfill({
+      contentType: "image/gif",
+      body: Buffer.from(animatedGif()),
+    }));
+    await context.route("https://tenor.com/e2ee-missing.gif", (route) => route.fulfill({
+      status: 404,
+      contentType: "text/plain",
+      body: "Not found",
+    }));
+    await context.route("https://media.example.test/**", (route) => route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from(onePixelPng),
+    }));
+    await context.route("https://media-fail.example.test/**", (route) => route.fulfill({
+      status: 404,
+      contentType: "text/plain",
+      body: "Not found",
+    }));
+    await context.route("https://api.klipy.com/api/v1/**", (route) => route.fulfill({
+      contentType: "application/json",
+      headers: { "access-control-allow-origin": "*" },
+      body: route.request().url().includes("/gifs/items") ? klipyItemPayload : klipySearchPayload,
+    }));
+    await context.route("https://static.klipy.com/ii/e2ee/**", (route) => route.fulfill({
+      contentType: "image/gif",
+      headers: { "access-control-allow-origin": "*" },
+      body: Buffer.from(animatedGif()),
+    }));
   }
 
   await a.goto(`${origin}/settings`);
@@ -278,16 +336,83 @@ try {
   }
 
   async function send(sender: Page, recipient: Page, body: string) {
+    const senderMessageCount = await sender.locator(".message").count();
+    const recipientMessageCount = await recipient.locator(".message").count();
     await sender.locator("#message-input").fill(body);
     await sender.locator("#send-button").click();
-    await sender.locator(".message").filter({ hasText: body }).waitFor({ timeout: 20_000 });
-    await recipient.locator(".message").filter({ hasText: body }).waitFor({ timeout: 20_000 });
+    await sender.locator(".message").nth(senderMessageCount).waitFor({ timeout: 20_000 });
+    await recipient.locator(".message").nth(recipientMessageCount).waitFor({ timeout: 20_000 });
   }
 
   await a.goto(`${origin}/channels/@me/${room}`);
   await a.locator("#message-input:enabled").waitFor({ timeout: 20_000 });
   await a.locator("#member-list .member-avatar img").waitFor({ state: "attached", timeout: 20_000 });
   await send(a, b, "Alice to Bob: decrypted through the real transport");
+  const gifProviders = await request(a, "/v1/gifs/providers", undefined, "GET");
+  assert.equal(gifProviders.status, 200, JSON.stringify(gifProviders.body));
+  assert.deepEqual(gifProviders.body.providers.map((provider: { id: string }) => provider.id), ["klipy"]);
+  await send(a, b, "Tenor short link preview https://tenor.com/uzlAQImG5tJ.gif");
+  const shortTenorGif = b.locator(".message").filter({ hasText: "Tenor short link preview" }).locator(".gif-embed-card");
+  await shortTenorGif.locator(".embed-media-image").waitFor({ timeout: 20_000 });
+  assert.equal(await shortTenorGif.locator(".gif-embed-frame").count(), 0, "Tenor short GIF links render as images, not blocked iframes");
+  assert.equal(await shortTenorGif.locator(".embed-media-image").getAttribute("src"), "https://tenor.com/uzlAQImG5tJ.gif");
+  await send(a, b, "Unavailable Tenor preview https://tenor.com/e2ee-missing.gif");
+  await b.locator(".message").filter({ hasText: "Unavailable Tenor preview" }).locator(".gif-embed-unavailable").waitFor({ timeout: 20_000 });
+  const directImageUrl = "https://media.example.test/attachments/example.png";
+  await send(a, b, `Direct URL image ${directImageUrl}`);
+  const directImageMessage = b.locator(".message").filter({ hasText: "Direct URL image" });
+  const directImage = directImageMessage.locator(".embed-media-image");
+  await directImage.waitFor({ timeout: 20_000 });
+  assert.equal((await directImageMessage.locator(".markdown-body").innerText()).includes(directImageUrl), false, "direct image URLs are hidden once rendered as embeds");
+  assert.equal(await directImageMessage.locator(".embed-media-card a").count(), 0, "embedded images are not external navigation links");
+  const directImageAlignment = await directImage.evaluate((image) => image.getBoundingClientRect().left - image.parentElement!.getBoundingClientRect().left);
+  assert.ok(Math.abs(directImageAlignment) < 1, "direct image embeds align with the left edge of the message content");
+  let imageClickWarnings = 0;
+  const handleImageDialog = async (dialog: Dialog) => {
+    if (dialog.type() === "confirm") imageClickWarnings += 1;
+    await dialog.dismiss();
+  };
+  b.on("dialog", handleImageDialog);
+  await directImage.click();
+  b.off("dialog", handleImageDialog);
+  assert.equal(imageClickWarnings, 0, "viewing the embedded image does not trigger the external-link warning");
+  await b.locator("#media-viewer").waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(await b.locator("#media-viewer .media-viewer-image").getAttribute("src"), directImageUrl, "embedded images open in the app's enlargement viewer");
+  const fitToScreen = await b.locator("#media-viewer .media-viewer-image").evaluate((image) => {
+    image.style.width = "4000px";
+    image.style.height = "4000px";
+    const { width, height } = image.getBoundingClientRect();
+    return { width, height, viewportWidth: innerWidth, viewportHeight: innerHeight };
+  });
+  assert.ok(fitToScreen.width < fitToScreen.viewportWidth && fitToScreen.height < fitToScreen.viewportHeight, "enlarged images stay within the viewport at the default fit zoom");
+  assert.equal(await b.locator("dialog.external-link-dialog").count(), 0, "image enlargement stays inside Naigi without external confirmation");
+  await b.locator("#media-viewer-close").click();
+  const failedImageUrl = "https://media-fail.example.test/attachments/missing.png";
+  await send(a, b, `Failed image link ${failedImageUrl}`);
+  const failedImageLink = b.locator(".message").filter({ hasText: "Failed image link" }).locator(".embed-media-card a.embed-link");
+  await failedImageLink.waitFor({ timeout: 20_000 });
+  await failedImageLink.click();
+  const externalLinkDialog = b.locator("dialog.external-link-dialog");
+  await externalLinkDialog.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(await externalLinkDialog.locator("h2").innerText(), /leaving Naigi/i);
+  assert.equal(await externalLinkDialog.locator(".external-link-address").textContent(), failedImageUrl);
+  await externalLinkDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await externalLinkDialog.waitFor({ state: "detached", timeout: 20_000 });
+  await b.evaluate(() => {
+    document.documentElement.dataset.openedExternalLink = "";
+    window.open = ((url: string | URL) => {
+      document.documentElement.dataset.openedExternalLink = String(url);
+      return null;
+    }) as typeof window.open;
+  });
+  await failedImageLink.click();
+  await externalLinkDialog.waitFor({ state: "visible", timeout: 20_000 });
+  await externalLinkDialog.getByRole("button", { name: "Open link", exact: true }).click();
+  await b.waitForFunction((url) => document.documentElement.dataset.openedExternalLink === url, failedImageUrl);
+  await send(a, b, "Klipy link preview https://klipy.com/gifs/test-wave");
+  const linkedGif = b.locator(".message").filter({ hasText: "Klipy link preview" }).locator(".gif-embed-card .embed-media-image");
+  await linkedGif.waitFor({ timeout: 20_000 });
+  assert.equal(await linkedGif.getAttribute("src"), klipyMediaUrl);
   assert.equal(await b.locator(".message").filter({ hasText: "Alice to Bob: decrypted through the real transport" }).getByRole("button", { name: "Edit", exact: true }).count(), 0);
   assert.equal(await a.locator("#message-input").getAttribute("maxlength"), "4000");
   await a.locator("#message-input").evaluate((element) => {
@@ -297,16 +422,82 @@ try {
   });
   await a.locator(".attachment-item").filter({ hasText: "pasted-text" }).waitFor({ timeout: 20_000 });
   await a.locator("#clear-attachment").click();
+  await a.locator("#messages").evaluate((target) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["const dropped = true;"], "dropped-note.ts", { type: "text/plain" }));
+    target.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    if ((document.querySelector("#file-drop-overlay") as HTMLElement | null)?.hidden) throw new Error("file_drop_overlay_not_shown");
+    target.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+  });
+  await a.locator(".attachment-item").filter({ hasText: "dropped-note.ts" }).waitFor({ timeout: 20_000 });
+  assert.equal(await a.locator("#file-drop-overlay").isHidden(), true, "drop overlay closes after queuing files");
+  await a.locator("#clear-attachment").click();
+  const positioningImage = await a.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 240;
+    canvas.height = 180;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("canvas_context_unavailable");
+    context.fillStyle = "#557788";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("canvas_encode_failed")), "image/png"));
+    return [...new Uint8Array(await blob.arrayBuffer())];
+  });
+  await a.locator("#message-input").evaluate((element, bytes) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([new Uint8Array(bytes)], "clipboard-image.png", { type: "image/png" }));
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: transfer }));
+  }, positioningImage);
+  await a.locator(".attachment-item").filter({ hasText: "clipboard-image.png" }).waitFor({ timeout: 20_000 });
+  const queuedAttachmentBox = await a.locator("#attachment-preview").boundingBox();
+  const composerBox = await a.locator(".composer-box").boundingBox();
+  assert.ok(queuedAttachmentBox && composerBox && queuedAttachmentBox.y + queuedAttachmentBox.height <= composerBox.y, "queued attachments render above the message composer");
+  await a.locator("#send-button").click();
+  const pastedImage = b.locator('.encrypted-media-card[data-media-filename="clipboard-image.png"]').last();
+  await pastedImage.locator(".media-preview").waitFor({ timeout: 20_000 });
+  const imageBox = await pastedImage.locator(".media-preview").boundingBox();
+  const imageDownloadBox = await pastedImage.locator(".media-file-download").boundingBox();
+  assert.ok(imageBox && imageDownloadBox, "encrypted image preview and download action are rendered");
+  assert.ok(imageDownloadBox.x + imageDownloadBox.width <= imageBox.x + imageBox.width + 1
+    && imageDownloadBox.x + imageDownloadBox.width >= imageBox.x + imageBox.width - 12,
+  "download action stays within the displayed image's right edge");
+  assert.ok(imageDownloadBox.y + imageDownloadBox.height <= imageBox.y + imageBox.height + 1
+    && imageDownloadBox.y + imageDownloadBox.height >= imageBox.y + imageBox.height - 12,
+  "download action stays within the displayed image's bottom edge");
+  const trendingGifsLoaded = a.waitForResponse((response) => response.url().includes("/gifs/trending") && response.status() === 200);
+  await a.locator("#gif-toggle").click();
+  await a.locator("#gif-picker").waitFor({ state: "visible", timeout: 20_000 });
+  assert.deepEqual(await a.locator("#gif-picker-provider option").allTextContents(), ["Klipy"]);
+  await trendingGifsLoaded;
+  await a.locator(".gif-picker-result").first().waitFor({ timeout: 20_000 });
+  assert.equal(await a.locator("#gif-picker-search").inputValue(), "", "opening the picker shows trending GIFs before a search is entered");
+  const searchGifsLoaded = a.waitForResponse((response) => response.url().includes("/gifs/search") && response.status() === 200);
+  await a.locator("#gif-picker-search").fill("wave");
+  await searchGifsLoaded;
+  const gifResult = a.locator(".gif-picker-result").first();
+  await gifResult.waitFor({ timeout: 20_000 });
+  const gifResultBox = await gifResult.boundingBox();
+  assert.ok(gifResultBox && Math.abs(gifResultBox.width - gifResultBox.height) < 1, "GIF picker result tiles stay square while the grid scrolls");
+  await gifResult.click();
+  await a.locator(".attachment-item").filter({ hasText: "klipy-e2ee-wave.gif" }).waitFor({ timeout: 20_000 });
+  await a.locator("#send-button").click();
+  const pickerGif = b.locator('.encrypted-media-card[data-media-filename="klipy-e2ee-wave.gif"]').last();
+  await pickerGif.locator(".media-preview").waitFor({ timeout: 20_000 });
   await a.locator("#photo-input").setInputFiles([
     { name: "pixel.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) },
     { name: "second-pixel.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) },
-    { name: "example.ts", mimeType: "text/plain", buffer: Buffer.from("const answer = 42;\n") },
+    {
+      name: "example.ts",
+      mimeType: "text/plain",
+      buffer: Buffer.from(["const answer = 42;", ...Array.from({ length: 100 }, (_, index) => `const value_${index} = ${index};`)].join("\n") + "\n"),
+    },
   ]);
   assert.equal(await a.locator(".attachment-item").count(), 3);
   await a.locator("#send-button").click();
   const mediaAlbum = b.locator(".media-album").last();
   await mediaAlbum.waitFor({ timeout: 20_000 });
   await mediaAlbum.locator(".media-preview").first().waitFor({ timeout: 20_000 });
+  await mediaAlbum.locator(".media-preview").nth(1).waitFor({ timeout: 20_000 });
   const albumMessage = b.locator(".message:has(.media-album)").last();
   assert.equal(await b.locator(".message:has(.media-album)").count(), 1);
   assert.equal(await albumMessage.locator(".message-actions").count(), 1);
@@ -322,8 +513,18 @@ try {
   await b.locator("#media-viewer-close").click();
   const sourceMessage = b.locator(".message").filter({ hasText: "example.ts" }).last();
   await sourceMessage.waitFor({ timeout: 20_000 });
-  await sourceMessage.getByRole("button", { name: "Preview", exact: true }).click();
-  await b.locator(".text-file-viewer").filter({ hasText: "const answer = 42;" }).waitFor({ timeout: 20_000 });
+  const inlineTextPreview = sourceMessage.locator(".text-attachment-preview");
+  await inlineTextPreview.waitFor({ timeout: 20_000 });
+  assert.ok((await inlineTextPreview.locator(".text-attachment-preview-content").textContent())?.startsWith("const answer = 42;\n"));
+  assert.equal(await inlineTextPreview.locator(".code-token-keyword").first().textContent(), "const", "recognized source files receive syntax highlighting");
+  assert.equal(await inlineTextPreview.locator(".text-attachment-preview-content").evaluate((text) => getComputedStyle(text).whiteSpace), "pre-wrap");
+  assert.ok((await sourceMessage.locator(".text-attachment-footer").innerText()).includes("characters more"), "inline preview reports the remaining character count");
+  assert.ok(await inlineTextPreview.evaluate((preview) => preview.scrollHeight > preview.clientHeight), "inline code preview scrolls within its compact height");
+  await sourceMessage.getByRole("button", { name: "Expand text preview", exact: true }).click();
+  const fullTextViewer = b.locator(".text-file-viewer").filter({ hasText: "const answer = 42;" });
+  await fullTextViewer.waitFor({ timeout: 20_000 });
+  assert.equal(await fullTextViewer.locator(".code-token-keyword").first().textContent(), "const");
+  assert.equal(await fullTextViewer.evaluate((text) => getComputedStyle(text).whiteSpace), "pre-wrap");
   await b.locator("#media-viewer-close").click();
   await a.locator("#photo-input").setInputFiles({ name: "spoiler.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) });
   await a.locator(".attachment-item input[type=checkbox]").check();
@@ -373,6 +574,19 @@ try {
   assert.equal(await b.locator(".message-mention").filter({ hasText: "mention styling" }).count(), 0);
   assert.equal(await a.locator(".message").filter({ hasText: "Bob to Alice: independent device keys work" }).getByRole("button", { name: "Edit", exact: true }).count(), 0);
   const bobMessage = a.locator(".message").filter({ hasText: "Bob to Alice: independent device keys work" });
+  await bobMessage.hover();
+  const actionPill = await bobMessage.locator(".message-actions-controls").boundingBox();
+  const messageBody = await bobMessage.locator(".markdown-body").boundingBox();
+  assert.ok(actionPill && messageBody, "message actions and body are rendered");
+  assert.ok(actionPill.y <= messageBody.y, "the action pill stays above the message body");
+  assert.ok(actionPill.x >= messageBody.x + messageBody.width - 1, "the action pill does not cover message text");
+  await a.setViewportSize({ width: 390, height: 844 });
+  await bobMessage.hover();
+  const mobileActionPill = await bobMessage.locator(".message-actions-controls").boundingBox();
+  const mobileMessageBody = await bobMessage.locator(".markdown-body").boundingBox();
+  assert.ok(mobileActionPill && mobileMessageBody, "mobile message actions and body are rendered");
+  assert.ok(mobileActionPill.y + mobileActionPill.height <= mobileMessageBody.y, "mobile actions stay above message text");
+  await a.setViewportSize({ width: 1280, height: 720 });
   await bobMessage.hover();
   await bobMessage.getByRole("button", { name: "Reply", exact: true }).click();
   await a.locator("#reply-mention-toggle:not([hidden])").waitFor({ timeout: 20_000 });
@@ -450,7 +664,7 @@ try {
   console.log("PASS: two independent browser stores decrypt messages in both directions over the real server");
 } finally {
   await browser.close();
-  await app.stop();
+  await app.stop(true);
   closeRedis();
   await closeDatabase();
   await admin.unsafe(`drop schema ${schema} cascade`);

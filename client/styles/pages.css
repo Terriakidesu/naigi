@@ -36,13 +36,23 @@
 .text-link-button:hover { background: transparent; }
 .topbar-links { display: flex; align-items: center; gap: 1.1rem; }
 .settings-page { overflow: auto; background: var(--bg); }
-.settings-layout { display: grid; grid-template-columns: 210px minmax(0, 680px); align-items: start; gap: 1.5rem; width: min(930px, calc(100% - 2rem)); margin: 2rem auto; }
+.account-settings-page { overflow: hidden; background: var(--bg-deep); }
 .settings-nav { position: sticky; top: 1rem; display: grid; gap: 0.2rem; padding: 1rem 0.65rem; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--bg-sidebar); }
 .settings-nav .eyebrow { padding: 0 0.6rem; margin-bottom: 0.35rem; }
 .settings-nav-item { display: flex; align-items: center; gap: 0.55rem; padding: 0.65rem 0.6rem; border-radius: 9px; color: var(--text-muted); font-size: 0.78rem; text-decoration: none; }
 .settings-nav-item svg { width: 16px; height: 16px; }
 .settings-nav-item:hover, .settings-nav-item.active { color: var(--text); background: var(--bg-active); }
+.settings-chat-layout { height: 100%; }
+.settings-sidebar .settings-nav { position: static; display: grid; flex: 1 1 auto; align-content: start; min-height: 0; overflow: auto; padding: 0.8rem 0.65rem; border: 0; border-radius: 0; background: transparent; }
+.settings-sidebar .settings-nav .eyebrow { padding: 0 0.6rem; }
+.settings-sidebar-user { flex: 0 0 auto; }
+.settings-sidebar-user .self-profile-button { text-decoration: none; }
+.settings-main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; background: var(--bg); }
+.settings-header { flex: 0 0 58px; }
+.settings-header h2 { max-width: 42vw; }
+.settings-main-content { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 1.25rem; scrollbar-color: #24343b transparent; }
 .settings-content { display: grid; gap: 1rem; min-width: 0; }
+.settings-main-content > .settings-content { width: min(680px, 100%); margin: 0 auto; }
 .settings-section { padding: 1.5rem; }
 .settings-section h1, .settings-section h2 { margin: 0 0 0.55rem; }
 .settings-section h1 { font-size: 1.35rem; }

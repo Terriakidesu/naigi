@@ -931,6 +931,15 @@ export function createApp() {
     }, {
       body: t.Object({ url: t.String({ minLength: 1, maxLength: 2_048 }) }),
     })
+    .get("/v1/gifs/providers", async ({ headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      return {
+        providers: config.gifProviders,
+        maxAttachmentBytes: config.maxAttachmentBytes,
+      };
+    })
     .post("/v1/auth/register", async ({ body, set }) => {
       const username = normalizeUsername(body.username);
       const displayName = body.displayName?.trim() || body.username;

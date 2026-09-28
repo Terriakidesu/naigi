@@ -248,6 +248,19 @@ export type TwitterPreview = {
   media: Array<{ type: "image" | "video"; url: string; thumbnailUrl?: string }>;
 };
 
+export type GifProviderId = "tenor" | "klipy" | "giphy";
+export type GifSearchProviderId = Exclude<GifProviderId, "tenor">;
+
+export type GifProvider = {
+  id: GifSearchProviderId;
+  apiKey: string;
+};
+
+export type GifProviderConfiguration = {
+  providers: GifProvider[];
+  maxAttachmentBytes: number;
+};
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;

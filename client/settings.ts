@@ -52,6 +52,11 @@ const appExternalPreviews = document.getElementById("app-external-previews") as 
 const appEnterToSend = document.getElementById("app-enter-to-send") as HTMLInputElement;
 const appCompactMessages = document.getElementById("app-compact-messages") as HTMLInputElement;
 const appReducedMotion = document.getElementById("app-reduced-motion") as HTMLInputElement;
+const settingsLayout = document.getElementById("settings-layout") as HTMLElement;
+const settingsSidebar = document.getElementById("settings-sidebar") as HTMLElement;
+const mobileSidebarToggle = document.getElementById("settings-mobile-sidebar-toggle") as HTMLButtonElement;
+const mobileSidebarClose = document.getElementById("settings-mobile-sidebar-close") as HTMLButtonElement;
+const mobileSidebarBackdrop = document.getElementById("settings-mobile-sidebar-backdrop") as HTMLButtonElement;
 let currentUserId: string | undefined;
 let appPreferences: AppPreferences = { ...defaultAppPreferences };
 let recoveryCrypto: CryptoClient | undefined;
@@ -59,6 +64,16 @@ let recoveryCrypto: CryptoClient | undefined;
 function setStatus(message: string, error = false) {
   status.textContent = message;
   status.classList.toggle("error", error);
+}
+
+function setMobileSidebar(open: boolean, focusNavigation = false) {
+  settingsLayout.classList.toggle("mobile-sidebar-open", open);
+  mobileSidebarToggle.setAttribute("aria-expanded", String(open));
+  mobileSidebarToggle.setAttribute("aria-label", open ? "Hide settings navigation" : "Show settings navigation");
+  settingsSidebar.inert = window.matchMedia("(max-width: 760px)").matches && !open;
+  if (open && focusNavigation && window.matchMedia("(max-width: 760px)").matches) {
+    settingsSidebar.querySelector<HTMLElement>(".settings-nav-item.active")?.focus();
+  }
 }
 
 function renderDevices(devices: Device[]) {
@@ -126,12 +141,31 @@ function syncSettingsNav() {
   }
 }
 
+for (const link of document.querySelectorAll<HTMLAnchorElement>(".settings-nav-item")) {
+  link.addEventListener("click", () => {
+    if (window.matchMedia("(max-width: 760px)").matches) setMobileSidebar(false);
+  });
+}
+
 window.addEventListener("hashchange", syncSettingsNav);
 syncSettingsNav();
+mobileSidebarToggle.addEventListener("click", () => {
+  setMobileSidebar(!settingsLayout.classList.contains("mobile-sidebar-open"), true);
+});
+mobileSidebarClose.addEventListener("click", () => {
+  setMobileSidebar(false);
+  mobileSidebarToggle.focus();
+});
+mobileSidebarBackdrop.addEventListener("click", () => {
+  setMobileSidebar(false);
+  mobileSidebarToggle.focus();
+});
+window.addEventListener("resize", () => setMobileSidebar(settingsLayout.classList.contains("mobile-sidebar-open")));
+setMobileSidebar(settingsLayout.classList.contains("mobile-sidebar-open"));
 renderIcons();
 
 function renderAppPreferences(preferences: AppPreferences) {
-  appPreferences = applyAppPreferences(preferences);
+  appPreferences = applyAppPreferences(preferences, settingsLayout);
   appTheme.value = appPreferences.theme;
   appAccent.value = appPreferences.accent;
   appScale.value = String(appPreferences.scale);

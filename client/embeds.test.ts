@@ -36,6 +36,48 @@ describe("safe embeds", () => {
     });
   });
 
+  test("recognizes GIF provider page links without relying on the retired Tenor API", () => {
+    expect(parseSafeEmbed("https://tenor.com/view/celebrate-party-gif-123456789")).toEqual({
+      kind: "gif",
+      provider: "tenor",
+      id: "123456789",
+      url: "https://tenor.com/view/celebrate-party-gif-123456789",
+      title: "Tenor GIF",
+      embedUrl: "https://tenor.com/embed/123456789",
+    });
+    expect(parseSafeEmbed("https://tenor.com/uzlAQImG5tJ.gif")).toEqual({
+      kind: "gif",
+      provider: "tenor",
+      id: "uzlAQImG5tJ",
+      url: "https://tenor.com/uzlAQImG5tJ.gif",
+      title: "Tenor GIF",
+      mediaUrl: "https://tenor.com/uzlAQImG5tJ.gif",
+    });
+    expect(parseSafeEmbed("https://tenor.com/view/celebrate-party-gif-123456789.gif")).toEqual({
+      kind: "gif",
+      provider: "tenor",
+      id: "123456789",
+      url: "https://tenor.com/view/celebrate-party-gif-123456789.gif",
+      title: "Tenor GIF",
+      embedUrl: "https://tenor.com/embed/123456789",
+    });
+    expect(parseSafeEmbed("https://giphy.com/gifs/example-abcDEF123")).toEqual({
+      kind: "gif",
+      provider: "giphy",
+      id: "abcDEF123",
+      url: "https://giphy.com/gifs/example-abcDEF123",
+      title: "GIPHY GIF",
+      embedUrl: "https://giphy.com/embed/abcDEF123",
+    });
+    expect(parseSafeEmbed("https://klipy.com/gifs/join-us-5")).toEqual({
+      kind: "gif",
+      provider: "klipy",
+      id: "join-us-5",
+      url: "https://klipy.com/gifs/join-us-5",
+      title: "Klipy GIF",
+    });
+  });
+
   test("recognizes X status URLs for legacy compatibility", () => {
     expect(parseSafeEmbed("https://x.com/example/status/123")).toEqual({
       kind: "social",
@@ -126,6 +168,35 @@ describe("safe embeds", () => {
       authorName: "Example",
       authorHandle: "example",
       media: [{ type: "image", url: "https://pbs.twimg.com/media/image.jpg" }],
+    }]);
+  });
+
+  test("keeps provider-hosted GIF media in encrypted preview metadata only", () => {
+    expect(normalizeStoredEmbeds([{
+      kind: "gif",
+      url: "https://klipy.com/gifs/join-us-5",
+      mediaUrl: "https://static.klipy.com/ii/example/full.gif",
+      previewUrl: "https://static.klipy.com/ii/example/preview.gif",
+    }, {
+      kind: "gif",
+      url: "https://giphy.com/gifs/example-abcDEF123",
+      mediaUrl: "https://evil.example/not-a-gif.gif",
+      previewUrl: "javascript:alert(1)",
+    }])).toEqual([{
+      kind: "gif",
+      provider: "klipy",
+      id: "join-us-5",
+      url: "https://klipy.com/gifs/join-us-5",
+      title: "Klipy GIF",
+      mediaUrl: "https://static.klipy.com/ii/example/full.gif",
+      previewUrl: "https://static.klipy.com/ii/example/preview.gif",
+    }, {
+      kind: "gif",
+      provider: "giphy",
+      id: "abcDEF123",
+      url: "https://giphy.com/gifs/example-abcDEF123",
+      title: "GIPHY GIF",
+      embedUrl: "https://giphy.com/embed/abcDEF123",
     }]);
   });
 

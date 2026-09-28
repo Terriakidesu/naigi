@@ -1,4 +1,10 @@
 .composer { display: grid; gap: 0.4rem; margin: 0 1rem 1rem; }
+.file-drop-overlay { position: absolute; z-index: 20; inset: 0; display: grid; place-items: center; padding: 1rem; border: 2px dashed var(--accent); border-radius: 12px; color: var(--text); background: color-mix(in srgb, var(--bg-elevated) 92%, transparent); pointer-events: none; }
+.file-drop-overlay[hidden] { display: none; }
+.file-drop-message { display: grid; justify-items: center; gap: 0.45rem; padding: 1.3rem 1.6rem; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--bg-elevated); box-shadow: 0 10px 35px rgba(0, 0, 0, 0.25); text-align: center; }
+.file-drop-message svg { width: 1.5rem; height: 1.5rem; color: var(--accent); }
+.file-drop-message strong { font-size: 0.9rem; }
+.file-drop-message span { color: var(--text-muted); font-size: 0.7rem; }
 .outbox-notice { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; margin: 0.65rem 1.2rem; padding: 0.55rem 0.75rem; border: 1px solid rgba(168, 164, 126, 0.3); border-radius: 6px; color: #c4c9b3; background: rgba(168, 164, 126, 0.09); font-size: 0.75rem; }
 .outbox-notice button { flex: 0 0 auto; padding: 0.35rem 0.6rem; font-size: 0.7rem; }
 .typing-indicator { min-height: 1rem; margin: 0 1rem 0.25rem; color: var(--text-faint); font-size: 0.65rem; font-style: italic; }
@@ -31,6 +37,7 @@
 .composer textarea:disabled { cursor: not-allowed; opacity: 0.6; }
 .composer-icon-button { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; padding: 0; border-radius: 8px; color: var(--text-muted); background: transparent; font-size: 1.1rem; }
 .composer-icon-button:hover, .composer-icon-button[aria-expanded="true"] { color: var(--text); background: var(--bg-active); }
+.gif-toggle { font-size: 0.52rem; font-weight: 850; letter-spacing: 0.03em; }
 .file-button { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; padding: 0; border-radius: 8px; cursor: pointer; color: var(--bg-input); background: var(--text-muted); font-size: 1.1rem; font-weight: 700; }
 .file-button:hover { color: #fff; background: var(--accent); }
 .file-button:has(input:disabled) { cursor: not-allowed; opacity: 0.5; }
@@ -78,6 +85,13 @@
 .embed-media-link { display: block; }
 .embed-media-card { border: 0; background: transparent; }
 .embed-media-image, .embed-media-video { display: block; width: auto; height: auto; max-width: 100%; max-height: 360px; margin: 0 auto; }
+.embed-media-card:not(.gif-embed-card) > .embed-media-image { margin-left: 0; margin-right: 0; }
+.embed-media-card:not(.gif-embed-card) .embed-media-image { cursor: zoom-in; }
+.embed-media-card:not(.gif-embed-card) .embed-media-image:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.gif-embed-card .embed-media-link { position: relative; overflow: hidden; border-radius: 8px; background: var(--bg-deep); }
+.gif-embed-unavailable { display: block; padding: 0.65rem; color: var(--text-faint); font-size: 0.68rem; }
+.gif-embed-source { position: absolute; bottom: 0.35rem; left: 0.35rem; padding: 0.16rem 0.38rem; border-radius: 999px; color: #fff; background: rgba(8, 9, 11, 0.74); font-size: 0.56rem; font-weight: 700; letter-spacing: 0.04em; pointer-events: none; }
+.gif-embed-frame { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: var(--bg-deep); }
 .twitter-embed-card { padding: 0.7rem; }
 .twitter-embed-header { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
 .twitter-embed-avatar { width: 2rem; height: 2rem; flex: 0 0 2rem; border-radius: 50%; object-fit: cover; background: var(--bg-deep); }
@@ -111,6 +125,7 @@
 .zoom-reset:hover { color: var(--text); }
 .media-viewer-stage { display: grid; place-items: center; flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1rem; }
 .media-viewer-stage img, .media-viewer-stage video { display: block; max-width: 100%; max-height: 100%; transform-origin: center; border-radius: 5px; background: #111214; }
+.media-viewer-stage .media-viewer-image { width: auto; height: auto; max-width: calc(100vw - 2rem); max-height: calc(100dvh - 6rem); object-fit: contain; }
 .media-viewer-stage video { width: min(100%, 1100px); }
 .media-viewer-loading { color: var(--text-muted); font-size: 0.78rem; }
 .media-viewer-spoiler { display: grid; place-items: center; gap: 0.75rem; color: var(--text-muted); }
@@ -134,5 +149,15 @@
 .app-dialog .form-status { margin: 0.5rem 0; }
 .app-dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.2rem; }
 .app-dialog-actions button { min-height: 38px; padding: 0.45rem 0.8rem; font-size: 0.76rem; font-weight: 700; }
+.external-link-dialog { width: min(480px, calc(100% - 1.5rem)); padding: 1.35rem; }
+.external-link-dialog h2 { display: flex; align-items: center; gap: 0.65rem; }
+.external-link-mark { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; border: 1px solid rgba(221, 183, 112, 0.28); border-radius: 10px; color: #e5c17a; background: rgba(221, 183, 112, 0.12); font-size: 1rem; }
+.external-link-destination { display: grid; gap: 0.4rem; min-width: 0; padding: 0.8rem; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--bg-sidebar); }
+.external-link-destination-label { color: var(--text-faint); font-size: 0.6rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+.external-link-host { overflow-wrap: anywhere; color: var(--text); font-size: 0.8rem; }
+.external-link-address { display: block; max-height: 6rem; overflow: auto; padding: 0.55rem; border-radius: 5px; color: var(--text-muted); background: var(--bg-deep); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.68rem; line-height: 1.45; overflow-wrap: anywhere; user-select: text; }
+.external-link-warning { margin: 0.85rem 0 0; color: var(--text-faint); font-size: 0.7rem; line-height: 1.5; }
+.external-link-dialog .app-dialog-actions { margin-top: 1.15rem; }
+.external-link-dialog .app-dialog-actions button { min-width: 92px; }
 .checkbox-label { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: 0.5rem; }
 .checkbox-label input { width: auto; accent-color: var(--accent); }

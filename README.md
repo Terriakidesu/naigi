@@ -94,6 +94,15 @@ Then open `http://localhost:3000` on your own device. Browser storage is scoped 
 origin, so a previously remembered unlock on `localhost` cannot be reused on
 a different domain or port.
 
+### Optional GIF search
+
+Set `KLIPY_API_KEY` and/or `GIPHY_API_KEY` to enable the browser GIF picker.
+These must be browser-restricted public integration keys: authenticated browsers receive the
+configured key and contact the provider directly, so search terms and provider URLs do not pass
+through Naigi. Selected GIF bytes enter the normal browser-encrypted attachment flow. Tenor's
+retired API is not used; pasted Tenor page links remain external previews when previews are
+enabled.
+
 The liveness endpoint does not require either dependency. Readiness is available at
 `/health/ready`.
 
