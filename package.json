@@ -1,6 +1,6 @@
 {
   "name": "priv-chat",
-  "version": "0.19.1",
+  "version": "0.20.0",
   "description": "Self-hosted, privacy-focused end-to-end encrypted chat app.",
   "scripts": {
     "test": "bun test",
@@ -19,6 +19,8 @@
     "firebase": "^12.19.0",
     "gifenc": "^1.0.3",
     "gifuct-js": "^2.1.2",
+    "livekit-client": "^2.22.3",
+    "livekit-server-sdk": "^2.19.1",
     "lucide": "^1.48.0"
   },
   "devDependencies": {

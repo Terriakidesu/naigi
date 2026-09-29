@@ -1019,6 +1019,14 @@ export class ApiClient {
     return this.get<{ conversations: Conversation[] }>("/v1/conversations");
   }
 
+  voiceToken(conversationId: string, callId: string) {
+    return this.post<{ url: string; token: string }>("/v1/voice/token", { conversationId, callId });
+  }
+
+  voiceCallAuthorized(conversationId: string, callId: string) {
+    return this.post<{ authorized: boolean }>("/v1/voice/check", { conversationId, callId });
+  }
+
   servers() {
     return this.get<{ servers: Server[] }>("/v1/servers");
   }

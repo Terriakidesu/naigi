@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-30
+
+### Added
+
+- Self-hosted, end-to-end encrypted one-to-one voice calls in direct conversations, with encrypted call signaling, microphone-only short-lived relay tokens, and authorization checks while calls are active.
+
 ## [0.19.1] - 2026-09-30
 
 ### Fixed
@@ -179,6 +185,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.20.0](docs/changelogs/0.20.0.md) — 2026-09-30
 - [0.19.1](docs/changelogs/0.19.1.md) — 2026-09-30
 - [0.19.0](docs/changelogs/0.19.0.md) — 2026-09-30
 - [0.18.0](docs/changelogs/0.18.0.md) — 2026-09-29

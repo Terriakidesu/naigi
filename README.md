@@ -107,6 +107,15 @@ backend only sees IDs, membership, roles, categories, and ordering. The full fut
 Private conversation recipients are limited to active members of a server that the creator also
 belongs to. Naigi does not provide a global account directory or global user search.
 
+### End-to-end encrypted voice calls
+
+Naigi supports one-to-one audio calls in direct conversations through a self-hosted LiveKit relay.
+The client encrypts audio frames before publishing; Naigi signaling carries only encrypted call
+control, and the relay receives no media keys. Configure `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and
+`LIVEKIT_API_SECRET` together to enable calls. See [`docs/VOICE.md`](docs/VOICE.md) for deployment
+and security details. Joinable space voice rooms and host-tuned adaptive quality are planned for
+subsequent releases.
+
 The browser client supports safe Markdown rendering, cursor-based older-message loading, draft
 preservation while navigating, server/category management, profile/password settings, and an
 opt-in remembered local unlock. Remembered unlock stores only encrypted passphrase material and

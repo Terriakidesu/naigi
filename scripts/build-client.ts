@@ -22,6 +22,10 @@ for (const page of ["index", "register", "unlock", "chat", "new", "settings", "s
   await Bun.write(`public/${page}.html`, Bun.file(`client/${page}.html`));
 }
 await Bun.write("public/instance-admin-theme-init.js", Bun.file("client/instance-admin-theme-init.js"));
+await Bun.write(
+  "public/livekit-e2ee-worker.mjs",
+  Bun.file("node_modules/livekit-client/dist/livekit-client.e2ee.worker.mjs"),
+);
 const styleSheets = [
   "base.css",
   "navigation.css",

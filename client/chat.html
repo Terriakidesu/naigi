@@ -79,7 +79,8 @@
              <div class="chat-actions">
                 <div id="connection-indicator" class="connection-status compact-connection-status" data-state="connecting" title="Connecting"><span class="status-dot" aria-hidden="true"></span><p id="status-line" class="status" role="status">Connecting…</p></div>
                  <button id="message-search-toggle" class="icon-button" type="button" title="Search messages" aria-label="Search messages" aria-expanded="false"><i data-lucide="search"></i></button>
-                 <button id="notification-toggle" class="icon-button" type="button" title="Enable desktop notifications" aria-label="Enable desktop notifications" aria-pressed="false"><i data-lucide="bell"></i></button>
+                  <button id="voice-call-button" class="icon-button" type="button" title="Start end-to-end encrypted voice call" aria-label="Start end-to-end encrypted voice call" hidden><i data-lucide="phone"></i></button>
+                  <button id="notification-toggle" class="icon-button" type="button" title="Enable desktop notifications" aria-label="Enable desktop notifications" aria-pressed="false"><i data-lucide="bell"></i></button>
                  <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true"><i data-lucide="info"></i></button>
             </div>
           </header>
@@ -185,6 +186,18 @@
     </div>
     <div id="message-context-menu" class="message-context-menu" hidden role="menu" aria-label="Message actions"></div>
     <div id="navigation-context-menu" class="message-context-menu navigation-context-menu" hidden role="menu" aria-label="Room and category actions"></div>
+    <dialog id="voice-call-dialog" class="app-dialog voice-call-dialog" aria-labelledby="voice-call-title" aria-describedby="voice-call-status">
+      <div class="voice-call-heading"><span class="voice-call-icon" aria-hidden="true"><i data-lucide="phone-call"></i></span><div><p class="eyebrow">END-TO-END ENCRYPTED AUDIO</p><h2 id="voice-call-title">Voice call</h2></div></div>
+      <p id="voice-call-status" class="muted" role="status" aria-live="polite"></p>
+      <p class="voice-call-security"><i data-lucide="shield-check" aria-hidden="true"></i> Audio is encrypted on your device. The voice relay cannot decrypt it.</p>
+      <div id="voice-call-audio-output" class="voice-call-audio-output" aria-label="Incoming call audio"></div>
+      <div class="app-dialog-actions voice-call-actions">
+        <button id="voice-call-decline" class="secondary" type="button" hidden>Decline</button>
+        <button id="voice-call-mute" class="secondary" type="button" hidden>Mute microphone</button>
+        <button id="voice-call-end" class="secondary" type="button" hidden>Cancel call</button>
+        <button id="voice-call-accept" type="button" hidden>Accept call</button>
+      </div>
+    </dialog>
     <script type="module" src="/main.js"></script>
   </body>
 </html>

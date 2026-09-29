@@ -1,6 +1,7 @@
 import { password } from "bun";
 import { createPublicKey } from "node:crypto";
 import { Elysia, t } from "elysia";
+import { AccessToken, RoomServiceClient, TrackSource } from "livekit-server-sdk";
 import {
   AttachmentSizeMismatchError,
   AttachmentTooLargeError,
@@ -58,7 +59,7 @@ import {
   storeProfileImage,
   validProfileImageBytes,
 } from "./profile-images";
-import { pingRedis, publishMessageCreated } from "./redis/client";
+import { connectRedis, pingRedis, publishMessageCreated, redis } from "./redis/client";
 import {
   publicFirebaseMessagingConfiguration,
   registerFcmPushToken,
@@ -177,6 +178,23 @@ async function directConversationIsBlocked(conversationId: string, userId: strin
     ) as blocked
   `;
   return result?.blocked === true;
+}
+
+async function directVoiceCallAccessError(conversationId: string, userId: string) {
+  const [suspension] = await db<{ user_id: string }[]>`
+    select user_id from instance_user_suspensions where user_id = ${userId}
+  `;
+  if (suspension) return "account_suspended";
+  const [membership] = await db<{ id: string }[]>`
+    select c.id
+    from conversations c
+    join conversation_members cm on cm.conversation_id = c.id
+      and cm.user_id = ${userId} and cm.left_at is null
+    where c.id = ${conversationId} and c.kind = 'dm'
+  `;
+  if (!membership) return "not_a_conversation_member";
+  if (await directConversationIsBlocked(conversationId, userId)) return "blocked_user";
+  return undefined;
 }
 
 function toPublicUser(user: Pick<UserRow, "id" | "username" | "display_name" | "created_at"> & Partial<Pick<UserRow, "profile_image_storage_key" | "profile_banner_storage_key">>) {
@@ -928,7 +946,33 @@ const realtimeCommand = t.Union([
     conversationId: t.String({ format: "uuid" }),
     state: t.Union([t.Literal("online"), t.Literal("idle"), t.Literal("offline")]),
   }),
+  t.Object({
+    type: t.Literal("voice.signal"),
+    conversationId: t.String({ format: "uuid" }),
+    ciphertext: t.String({ minLength: 1, maxLength: config.maxProtocolMetadataBytes }),
+  }),
 ]);
+
+let liveKitRooms: RoomServiceClient | undefined;
+
+function liveKitRoomService() {
+  if (!config.liveKit) return undefined;
+  liveKitRooms ??= new RoomServiceClient(config.liveKit.httpUrl, config.liveKit.apiKey, config.liveKit.apiSecret);
+  return liveKitRooms;
+}
+
+async function voiceTokenRateLimited(userId: string) {
+  await connectRedis();
+  const minute = Math.floor(Date.now() / 60_000);
+  const key = `naigi:voice-token:${userId}:${minute}`;
+  const count = Number(await redis.eval(
+    "local count = redis.call('INCR', KEYS[1]); if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]); end; return count",
+    1,
+    key,
+    120,
+  ));
+  return count > 12;
+}
 
 export function createApp() {
   const realtimeConnections = new Map<object, {
@@ -966,7 +1010,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.19.1" };
+         ?? { name: "Naigi", version: "0.20.0" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -1036,6 +1080,11 @@ export function createApp() {
     })
     .get("/instance-admin-theme-init.js", async ({ set }) => {
       const file = await publicFile("instance-admin-theme-init.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/livekit-e2ee-worker.mjs", async ({ set }) => {
+      const file = await publicFile("livekit-e2ee-worker.mjs", "text/javascript; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
@@ -5293,6 +5342,64 @@ export function createApp() {
     }, {
       params: t.Object({ userId: t.String({ format: "uuid" }) }),
     })
+    .post("/v1/voice/token", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const accessError = await directVoiceCallAccessError(body.conversationId, user.id);
+      if (accessError) return respondError(set, 403, accessError);
+      if (!config.liveKit) return respondError(set, 503, "voice_service_not_configured");
+      try {
+        if (await voiceTokenRateLimited(user.id)) return respondError(set, 429, "voice_token_rate_limited");
+      } catch {
+        return respondError(set, 503, "voice_token_service_unavailable");
+      }
+
+      const roomDigest = Buffer.from(await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(`${body.conversationId}:${body.callId}`),
+      )).toString("base64url");
+      const roomName = `naigi-voice-${roomDigest}`;
+      const roomService = liveKitRoomService();
+      if (!roomService) return respondError(set, 503, "voice_service_not_configured");
+      try {
+        await roomService.createRoom({ name: roomName, emptyTimeout: 45, departureTimeout: 30, maxParticipants: 2 });
+      } catch (error) {
+        const existingRooms = await roomService.listRooms([roomName]).catch(() => []);
+        if (!existingRooms.some((room) => room.name === roomName)) throw error;
+      }
+
+      const accessToken = new AccessToken(config.liveKit.apiKey, config.liveKit.apiSecret, {
+        identity: crypto.randomUUID(),
+        ttl: "10m",
+      });
+      accessToken.addGrant({
+        roomJoin: true,
+        room: roomName,
+        canPublishSources: [TrackSource.MICROPHONE],
+        canSubscribe: true,
+        canPublishData: false,
+      });
+      set.headers["cache-control"] = "no-store";
+      return { url: config.liveKit.webSocketUrl, token: await accessToken.toJwt() };
+    }, {
+      body: t.Object({
+        conversationId: t.String({ format: "uuid" }),
+        callId: t.String({ format: "uuid" }),
+      }),
+    })
+    .post("/v1/voice/check", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const accessError = await directVoiceCallAccessError(body.conversationId, user.id);
+      if (accessError) return respondError(set, 403, accessError);
+      set.headers["cache-control"] = "no-store";
+      return { authorized: true };
+    }, {
+      body: t.Object({
+        conversationId: t.String({ format: "uuid" }),
+        callId: t.String({ format: "uuid" }),
+      }),
+    })
     .post("/v1/crypto/keys/upload", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
@@ -6349,6 +6456,21 @@ export function createApp() {
             state: command.state,
           });
           if (!published) ws.send(JSON.stringify({ type: "error", error: "not_a_conversation_member" }));
+          return;
+        }
+
+        if (command.type === "voice.signal") {
+          const accessError = await directVoiceCallAccessError(command.conversationId, active.userId);
+          if (accessError) {
+            ws.send(JSON.stringify({ type: "error", error: accessError, conversationId: command.conversationId }));
+            return;
+          }
+          const published = await connection.publish(command.conversationId, {
+            type: "voice.signal",
+            conversationId: command.conversationId,
+            ciphertext: command.ciphertext,
+          });
+          if (!published) ws.send(JSON.stringify({ type: "error", error: "voice_signal_rejected", conversationId: command.conversationId }));
           return;
         }
 

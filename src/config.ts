@@ -146,7 +146,44 @@ function firebaseMessagingConfiguration() {
   };
 }
 
+function liveKitConfiguration() {
+  const urlValue = Bun.env.LIVEKIT_URL?.trim();
+  const apiKey = Bun.env.LIVEKIT_API_KEY?.trim();
+  const apiSecret = Bun.env.LIVEKIT_API_SECRET?.trim();
+  if (!urlValue && !apiKey && !apiSecret) return undefined;
+  if (!urlValue || !apiKey || !apiSecret) {
+    throw new Error("LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be configured together");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(urlValue);
+  } catch {
+    throw new Error("LIVEKIT_URL must be an absolute WebSocket URL");
+  }
+
+  const localDevelopmentHost = new Set(["localhost", "127.0.0.1", "[::1]"]);
+  const isSecure = url.protocol === "wss:";
+  const localInsecureDevelopment = environment !== "production"
+    && url.protocol === "ws:"
+    && localDevelopmentHost.has(url.hostname);
+  if (!isSecure && !localInsecureDevelopment) {
+    throw new Error("LIVEKIT_URL must use WSS outside local development");
+  }
+  if (url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) {
+    throw new Error("LIVEKIT_URL must not contain credentials, a path, a query, or a fragment");
+  }
+  if (!/^[A-Za-z0-9_-]{3,128}$/.test(apiKey) || apiSecret.length < 16 || apiSecret.length > 512 || /\s/.test(apiSecret)) {
+    throw new Error("LIVEKIT_API_KEY or LIVEKIT_API_SECRET is invalid");
+  }
+
+  const webSocketUrl = `${url.protocol}//${url.host}`;
+  const httpUrl = `${url.protocol === "wss:" ? "https:" : "http:"}//${url.host}`;
+  return { webSocketUrl, httpUrl, apiKey, apiSecret };
+}
+
 const firebaseMessaging = firebaseMessagingConfiguration();
+const liveKit = liveKitConfiguration();
 const databaseUrl = Bun.env.DATABASE_URL ?? "postgres://localhost:5432/priv_chat";
 
 if (!["development", "test", "production"].includes(environment)) {
@@ -161,6 +198,7 @@ export const config = {
   adminDatabaseUrl: adminDatabaseUrl(databaseUrl),
   redisUrl: Bun.env.REDIS_URL ?? "redis://localhost:6379",
   firebaseMessaging,
+  liveKit,
   attachmentsDirectory: Bun.env.ATTACHMENTS_DIR ?? "./data/attachments",
   profileImagesDirectory: Bun.env.PROFILE_IMAGES_DIR ?? "./data/profile-images",
   twitterPreviewApiUrl: twitterPreviewApiUrl(),

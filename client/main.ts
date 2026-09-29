@@ -36,6 +36,8 @@ import type { EmojiCategory } from "./emoji-data";
 import { appendMarkdown } from "./markdown";
 import { formatMessageMacrosAsText, freezeNowMessageMacros, refreshRelativeTimeMacros } from "./message-macros";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
+import { VoiceCallController, type VoiceCallView } from "./voice-calls";
+import type { VoiceSignalBody } from "./voice-protocol";
 import { isEmojiOnlyMessage } from "./message-format";
 import { renderHighlightedCode } from "./code-highlight";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
@@ -56,6 +58,7 @@ function setRoleTextColor(element: HTMLElement, color: string) {
   element.style.setProperty("--role-text-color", readableAccentText(color, appPreferences.theme));
 }
 let cryptoClient: CryptoClient | undefined;
+let voiceCalls: VoiceCallController | undefined;
 let selectedConversationId: string | undefined;
 let selectedMembers: ConversationMember[] = [];
 let conversations: Conversation[] = [];
@@ -273,6 +276,15 @@ const chatMain = document.querySelector<HTMLElement>(".chat-main")!;
 const sidebar = byId<HTMLElement>("workspace-sidebar");
 const statusLine = byId<HTMLElement>("status-line");
 const connectionIndicator = byId<HTMLElement>("connection-indicator");
+const voiceCallButton = byId<HTMLButtonElement>("voice-call-button");
+const voiceCallDialog = byId<HTMLDialogElement>("voice-call-dialog");
+const voiceCallTitle = byId<HTMLElement>("voice-call-title");
+const voiceCallStatus = byId<HTMLElement>("voice-call-status");
+const voiceCallAudioOutput = byId<HTMLElement>("voice-call-audio-output");
+const voiceCallAccept = byId<HTMLButtonElement>("voice-call-accept");
+const voiceCallDecline = byId<HTMLButtonElement>("voice-call-decline");
+const voiceCallMute = byId<HTMLButtonElement>("voice-call-mute");
+const voiceCallEnd = byId<HTMLButtonElement>("voice-call-end");
 const outboxNotice = byId<HTMLElement>("outbox-notice");
 const outboxLabel = byId<HTMLElement>("outbox-label");
 const outboxRetry = byId<HTMLButtonElement>("outbox-retry");
@@ -641,6 +653,93 @@ function setConnectionStatus(message: string, state: "connected" | "connecting" 
   statusLine.textContent = message;
   connectionIndicator.dataset.state = state;
   connectionIndicator.title = message;
+}
+
+function updateVoiceCallButton() {
+  const conversation = selectedConversationId
+    ? conversations.find((item) => item.id === selectedConversationId)
+    : undefined;
+  voiceCallButton.hidden = Boolean(selectedServerId) || conversation?.kind !== "dm";
+  voiceCallButton.disabled = !conversationReady || voiceCalls?.currentState.status !== "idle";
+}
+
+function renderVoiceCall(state: VoiceCallView) {
+  if (state.status === "idle") {
+    if (voiceCallDialog.open) voiceCallDialog.close();
+    updateVoiceCallButton();
+    return;
+  }
+
+  if (!voiceCallDialog.open) voiceCallDialog.showModal();
+  voiceCallTitle.textContent = state.status === "incoming" ? "Incoming voice call" : "Voice call";
+  if (state.status === "incoming") voiceCallStatus.textContent = `${state.peerName} is calling you.`;
+  else if (state.status === "calling") voiceCallStatus.textContent = `Calling ${state.peerName}…`;
+  else if (state.status === "connecting") voiceCallStatus.textContent = `Connecting to ${state.peerName}…`;
+  else if (state.status === "reconnecting") voiceCallStatus.textContent = `Reconnecting to ${state.peerName}…`;
+  else voiceCallStatus.textContent = `Connected with ${state.peerName}.`;
+
+  const incoming = state.status === "incoming";
+  const connected = state.status === "connected" || state.status === "reconnecting";
+  voiceCallAccept.hidden = !incoming;
+  voiceCallDecline.hidden = !incoming;
+  voiceCallMute.hidden = !connected;
+  voiceCallEnd.hidden = incoming;
+  voiceCallEnd.textContent = state.status === "calling" ? "Cancel call" : "Leave call";
+  voiceCallMute.textContent = state.muted ? "Unmute microphone" : "Mute microphone";
+  updateVoiceCallButton();
+}
+
+async function voiceConversationMembers(conversationId: string) {
+  const result = await api.conversationMembers(conversationId);
+  return result.members.map((member) => ({ ...member, roleIds: normalizeRoleIds(member.roleIds) }));
+}
+
+async function encryptVoiceSignal(conversationId: string, value: VoiceSignalBody) {
+  if (!cryptoClient) throw new Error("crypto_not_initialized");
+  const members = await voiceConversationMembers(conversationId);
+  return cryptoClient.encryptMetadata(conversationId, members, value);
+}
+
+async function decryptVoiceSignal(conversationId: string, ciphertext: string) {
+  const activeCrypto = cryptoClient;
+  if (!activeCrypto) throw new Error("crypto_not_initialized");
+  try {
+    return await activeCrypto.decryptMetadata(conversationId, ciphertext);
+  } catch {
+    const members = await voiceConversationMembers(conversationId);
+    await activeCrypto.prepareConversation(conversationId, members);
+    await activeCrypto.syncToDevice().catch(() => undefined);
+    return activeCrypto.decryptMetadata(conversationId, ciphertext);
+  }
+}
+
+function voicePeerName(conversationId: string, senderUserId?: string) {
+  const member = selectedConversationId === conversationId
+    ? selectedMembers.find((candidate) => candidate.userId === senderUserId)
+    : undefined;
+  if (member) return member.displayName;
+  return conversations.find((conversation) => conversation.id === conversationId)?.memberDisplayNames[0] ?? "Contact";
+}
+
+function initializeVoiceCalls(userId: string) {
+  voiceCalls = new VoiceCallController({
+    currentUserId: userId,
+    requestToken: (conversationId, callId) => api.voiceToken(conversationId, callId),
+    checkAccess: async (conversationId, callId) => {
+      try {
+        return (await api.voiceCallAuthorized(conversationId, callId)).authorized;
+      } catch (error) {
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return false;
+        throw error;
+      }
+    },
+    encryptSignal: encryptVoiceSignal,
+    decryptSignal: decryptVoiceSignal,
+    sendSignal: (conversationId, ciphertext) => sendRealtimeCommand({ type: "voice.signal", conversationId, ciphertext }),
+    onState: renderVoiceCall,
+    audioOutput: voiceCallAudioOutput,
+  });
+  updateVoiceCallButton();
 }
 
 function sendRealtimeCommand(command: Record<string, unknown>) {
@@ -2871,8 +2970,16 @@ function restoreScrollAnchor(anchor: ScrollAnchor | undefined) {
 
 function readableError(error: unknown) {
   if (error instanceof Error && error.name === "AbortError") return "Upload canceled.";
+  if (error instanceof Error && (error.name === "NotAllowedError" || error.name === "PermissionDeniedError")) return "Allow microphone access in your browser to join the voice call.";
   if (error instanceof Error && error.message === "message_too_long") return "Messages are limited to 4,000 characters. Long pasted text is sent as a text file.";
+  if (error instanceof Error && error.message === "voice_signaling_unavailable") return "Realtime is unavailable. Reconnect before starting or answering a voice call.";
+  if (error instanceof Error && error.message === "voice_media_encryption_unavailable") return "This browser could not enable encrypted audio, so the call was not connected.";
   if (error instanceof ApiError) {
+    if (error.code === "voice_service_not_configured") return "Voice calls are not configured by this server's host.";
+    if (error.code === "voice_token_rate_limited") return "Too many voice call attempts. Wait a minute and try again.";
+    if (error.code === "voice_token_service_unavailable") return "The voice service is temporarily unavailable. Try again shortly.";
+    if (error.code === "blocked_user") return "Voice calls are unavailable because this direct conversation is blocked.";
+    if (error.code === "account_suspended") return "This account cannot join voice calls while suspended.";
     if (error.code === "invalid_credentials") return "The username or password is incorrect.";
     if (error.code === "username_taken") return "That username is already in use.";
     if (error.code === "server_owner_must_transfer_ownership") return "The server owner must transfer ownership before leaving.";
@@ -2959,6 +3066,7 @@ async function startCrypto() {
   }
   cryptoClient = nextCryptoClient;
   confirmLocalUnlock();
+  initializeVoiceCalls(currentUser.id);
   connectRealtime();
   userLabel.textContent = `${currentUser.displayName} (@${currentUser.username})`;
   renderAvatar(selfAvatar, currentUser.displayName, currentUser.id, currentUser.avatarUrl);
@@ -3020,6 +3128,7 @@ function connectRealtime() {
         messageId?: string;
         serverSequence?: string;
         userId?: string;
+        ciphertext?: string;
         isTyping?: boolean;
         state?: PresenceState;
       };
@@ -3039,6 +3148,11 @@ function connectRealtime() {
       }
       if (payload.type === "presence" && payload.conversationId && payload.userId && payload.state) {
         receivePresence(payload.conversationId, payload.userId, payload.state);
+        return;
+      }
+      if (payload.type === "voice.signal" && payload.conversationId && payload.userId && payload.ciphertext) {
+        const peerName = voicePeerName(payload.conversationId, payload.userId);
+        void voiceCalls?.receiveSignal(payload.conversationId, payload.userId, payload.ciphertext, peerName).catch(() => undefined);
         return;
       }
       if (payload.type === "message.deleted" && payload.conversationId) {
@@ -3491,6 +3605,7 @@ async function removeConversation(conversation: Conversation) {
 }
 
 function renderConversations() {
+  updateVoiceCallButton();
   const visibleInWorkspace = !selectedServerId;
   directMessagesHeading.hidden = !visibleInWorkspace;
   createConversationButton.hidden = !visibleInWorkspace;
@@ -4624,6 +4739,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
     if (cached.length > 0) await renderMessageHistory({ scrollToBottom: true });
     conversationReady = true;
     updateComposerState();
+    updateVoiceCallButton();
     if (channel?.encryptedMetadata) {
       try {
         const metadata = await cryptoClient.decryptMetadata(conversationId, channel.encryptedMetadata);
@@ -6590,6 +6706,7 @@ messagesPanel.addEventListener("scroll", () => {
 });
 window.addEventListener("resize", renderUnreadButton);
 lockButton.addEventListener("click", () => {
+  void voiceCalls?.end();
   lockLocalSession();
   optimisticDecryptedMessages.clear();
   decryptedMessageCache.clear();
@@ -6661,6 +6778,26 @@ window.addEventListener("focus", () => {
 window.addEventListener("pagehide", () => {
   stopLocalTyping();
   publishPresence("offline");
+  void voiceCalls?.end();
+});
+
+voiceCallButton.addEventListener("click", () => {
+  const conversation = conversations.find((item) => item.id === selectedConversationId);
+  if (!selectedConversationId || conversation?.kind !== "dm" || !voiceCalls) return;
+  void voiceCalls.start(selectedConversationId, conversationDisplayName(conversation))
+    .catch((error) => setStatus(readableError(error), true));
+});
+voiceCallAccept.addEventListener("click", () => {
+  void voiceCalls?.accept().catch((error) => setStatus(readableError(error), true));
+});
+voiceCallDecline.addEventListener("click", () => void voiceCalls?.decline());
+voiceCallMute.addEventListener("click", () => {
+  void voiceCalls?.toggleMute().catch((error) => setStatus(readableError(error), true));
+});
+voiceCallEnd.addEventListener("click", () => void voiceCalls?.end());
+voiceCallDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  void voiceCalls?.end();
 });
 
 updateComposerState();

@@ -178,6 +178,17 @@
 .app-dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.2rem; }
 .app-preferences-leave-actions { flex-wrap: wrap; }
 .app-dialog-actions button { min-height: 38px; padding: 0.45rem 0.8rem; font-size: 0.76rem; font-weight: 700; }
+.voice-call-dialog { width: min(400px, calc(100% - 1.5rem)); }
+.voice-call-heading { display: flex; align-items: center; gap: 0.8rem; }
+.voice-call-heading h2 { margin: 0; }
+.voice-call-heading .eyebrow { margin: 0 0 0.2rem; color: var(--text-muted); font-size: 0.62rem; font-weight: 800; letter-spacing: 0.12em; }
+.voice-call-icon { display: grid; place-items: center; flex: 0 0 42px; width: 42px; height: 42px; border-radius: 50%; color: var(--accent-ink); background: var(--accent); }
+.voice-call-icon svg { width: 19px; height: 19px; }
+.voice-call-dialog > .muted { margin: 1rem 0 0.6rem; }
+.voice-call-security { display: flex; align-items: center; gap: 0.4rem; margin: 0; color: var(--text-muted); font-size: 0.7rem; line-height: 1.4; }
+.voice-call-security svg { flex: 0 0 15px; width: 15px; height: 15px; color: var(--accent); }
+.voice-call-actions { flex-wrap: wrap; }
+.voice-call-audio-output { position: fixed; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
 .report-dialog { display: grid; gap: 0.75rem; width: min(500px, calc(100% - 1.5rem)); }
 .report-dialog:not([open]) { display: none; }
 .report-dialog h2, .report-dialog > p.muted { margin: 0; }
