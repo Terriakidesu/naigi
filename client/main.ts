@@ -2950,7 +2950,9 @@ async function startCrypto() {
   await cryptoClient?.close();
   const nextCryptoClient = new CryptoClient(api, currentUser.id, localPassphrase);
   try {
-    await nextCryptoClient.initialize();
+    // Open the local store first. Room selection can render locally cached
+    // ciphertext before any initial to-device network sync completes.
+    await nextCryptoClient.initialize({ syncToDevice: false });
   } catch (error) {
     await nextCryptoClient.close().catch(() => undefined);
     throw error;
@@ -2958,13 +2960,16 @@ async function startCrypto() {
   cryptoClient = nextCryptoClient;
   confirmLocalUnlock();
   connectRealtime();
-  const outbox = await cryptoClient.flushPendingMessages().catch(() => ({ sent: 0, pending: 0, failed: 0 }));
   userLabel.textContent = `${currentUser.displayName} (@${currentUser.username})`;
   renderAvatar(selfAvatar, currentUser.displayName, currentUser.id, currentUser.avatarUrl);
+  void cryptoClient.flushPendingMessages().then(async (outbox) => {
+    if (cryptoClient !== nextCryptoClient) return;
+    await refreshOutboxNotice();
+    if (outbox.sent > 0) setStatus(`${outbox.sent} queued message${outbox.sent === 1 ? "" : "s"} delivered.`);
+  }).catch(() => undefined);
   await refreshServers();
   await refreshConversations();
   await refreshOutboxNotice().catch(() => undefined);
-  if (outbox.sent > 0) setStatus(`${outbox.sent} queued message${outbox.sent === 1 ? "" : "s"} delivered.`);
 }
 
 async function flushOutbox() {
@@ -3717,29 +3722,6 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
     channelsByServer.set(serverId, channels);
     categories = categoryResult.categories;
     serverRoles = roleResult.roles;
-    if (roleResult.metadataConversationId && cryptoClient) {
-      try {
-        const metadataMembers = (await api.conversationMembers(roleResult.metadataConversationId)).members;
-        await cryptoClient.prepareConversation(roleResult.metadataConversationId, metadataMembers);
-        await cryptoClient.syncToDevice().catch(() => undefined);
-        for (const role of serverRoles) {
-          if (!role.encryptedMetadata) continue;
-          try {
-            const metadata = await cryptoClient.decryptMetadata(roleResult.metadataConversationId, role.encryptedMetadata);
-            if (typeof metadata.name === "string" && metadata.name.trim()) {
-              serverRoleLabels.set(role.id, metadata.name.trim().slice(0, 80));
-            }
-          } catch {
-            // A role label is optional UI metadata and should not block the server.
-          }
-        }
-      } catch {
-        // Role labels are encrypted metadata and are optional for opening a channel.
-      }
-    }
-    if (roleResult.metadataConversationId && cryptoClient) {
-      void hydrateServerCustomEmojis(serverId, roleResult.metadataConversationId, token);
-    }
     subscribeKnownConversations();
     renderChannels();
     renderServers();
@@ -3756,6 +3738,32 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
       conversationSubtitle.textContent = "Create an encrypted room to start chatting";
       renderConversationWelcome("No encrypted rooms yet", "Create a room to start a private space conversation.");
       setMobileSidebar(false);
+    }
+    if (roleResult.metadataConversationId && cryptoClient) {
+      void hydrateServerCustomEmojis(serverId, roleResult.metadataConversationId, token);
+    }
+    // Role labels are optional encrypted metadata. Defer their network and
+    // crypto work until the selected room has had a chance to show its cache.
+    if (roleResult.metadataConversationId && cryptoClient) {
+      try {
+        const metadataMembers = (await api.conversationMembers(roleResult.metadataConversationId)).members;
+        await cryptoClient.prepareConversation(roleResult.metadataConversationId, metadataMembers);
+        await cryptoClient.syncToDevice().catch(() => undefined);
+        for (const role of serverRoles) {
+          if (!role.encryptedMetadata) continue;
+          try {
+            const metadata = await cryptoClient.decryptMetadata(roleResult.metadataConversationId, role.encryptedMetadata);
+            if (typeof metadata.name === "string" && metadata.name.trim()) {
+              serverRoleLabels.set(role.id, metadata.name.trim().slice(0, 80));
+            }
+          } catch {
+            // A role label is optional UI metadata and should not block the server.
+          }
+        }
+        renderMembers(selectedMembers);
+      } catch {
+        // Role labels are encrypted metadata and are optional for opening a channel.
+      }
     }
   } catch (error) {
     if (token !== serverSelectionToken) return;
@@ -3874,6 +3882,12 @@ async function showDirectMessages() {
 }
 
 async function refreshConversations() {
+  const requested = chatLocation().conversationId;
+  if (!selectedServerId && !selectedConversationId && requested) {
+    // The URL already identifies this thread. Start its local-cache restore
+    // without waiting for the inbox API to finish loading.
+    void openDirectMessage(requested);
+  }
   const result = await api.conversations();
   conversations = result.conversations;
   subscribeKnownConversations();
@@ -3883,7 +3897,6 @@ async function refreshConversations() {
     selectedConversationId = undefined;
     selectedMembers = [];
   }
-  const requested = chatLocation().conversationId;
   const requestedConversation = requested && conversations.find((conversation) => conversation.id === requested);
   if (!selectedServerId && !selectedConversationId && requestedConversation) await openDirectMessage(requestedConversation.id);
   else if (!selectedServerId && !selectedConversationId && conversations[0]) await openDirectMessage(conversations[0].id);
@@ -4575,19 +4588,13 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   window.history.replaceState(null, "", `${location}${messageTarget ? `#message=${encodeURIComponent(messageTarget)}` : ""}`);
   subscribeRealtime(conversationId);
   try {
-    // Envelopes are opaque to the API, so fetch them while membership and
-    // room-key preparation are in flight. The result is consumed only after
-    // the device has synchronized its to-device queue.
+    // Start the network requests together, but don't make the local cache wait
+    // for the member list or device-key exchange before rendering.
     const initialHistoryPromise = api.messages(conversationId, { limit: MESSAGE_PAGE_SIZE }).catch(() => undefined);
-    const [members, cached] = await Promise.all([
-      api.conversationMembers(conversationId),
-      currentUser ? readCachedMessages(currentUser.id, conversationId) : Promise.resolve<MessageEnvelope[]>([]),
-    ]);
-    if (token !== selectionToken) return;
-    selectedMembers = members.members.map((member) => ({ ...member, roleIds: normalizeRoleIds(member.roleIds) }));
-    renderMembers(selectedMembers);
-    conversationSubtitle.textContent = `${selectedMembers.length} member${selectedMembers.length === 1 ? "" : "s"} · end-to-end encrypted`;
-    await cryptoClient.prepareConversation(conversationId, selectedMembers);
+    const membersPromise = api.conversationMembers(conversationId);
+    const cached = currentUser
+      ? await readCachedMessages(currentUser.id, conversationId)
+      : [];
     if (token !== selectionToken) return;
     if (cached.length > 0) {
       loadedMessages = sortMessages(cached).slice(-MAX_RENDERED_MESSAGES);
@@ -4596,13 +4603,25 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
       latestObservedSequence = null;
       observeLatestMessages(loadedMessages);
       lastMessagesKey = messagesKey();
+      conversationSubtitle.textContent = "Showing cached encrypted history · syncing";
       await renderMessageHistory({ scrollToBottom: true });
     }
+    // This first sync may need the network, so only queue it after rendering
+    // cached messages with the locally stored room keys.
+    void cryptoClient.syncToDevice().catch(() => undefined);
+    const members = await membersPromise;
+    if (token !== selectionToken) return;
+    selectedMembers = members.members.map((member) => ({ ...member, roleIds: normalizeRoleIds(member.roleIds) }));
+    renderMembers(selectedMembers);
+    conversationSubtitle.textContent = `${selectedMembers.length} member${selectedMembers.length === 1 ? "" : "s"} · end-to-end encrypted`;
+    await cryptoClient.prepareConversation(conversationId, selectedMembers);
+    if (token !== selectionToken) return;
     const [initialHistory] = await Promise.all([
       initialHistoryPromise,
       cryptoClient.syncToDevice().catch(() => undefined),
     ]);
     if (token !== selectionToken) return;
+    if (cached.length > 0) await renderMessageHistory({ scrollToBottom: true });
     conversationReady = true;
     updateComposerState();
     if (channel?.encryptedMetadata) {
@@ -4675,10 +4694,15 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
     if (token !== selectionToken) return;
     const canSend = conversationReady;
     updateComposerState();
-    conversationSubtitle.textContent = canSend ? "Message history unavailable" : "Could not load this conversation";
-    renderConversationWelcome(canSend ? "History unavailable" : "Unable to open conversation", canSend
-      ? "Check your connection to load history. You can still queue encrypted messages on this device."
-      : "Check your connection and select this conversation again to retry.");
+    if (loadedMessages.length > 0) {
+      conversationSubtitle.textContent = "Showing locally cached encrypted history";
+      await renderMessageHistory({ scrollToBottom: true });
+    } else {
+      conversationSubtitle.textContent = canSend ? "Message history unavailable" : "Could not load this conversation";
+      renderConversationWelcome(canSend ? "History unavailable" : "Unable to open conversation", canSend
+        ? "Check your connection to load history. You can still queue encrypted messages on this device."
+        : "Check your connection and select this conversation again to retry.");
+    }
     if (wasSidebarOpen) (canSend ? messageInput : mobileSidebarToggle).focus();
     setStatus(readableError(error), true);
   }

@@ -212,7 +212,7 @@ export class CryptoClient {
     return this.machine?.deviceId.toString() ?? this.requestedDeviceId;
   }
 
-  async initialize() {
+  async initialize(options: { syncToDevice?: boolean } = {}) {
     if (this.initialized) return;
     if (!this.storePassphrase) throw new Error("local_crypto_passphrase_required");
 
@@ -245,10 +245,11 @@ export class CryptoClient {
       throw new LocalCryptoStoreError();
     }
     this.initialized = true;
+    this.state.roomKeyRequestsEnabled = true;
+    if (options.syncToDevice === false) return;
     try {
       // Ask the SDK to request room keys when a device misses an original share.
       // Forwarding remains controlled by the SDK's device-trust rules.
-      this.state.roomKeyRequestsEnabled = true;
       await this.processOutgoingRequests();
       await this.syncToDevice();
     } catch (error) {

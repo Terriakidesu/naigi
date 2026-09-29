@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-09-30
+
+### Fixed
+
+- Chat startup shows an immediate loading placeholder, restores cached encrypted history before waiting on network room setup, and no longer blocks room selection on queued-message delivery.
+
 ## [0.19.0] - 2026-09-30
 
 ### Added
@@ -173,6 +179,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.19.1](docs/changelogs/0.19.1.md) — 2026-09-30
 - [0.19.0](docs/changelogs/0.19.0.md) — 2026-09-30
 - [0.18.0](docs/changelogs/0.18.0.md) — 2026-09-29
 - [0.17.0](docs/changelogs/0.17.0.md) — 2026-09-29
