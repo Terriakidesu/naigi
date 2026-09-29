@@ -1,5 +1,6 @@
 import { emojiEntryAt } from "./emoji";
 import { guardExternalLink } from "./external-link";
+import { formatMessageMacro, MAX_MESSAGE_MACROS, parseMessageMacro, type ParsedMessageMacro } from "./message-macros";
 
 export type MarkdownInline =
   | { kind: "text"; value: string }
@@ -147,15 +148,42 @@ function appendTextChunk(parent: HTMLElement, value: string) {
   });
 }
 
-function appendText(parent: HTMLElement, value: string, options: MarkdownRenderOptions = {}) {
+type MessageMacroRenderState = { count: number };
+
+function isEscaped(value: string, index: number) {
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) slashes += 1;
+  return slashes % 2 === 1;
+}
+
+function isInsideUrl(value: string, index: number) {
+  return /https?:\/\/[^\s<>]*$/i.test(value.slice(0, index));
+}
+
+function appendMessageMacro(parent: HTMLElement, macro: ParsedMessageMacro, state: MessageMacroRenderState) {
+  const element = document.createElement("time");
+  element.className = "message-macro";
+  element.dateTime = new Date(macro.timestampMs).toISOString();
+  element.title = new Date(macro.timestampMs).toLocaleString();
+  element.textContent = formatMessageMacro(macro);
+  element.dataset.messageMacro = "true";
+  element.dataset.timestampMs = String(macro.timestampMs);
+  element.dataset.macroFormat = macro.format;
+  parent.append(element);
+  state.count += 1;
+}
+
+function appendText(parent: HTMLElement, value: string, options: MarkdownRenderOptions = {}, macroState: MessageMacroRenderState = { count: 0 }, allowMacros = true) {
   const pattern = /@&([A-Za-z0-9_.-]+)|@([A-Za-z0-9_.-]+)/g;
   const roomPattern = /(^|[^A-Za-z0-9_.-])#([A-Za-z0-9_.-]+)/g;
   const customEmojiPattern = /:([A-Za-z0-9_+-]{1,32}):/g;
+  const macroPattern = /\{[a-z][a-z0-9_-]*(?::[^{}\n]*)?\}/gi;
   let offset = 0;
   while (offset < value.length) {
     pattern.lastIndex = offset;
     roomPattern.lastIndex = offset;
     customEmojiPattern.lastIndex = offset;
+    macroPattern.lastIndex = offset;
     const mentionMatch = pattern.exec(value);
     const roomMatch = roomPattern.exec(value);
     let customEmojiMatch: RegExpExecArray | null = null;
@@ -167,24 +195,16 @@ function appendText(parent: HTMLElement, value: string, options: MarkdownRenderO
         break;
       }
     }
-    const mentionIndex = mentionMatch?.index ?? Number.POSITIVE_INFINITY;
-    const roomIndex = roomMatch ? (roomMatch.index ?? offset) + roomMatch[1].length : Number.POSITIVE_INFINITY;
-    const customEmojiIndex = customEmojiMatch
-      ? customEmojiMatch.index ?? offset
-      : Number.POSITIVE_INFINITY;
-    if (customEmojiMatch && customEmojiIndex <= mentionIndex && customEmojiIndex <= roomIndex) {
-      const asset = options.customEmoji?.get(customEmojiMatch[1].toLowerCase());
-      if (asset) {
-        appendTextChunk(parent, value.slice(offset, customEmojiIndex));
-        const image = document.createElement("img");
-        image.className = "custom-emoji inline-custom-emoji";
-        image.src = asset.src;
-        image.alt = asset.alt;
-        image.title = `:${customEmojiMatch[1]}:`;
-        image.draggable = false;
-        parent.append(image);
-        offset = customEmojiIndex + customEmojiMatch[0].length;
-        continue;
+    let macroMatch: RegExpExecArray | null = null;
+    if (allowMacros && macroState.count < MAX_MESSAGE_MACROS) {
+      while (true) {
+        const candidate = macroPattern.exec(value);
+        if (!candidate) break;
+        if (isEscaped(value, candidate.index) || isInsideUrl(value, candidate.index)) continue;
+        if (parseMessageMacro(candidate[0])) {
+          macroMatch = candidate;
+          break;
+        }
       }
     }
     let emojiIndex = Number.POSITIVE_INFINITY;
@@ -197,8 +217,39 @@ function appendText(parent: HTMLElement, value: string, options: MarkdownRenderO
         break;
       }
     }
-    if (emojiMatch && emojiIndex < mentionIndex && emojiIndex < roomIndex) {
-      appendTextChunk(parent, value.slice(offset, emojiIndex));
+    const mentionIndex = mentionMatch?.index ?? Number.POSITIVE_INFINITY;
+    const roomIndex = roomMatch ? (roomMatch.index ?? offset) + roomMatch[1].length : Number.POSITIVE_INFINITY;
+    const macroIndex = macroMatch?.index ?? Number.POSITIVE_INFINITY;
+    const customEmojiIndex = customEmojiMatch
+      ? customEmojiMatch.index ?? offset
+      : Number.POSITIVE_INFINITY;
+    const nextIndex = Math.min(macroIndex, customEmojiIndex, emojiIndex, mentionIndex, roomIndex);
+    if (!Number.isFinite(nextIndex)) {
+      appendTextChunk(parent, value.slice(offset));
+      break;
+    }
+    appendTextChunk(parent, value.slice(offset, nextIndex));
+    if (macroMatch && macroIndex === nextIndex) {
+      const macro = parseMessageMacro(macroMatch[0]);
+      if (macro) appendMessageMacro(parent, macro, macroState);
+      offset = macroIndex + macroMatch[0].length;
+      continue;
+    }
+    if (customEmojiMatch && customEmojiIndex === nextIndex) {
+      const asset = options.customEmoji?.get(customEmojiMatch[1].toLowerCase());
+      if (asset) {
+        const image = document.createElement("img");
+        image.className = "custom-emoji inline-custom-emoji";
+        image.src = asset.src;
+        image.alt = asset.alt;
+        image.title = `:${customEmojiMatch[1]}:`;
+        image.draggable = false;
+        parent.append(image);
+        offset = customEmojiIndex + customEmojiMatch[0].length;
+        continue;
+      }
+    }
+    if (emojiMatch && emojiIndex === nextIndex) {
       const image = document.createElement("img");
       image.className = "twemoji inline-twemoji";
       image.src = `/assets/twemoji/${emojiMatch.entry.code}.svg`;
@@ -209,9 +260,8 @@ function appendText(parent: HTMLElement, value: string, options: MarkdownRenderO
       offset = emojiIndex + emojiMatch.text.length;
       continue;
     }
-    if (mentionMatch && mentionIndex <= roomIndex) {
+    if (mentionMatch && mentionIndex === nextIndex) {
       const index = mentionMatch.index ?? offset;
-      appendTextChunk(parent, value.slice(offset, index));
       const roleName = mentionMatch[1]?.toLowerCase();
       const username = mentionMatch[2]?.toLowerCase();
       if ((roleName && options.mentionRoleNames?.has(roleName)) || (username && options.mentionUsernames?.has(username))) {
@@ -225,11 +275,10 @@ function appendText(parent: HTMLElement, value: string, options: MarkdownRenderO
       offset = index + mentionMatch[0].length;
       continue;
     }
-    if (roomMatch) {
+    if (roomMatch && roomIndex === nextIndex) {
       const index = roomIndex;
       const slug = roomMatch[2].toLowerCase();
       const token = `#${roomMatch[2]}`;
-      appendTextChunk(parent, value.slice(offset, index));
       const channelId = options.roomReferences?.get(slug);
       if (channelId && options.onRoomReference) {
         const room = document.createElement("button");
@@ -251,10 +300,10 @@ function appendText(parent: HTMLElement, value: string, options: MarkdownRenderO
   }
 }
 
-function appendInline(parent: HTMLElement, value: string, options: MarkdownRenderOptions = {}) {
+function appendInline(parent: HTMLElement, value: string, options: MarkdownRenderOptions = {}, macroState: MessageMacroRenderState = { count: 0 }) {
   for (const token of parseInlineMarkdown(value)) {
     if (token.kind === "text") {
-      appendText(parent, token.value, options);
+      appendText(parent, token.value, options, macroState);
       continue;
     }
     if (token.kind === "link") {
@@ -264,7 +313,7 @@ function appendInline(parent: HTMLElement, value: string, options: MarkdownRende
       link.target = "_blank";
       link.rel = "noreferrer noopener nofollow";
       guardExternalLink(link, token.url);
-      appendText(link, token.label, options);
+      appendText(link, token.label, options, macroState, false);
       parent.append(link);
       continue;
     }
@@ -274,7 +323,7 @@ function appendInline(parent: HTMLElement, value: string, options: MarkdownRende
       spoiler.tabIndex = 0;
       spoiler.setAttribute("role", "button");
       spoiler.setAttribute("aria-label", "Reveal spoiler");
-      appendText(spoiler, token.value, options);
+      appendText(spoiler, token.value, options, macroState);
       const reveal = () => {
         spoiler.classList.toggle("revealed");
         spoiler.setAttribute("aria-label", spoiler.classList.contains("revealed") ? "Hide spoiler" : "Reveal spoiler");
@@ -291,7 +340,7 @@ function appendInline(parent: HTMLElement, value: string, options: MarkdownRende
     }
     const element = document.createElement(token.kind === "strong" ? "strong" : token.kind === "emphasis" ? "em" : token.kind === "strike" ? "del" : "code");
     if (token.kind === "code") element.textContent = token.value;
-    else appendText(element, token.value, options);
+    else appendText(element, token.value, options, macroState);
     parent.append(element);
   }
 }
@@ -299,6 +348,7 @@ function appendInline(parent: HTMLElement, value: string, options: MarkdownRende
 export function appendMarkdown(parent: HTMLElement, value: string, options: MarkdownRenderOptions = {}) {
   const markdown = document.createElement("div");
   markdown.className = "markdown-body";
+  const macroState: MessageMacroRenderState = { count: 0 };
   for (const block of parseMarkdown(value)) {
     if (block.kind === "code-block") {
       const pre = document.createElement("pre");
@@ -311,13 +361,13 @@ export function appendMarkdown(parent: HTMLElement, value: string, options: Mark
     }
     if (block.kind === "heading") {
       const heading = document.createElement(block.level && block.level <= 2 ? "h3" : "h4");
-      appendInline(heading, block.value as string, options);
+      appendInline(heading, block.value as string, options, macroState);
       markdown.append(heading);
       continue;
     }
     if (block.kind === "quote") {
       const quote = document.createElement("blockquote");
-      appendInline(quote, (block.value as string[]).join("\n"), options);
+      appendInline(quote, (block.value as string[]).join("\n"), options, macroState);
       markdown.append(quote);
       continue;
     }
@@ -325,14 +375,14 @@ export function appendMarkdown(parent: HTMLElement, value: string, options: Mark
       const list = document.createElement(block.kind === "unordered-list" ? "ul" : "ol");
       for (const item of block.value as string[]) {
         const listItem = document.createElement("li");
-         appendInline(listItem, item, options);
+        appendInline(listItem, item, options, macroState);
         list.append(listItem);
       }
       markdown.append(list);
       continue;
     }
     const paragraph = document.createElement("p");
-    appendInline(paragraph, block.value as string, options);
+    appendInline(paragraph, block.value as string, options, macroState);
     markdown.append(paragraph);
   }
   parent.append(markdown);

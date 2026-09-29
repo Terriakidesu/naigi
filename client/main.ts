@@ -34,6 +34,7 @@ import {
 import { renderAvatar, setAvatarStyle } from "./avatar";
 import type { EmojiCategory } from "./emoji-data";
 import { appendMarkdown } from "./markdown";
+import { formatMessageMacrosAsText, freezeNowMessageMacros, refreshRelativeTimeMacros } from "./message-macros";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { isEmojiOnlyMessage } from "./message-format";
 import { renderHighlightedCode } from "./code-highlight";
@@ -327,6 +328,7 @@ const replyMentionToggle = byId<HTMLButtonElement>("reply-mention-toggle");
 const cancelReply = byId<HTMLButtonElement>("cancel-reply");
 const mentionSuggestions = byId<HTMLElement>("mention-suggestions");
 const emojiSuggestions = byId<HTMLElement>("emoji-suggestions");
+const macroSuggestions = byId<HTMLElement>("macro-suggestions");
 const emojiPicker = byId<HTMLElement>("emoji-picker");
 const emojiPickerSearch = byId<HTMLInputElement>("emoji-picker-search");
 const emojiCategoryTabs = byId<HTMLElement>("emoji-category-tabs");
@@ -988,6 +990,10 @@ function embeddedImageLinks(embeds: SafeEmbed[]) {
   }));
 }
 
+function searchableMessageBody(body: string, referenceMs = Date.now()) {
+  return `${body} ${formatMessageMacrosAsText(body, referenceMs)}`.toLowerCase();
+}
+
 function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], mentions: string[], roleMentions: string[] = []) {
   editedMessageBodies.set(messageId, { body, embeds, mentions, roleMentions });
   if (redactedMessageIds.has(messageId)) return;
@@ -1027,7 +1033,7 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
   if (reply) article.insertBefore(reply, article.querySelector(".message-avatar") ?? content);
   const editable = isOwnMessage(message);
   appendMessageActions(article, message, article.querySelector(".message-sender-link")?.textContent ?? "Member", body, editable);
-  article.dataset.search = `${article.querySelector(".message-sender-link")?.textContent ?? ""} ${body}`.toLowerCase();
+  article.dataset.search = `${article.querySelector(".message-sender-link")?.textContent ?? ""} ${searchableMessageBody(body)}`;
   const contextTarget = messageContextTargets.get(messageId);
   if (contextTarget) {
     contextTarget.body = body;
@@ -1040,7 +1046,7 @@ function setEditTarget(target: EditTarget) {
   editTarget = target;
   clearComposerAttachments();
   clearReplyTarget();
-  editPreviewText.textContent = `Editing ${target.sender}: ${target.body.replace(/\s+/g, " ").slice(0, 180)}`;
+  editPreviewText.textContent = `Editing ${target.sender}: ${formatMessageMacrosAsText(target.body).replace(/\s+/g, " ").slice(0, 180)}`;
   editPreview.hidden = false;
   messageInput.value = target.body;
   resizeMessageInput();
@@ -1733,7 +1739,7 @@ function setReplyTarget(target: ReplyReference) {
     ...target,
     mentionSender: canMention && target.mentionSender !== false,
   };
-  const preview = target.body.replace(/\s+/g, " ").trim() || "Encrypted message";
+  const preview = formatMessageMacrosAsText(target.body).replace(/\s+/g, " ").trim() || "Encrypted message";
   replyPreviewText.textContent = `Replying to ${target.sender}: ${preview.slice(0, 180)}`;
   replyMentionToggle.hidden = !canMention;
   replyMentionToggle.setAttribute("aria-pressed", String(Boolean(replyTarget.mentionSender)));
@@ -1833,8 +1839,21 @@ function hideEmojiSuggestions() {
   activeSuggestionIndex = -1;
 }
 
+function hideMacroSuggestions() {
+  macroSuggestions.hidden = true;
+  macroSuggestions.replaceChildren();
+  activeSuggestionIndex = -1;
+}
+
+function activeSuggestionContainer() {
+  if (!mentionSuggestions.hidden) return mentionSuggestions;
+  if (!emojiSuggestions.hidden) return emojiSuggestions;
+  if (!macroSuggestions.hidden) return macroSuggestions;
+  return undefined;
+}
+
 function setActiveSuggestion(index: number) {
-  const container = !mentionSuggestions.hidden ? mentionSuggestions : !emojiSuggestions.hidden ? emojiSuggestions : undefined;
+  const container = activeSuggestionContainer();
   if (!container) return;
   const options = [...container.querySelectorAll<HTMLButtonElement>("button")];
   if (options.length === 0) return;
@@ -1848,7 +1867,7 @@ function setActiveSuggestion(index: number) {
 }
 
 function handleSuggestionKeydown(event: KeyboardEvent) {
-  const container = !mentionSuggestions.hidden ? mentionSuggestions : !emojiSuggestions.hidden ? emojiSuggestions : undefined;
+  const container = activeSuggestionContainer();
   if (!container) return false;
   const options = [...container.querySelectorAll<HTMLButtonElement>("button")];
   if (options.length === 0) return false;
@@ -1866,6 +1885,7 @@ function handleSuggestionKeydown(event: KeyboardEvent) {
     event.preventDefault();
     if (!mentionSuggestions.hidden) hideMentionSuggestions();
     if (!emojiSuggestions.hidden) hideEmojiSuggestions();
+    if (!macroSuggestions.hidden) hideMacroSuggestions();
     return true;
   }
   return false;
@@ -2443,9 +2463,126 @@ function renderEmojiSuggestions() {
   emojiSuggestions.hidden = false;
 }
 
+const messageMacroSuggestions = [
+  { name: "time", description: "Localized time", insert: "{time:now}" },
+  { name: "date", description: "Localized date", insert: "{date:now}" },
+  { name: "timestamp", description: "Date/time; flags t/T/d/D/f/F/R/I/U/s/ms", insert: "{timestamp:now:f}" },
+  { name: "datetime", description: "Alias for timestamp", insert: "{datetime:now}" },
+  { name: "relative", description: "Offsets: 2h, -30m, 1d2h, 2mo, 1y", insert: "{relative:now}" },
+  { name: "time12", description: "12-hour clock time", insert: "{time12:now}" },
+  { name: "time24", description: "24-hour clock time", insert: "{time24:now}" },
+  { name: "iso", description: "ISO 8601 timestamp", insert: "{iso:now}" },
+  { name: "dateiso", description: "Alias for an ISO 8601 timestamp", insert: "{dateiso:now}" },
+  { name: "unix", description: "Unix timestamp in seconds", insert: "{unix:now}" },
+  { name: "epoch", description: "Alias for Unix timestamp", insert: "{epoch:now}" },
+  { name: "weekday", description: "Localized weekday name", insert: "{weekday:now}" },
+  { name: "dayofweek", description: "Alias for weekday", insert: "{dayofweek:now}" },
+  { name: "dayofyear", description: "Day number within the year", insert: "{dayofyear:now}" },
+  { name: "month", description: "Localized month name", insert: "{month:now}" },
+  { name: "day", description: "Day of the month", insert: "{day:now}" },
+  { name: "year", description: "Year number", insert: "{year:now}" },
+  { name: "hour", description: "Hour in your local time zone", insert: "{hour:now}" },
+  { name: "minute", description: "Minute of the hour", insert: "{minute:now}" },
+  { name: "second", description: "Second of the minute", insert: "{second:now}" },
+  { name: "millisecond", description: "Millisecond of the second", insert: "{millisecond:now}" },
+  { name: "week", description: "ISO week number", insert: "{week:now}" },
+  { name: "quarter", description: "Quarter of the year", insert: "{quarter:now}" },
+  { name: "timezone", description: "Your local time-zone name", insert: "{timezone:now}" },
+  { name: "zone", description: "Alias for time zone", insert: "{zone:now}" },
+] as const;
+
+const macroArgumentSuggestions = [
+  { value: "now", description: "At send time" },
+  { value: "2h", description: "Two hours from now" },
+  { value: "-30m", description: "Thirty minutes ago" },
+  { value: "1d", description: "One day from now" },
+  { value: "1d2h", description: "One day and two hours from now" },
+] as const;
+
+function macroSuggestionToken() {
+  const cursor = messageInput.selectionStart ?? messageInput.value.length;
+  if (messageInput.selectionEnd !== cursor) return undefined;
+  const before = messageInput.value.slice(0, cursor);
+  const argumentMatch = before.match(/\{([a-z][a-z0-9_-]*):([^{}]*)$/i);
+  const argumentMacro = argumentMatch
+    ? messageMacroSuggestions.find((candidate) => candidate.name === argumentMatch[1].toLowerCase())
+    : undefined;
+  const nameMatch = argumentMacro ? undefined : before.match(/\{([a-z][a-z0-9_-]*)?$/i);
+  const match = argumentMacro ? argumentMatch : nameMatch;
+  if (!match) return undefined;
+  const start = cursor - match[0].length;
+  const prefix = before.slice(0, start);
+  if (/https?:\/\/\S*$/i.test(prefix)) return undefined;
+  const precedingSlashes = prefix.match(/\\+$/)?.[0].length ?? 0;
+  if (precedingSlashes % 2 === 1) return undefined;
+  if ((before.match(/```/g)?.length ?? 0) % 2 === 1) return undefined;
+  const currentLine = before.slice(before.lastIndexOf("\n") + 1);
+  if (/(^|[^\\])`[^`]*$/.test(currentLine)) return undefined;
+  return argumentMacro && argumentMatch
+    ? { kind: "argument" as const, macroName: argumentMacro.name, query: argumentMatch[2].toLowerCase(), start, end: cursor }
+    : { kind: "name" as const, query: nameMatch?.[1]?.toLowerCase() ?? "", start, end: cursor };
+}
+
+function renderMacroSuggestions() {
+  const token = macroSuggestionToken();
+  if (!token) {
+    hideMacroSuggestions();
+    return;
+  }
+  const candidates = token.kind === "argument"
+    ? macroArgumentSuggestions
+      .filter((candidate) => candidate.value.startsWith(token.query))
+      .map((candidate) => ({
+        name: `${token.macroName} · ${candidate.value}`,
+        description: candidate.description,
+        insert: `{${token.macroName}:${candidate.value}}`,
+      }))
+    : messageMacroSuggestions
+      .filter((candidate) => !token.query || candidate.name.startsWith(token.query))
+      .slice(0, 8);
+  macroSuggestions.replaceChildren();
+  if (candidates.length === 0) {
+    hideMacroSuggestions();
+    return;
+  }
+  hideMentionSuggestions();
+  hideEmojiSuggestions();
+  macroSuggestions.hidden = true;
+  activeSuggestionIndex = -1;
+  for (const candidate of candidates) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "macro-suggestion";
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", "false");
+    const name = document.createElement("span");
+    name.className = "macro-suggestion-name";
+    name.textContent = candidate.name;
+    const details = document.createElement("span");
+    details.className = "macro-suggestion-details";
+    details.textContent = `${candidate.insert} · ${candidate.description}`;
+    option.append(name, details);
+    option.title = `${candidate.insert} — ${candidate.description}`;
+    option.addEventListener("mousedown", (event) => event.preventDefault());
+    option.addEventListener("click", () => {
+      messageInput.value = `${messageInput.value.slice(0, token.start)}${candidate.insert}${messageInput.value.slice(token.end)}`;
+      const nextCursor = token.start + candidate.insert.length;
+      messageInput.setSelectionRange(nextCursor, nextCursor);
+      hideMacroSuggestions();
+      rememberDraft();
+      resizeMessageInput();
+      updateLocalTyping();
+      messageInput.focus();
+    });
+    macroSuggestions.append(option);
+  }
+  macroSuggestions.hidden = false;
+}
+
 function renderInputSuggestions() {
   renderMentionSuggestions();
   renderEmojiSuggestions();
+  renderMacroSuggestions();
 }
 
 type RenderDecryption = {
@@ -4348,6 +4485,24 @@ function applyMessageSearch() {
   }
 }
 
+function refreshRelativeMessageDisplays() {
+  const nowMs = Date.now();
+  refreshRelativeTimeMacros(messagesPanel, nowMs);
+  for (const target of messageContextTargets.values()) {
+    if (redactedMessageIds.has(target.message.id)) continue;
+    target.article.dataset.search = `${target.sender} ${searchableMessageBody(target.body, nowMs)}`.toLowerCase();
+  }
+  if (replyTarget && !replyPreview.hidden) {
+    const preview = formatMessageMacrosAsText(replyTarget.body, nowMs).replace(/\s+/g, " ").trim() || "Encrypted message";
+    replyPreviewText.textContent = `Replying to ${replyTarget.sender}: ${preview.slice(0, 180)}`;
+  }
+  if (editTarget && !editPreview.hidden) {
+    const preview = formatMessageMacrosAsText(editTarget.body, nowMs).replace(/\s+/g, " ").slice(0, 180);
+    editPreviewText.textContent = `Editing ${editTarget.sender}: ${preview}`;
+  }
+  applyMessageSearch();
+}
+
 function rememberDraft(conversationId = selectedConversationId) {
   if (!conversationId) return;
   const value = messageInput.value;
@@ -4406,6 +4561,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   setMobileSidebar(false);
   hideMentionSuggestions();
   hideEmojiSuggestions();
+  hideMacroSuggestions();
   const hashTarget = messageTargetFromHash();
   const currentLocation = chatLocation();
   const messageTarget = hashTarget && (channel && selectedServerId
@@ -4729,6 +4885,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!gifPicker.hidden && event.target instanceof Node && !gifPicker.contains(event.target) && event.target !== gifToggle) closeGifPicker();
   if (!emojiSuggestions.hidden && event.target instanceof Node && !emojiSuggestions.contains(event.target) && event.target !== messageInput) hideEmojiSuggestions();
   if (!mentionSuggestions.hidden && event.target instanceof Node && !mentionSuggestions.contains(event.target) && event.target !== messageInput) hideMentionSuggestions();
+  if (!macroSuggestions.hidden && event.target instanceof Node && !macroSuggestions.contains(event.target) && event.target !== messageInput) hideMacroSuggestions();
 });
 window.addEventListener("resize", closeMessageContextMenu);
 window.addEventListener("resize", closeNavigationContextMenu);
@@ -5256,7 +5413,7 @@ function renderMessage(
     : []);
   article.dataset.messageId = message.id;
   article.id = `message-${message.id}`;
-  article.dataset.search = `${senderIdentity} ${body} ${error ?? ""}`.toLowerCase();
+  article.dataset.search = `${senderIdentity} ${searchableMessageBody(body)} ${error ?? ""}`.toLowerCase();
   article.dataset.senderKey = senderKey(message, decrypted);
   article.dataset.createdAt = message.createdAt;
   article.dataset.groupBreak = String(messageBreaksGrouping(decrypted));
@@ -5418,7 +5575,7 @@ function renderMessage(
     replyContext.type = "button";
     replyContext.title = "Jump to replied message";
     const replyLabel = document.createElement("span");
-    replyLabel.textContent = `${reply.sender}: ${(reply.body || "Encrypted message").replace(/\s+/g, " ").slice(0, 180)}`;
+    replyLabel.textContent = `${reply.sender}: ${formatMessageMacrosAsText(reply.body || "Encrypted message").replace(/\s+/g, " ").slice(0, 180)}`;
     replyContext.append(iconElement("corner-up-left"), replyLabel);
     renderIcons(replyContext);
     replyContext.addEventListener("click", () => void scrollToMessage(reply.messageId));
@@ -5953,7 +6110,8 @@ composer.addEventListener("submit", async (event) => {
   const selection = selectionToken;
   const stillHere = () => selection === selectionToken && selectedConversationId === conversationId && cryptoClient === activeCryptoClient;
   const activeEdit = editTarget;
-  const text = replaceEmojiShortcodes(messageInput.value.trim());
+  const sentAtMs = Date.now();
+  const text = freezeNowMessageMacros(replaceEmojiShortcodes(messageInput.value.trim()), sentAtMs);
   const attachmentsToSend = activeEdit ? [] : composerAttachments.filter((attachment) => attachment.status !== "uploading");
   if (!text && attachmentsToSend.length === 0) return;
   if (text.length > MAX_MESSAGE_TEXT_LENGTH) {
@@ -5970,6 +6128,7 @@ composer.addEventListener("submit", async (event) => {
   updateComposerState();
   hideMentionSuggestions();
   hideEmojiSuggestions();
+  hideMacroSuggestions();
   closeEmojiPicker();
   closeGifPicker();
   const uploadController = attachmentsToSend.length > 0 ? new AbortController() : undefined;
@@ -6335,6 +6494,7 @@ document.addEventListener("keydown", (event) => {
     else if (!emojiPicker.hidden) closeEmojiPicker();
     else if (!emojiSuggestions.hidden) hideEmojiSuggestions();
     else if (!mentionSuggestions.hidden) hideMentionSuggestions();
+    else if (!macroSuggestions.hidden) hideMacroSuggestions();
     else if (editTarget && document.activeElement === messageInput) clearEditTarget();
     else if (replyTarget && document.activeElement === messageInput) clearReplyTarget();
     else if (!messageSearchContainer.hidden) closeMessageSearch();
@@ -6460,7 +6620,10 @@ window.addEventListener("resize", () => setMobileSidebar(chatLayout.classList.co
 setMobileSidebar(chatLayout.classList.contains("mobile-sidebar-open"));
 document.addEventListener("visibilitychange", () => {
   publishPresence(document.visibilityState === "hidden" ? "idle" : "online");
-  if (document.visibilityState === "visible") void refreshModerationNotices(selectedServerId);
+  if (document.visibilityState === "visible") {
+    refreshRelativeMessageDisplays();
+    void refreshModerationNotices(selectedServerId);
+  }
   if (document.visibilityState === "visible" && selectedConversationId && isAtLatestMessage()) {
     clearUnread();
     void refreshMessages().catch((error) => setStatus(readableError(error), true));
@@ -6511,6 +6674,9 @@ async function boot() {
   }
 
   if (!cryptoClient) return;
+  window.setInterval(() => {
+    if (!document.hidden) refreshRelativeMessageDisplays();
+  }, 30_000);
   window.setInterval(() => {
     if (cryptoClient) {
       void cryptoClient.syncToDevice()

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-30
+
+### Added
+
+- Encrypted chat messages support local time/date macros, timestamp formats, Unix/ISO values, relative-duration offsets, and date/time components; composer suggestions include macro and relative-offset examples.
+
 ### Fixed
 
 - Changing a custom theme's starting palette now updates its color controls, gradient colors, and live preview.
@@ -167,6 +173,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.19.0](docs/changelogs/0.19.0.md) — 2026-09-30
 - [0.18.0](docs/changelogs/0.18.0.md) — 2026-09-29
 - [0.17.0](docs/changelogs/0.17.0.md) — 2026-09-29
 - [0.16.0](docs/changelogs/0.16.0.md) — 2026-09-28
