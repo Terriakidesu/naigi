@@ -58,7 +58,10 @@ content.
 ## Reports, account blocking, and instance administration
 
 Reports are installation-wide and are reviewed by host operators provisioned in the separate admin
-database. `POST /v1/instance-admin/auth/login` sets the `HttpOnly` cookie
+database. The first host identity created by `bun run admin-users -- create <username>` is an Admin.
+Admins can provision and manage additional operators in the console. Moderators can review reports
+and manage chat accounts, but cannot access platform controls, maintenance, report evidence or key
+management, or operator management. `POST /v1/instance-admin/auth/login` sets the `HttpOnly` cookie
 `priv_chat_admin_session`; `GET /v1/instance-admin/auth/me` checks it and
 `POST /v1/instance-admin/auth/logout` revokes it. This cookie and identity store are independent
 from chat authentication and `priv_chat_session`. Host operators are not chat accounts and cannot
@@ -79,9 +82,9 @@ Message text and report details are never sent to the server in plaintext. The c
 client encrypts the reporter-supplied evidence with an ephemeral AES-256-GCM key and wraps that key
 to the host's RSA-OAEP-3072/SHA-256 public key. The server stores only the encrypted envelope and
 key ID. A shared excerpt is supplied by the reporter and is not proof that the excerpt matches the
-original encrypted message. Operators unlock an encrypted private-key backup locally in the
-browser; private report keys are never uploaded or stored by the server. Retired public keys remain
-available for existing evidence, so operators must keep their old private-key backups.
+original encrypted message. Admins unlock encrypted private-key backups locally in the browser and
+manage report keys; private keys are never uploaded or stored by the server. Retired public keys
+remain available for existing evidence, so Admins must keep their old private-key backups.
 
 The host-only web console is at `/instance-admin`. Its APIs are:
 
@@ -91,9 +94,9 @@ The host-only web console is at `/instance-admin`. Its APIs are:
 | `GET` | `/v1/instance-admin/auth/me` | Get the authenticated host operator |
 | `POST` | `/v1/instance-admin/auth/logout` | Revoke the host-operator session |
 | `GET` | `/v1/instance-admin/reports?status=open` | List report metadata (no message body or evidence ciphertext) |
-| `GET` | `/v1/instance-admin/reports/:reportId` | Read one report and its optional encrypted evidence envelope |
+| `GET` | `/v1/instance-admin/reports/:reportId` | Read one report; only Admins receive its optional encrypted evidence envelope |
 | `PATCH` | `/v1/instance-admin/reports/:reportId` | Set report status to `open`, `reviewing`, `resolved`, or `dismissed` |
-| `POST` | `/v1/instance-admin/reports/:reportId/evidence-access` | Record that an operator decrypted evidence locally |
+| `POST` | `/v1/instance-admin/reports/:reportId/evidence-access` | Admin-only audit record that evidence was decrypted locally |
 | `POST` | `/v1/instance-admin/reports/:reportId/remove-message` | Remove the referenced encrypted message from server history |
 | `POST` | `/v1/instance-admin/users/:userId/suspend` | Revoke sessions and suspend an account, optionally resolving a matching report |
 | `DELETE` | `/v1/instance-admin/users/:userId/suspension` | Restore a suspended account |
@@ -101,19 +104,28 @@ The host-only web console is at `/instance-admin`. Its APIs are:
 | `GET` | `/v1/instance-admin/users/:userId` | Read an account's instance warning and action history |
 | `POST` | `/v1/instance-admin/users/:userId/warnings` | Issue an instance-wide warning |
 | `DELETE` | `/v1/instance-admin/warnings/:warningId` | Revoke an instance-wide warning |
-| `GET` | `/v1/instance-admin/report-keys` | List active and retired public-key IDs |
-| `POST` | `/v1/instance-admin/report-keys` | Register and activate an RSA public key |
-| `GET` | `/v1/instance-admin/audit` | Read the instance-wide admin audit log |
-| `GET` | `/v1/instance-admin/operations` | Read an on-demand, read-only service, database, and storage snapshot |
-| `GET` | `/v1/instance-admin/operations/overview` | Read aggregate account, community, activity, moderation, and live-connection counts |
-| `GET` | `/v1/instance-admin/operations/live` | Sample live process/host CPU and RAM metrics |
-| `GET` | `/v1/instance-admin/maintenance/summary` | Read aggregate quarantine and recovery status |
-| `POST` | `/v1/instance-admin/maintenance/preview` | Scan storage and report aggregate eligible-file estimates |
-| `POST` | `/v1/instance-admin/maintenance/quarantine` | Fresh-scan, recheck, and quarantine up to 500 eligible files |
-| `POST` | `/v1/instance-admin/maintenance/restore` | Restore up to 500 quarantined files without overwriting existing files |
-| `POST` | `/v1/instance-admin/maintenance/purge` | Permanently delete up to 500 files whose recovery period has expired |
+| `POST` | `/v1/instance-admin/users/:userId/timeout` | Apply or update an audited installation-wide send timeout (60 seconds to 30 days) |
+| `DELETE` | `/v1/instance-admin/users/:userId/timeout` | Remove an active installation-wide send timeout |
+| `GET` | `/v1/instance-admin/spaces?status=all&limit=50&cursor=…` | Admin-only list of opaque space IDs and minimal activation metadata using bounded keyset pagination |
+| `PATCH` | `/v1/instance-admin/spaces/:serverId/activation` | Admin-only activation or deactivation with a required audited reason |
+| `GET` | `/v1/instance-admin/spaces/:serverId/audit?limit=50&cursor=…` | Admin-only paginated host and space audit entries without message or encrypted space content |
+| `GET` | `/v1/instance-admin/report-keys` | Admin-only list of active and retired public-key IDs |
+| `POST` | `/v1/instance-admin/report-keys` | Admin-only registration and activation of an RSA public key |
+| `GET` | `/v1/instance-admin/audit` | Admins read the full instance audit log; Moderators receive only report/account moderation events |
+| `GET` | `/v1/instance-admin/operations` | Admin-only on-demand, read-only service, database, and storage snapshot |
+| `GET` | `/v1/instance-admin/operations/overview` | Admin-only aggregate account, community, activity, moderation, and live-connection counts |
+| `GET` | `/v1/instance-admin/operations/live` | Admin-only live process/host CPU and RAM metrics |
+| `GET` | `/v1/instance-admin/maintenance/summary` | Admin-only aggregate quarantine and recovery status |
+| `POST` | `/v1/instance-admin/maintenance/preview` | Admin-only storage scan and aggregate eligible-file estimates |
+| `POST` | `/v1/instance-admin/maintenance/quarantine` | Admin-only fresh-scan, recheck, and quarantine of up to 500 eligible files |
+| `POST` | `/v1/instance-admin/maintenance/restore` | Admin-only restore of up to 500 quarantined files |
+| `POST` | `/v1/instance-admin/maintenance/purge` | Admin-only permanent deletion of up to 500 expired quarantined files |
+| `GET` | `/v1/instance-admin/operators` | Admin-only list of host operators (bounded to 200) |
+| `POST` | `/v1/instance-admin/operators` | Admin-only create an Admin or Moderator identity |
+| `PATCH` | `/v1/instance-admin/operators/:operatorId` | Admin-only change role or enable/disable an operator; protected against self-change and removing the last active Admin |
+| `GET` | `/v1/instance-admin/operators/audit?limit=50` | Admin-only, bounded recent operator access history |
 
-The operations endpoints require the host-operator cookie. The snapshot endpoint returns database
+Operations and maintenance endpoints require an Admin-role host-operator cookie. The snapshot endpoint returns database
 sizes and approximate row counts, plus aggregate storage-integrity totals. The live endpoint returns
 CPU percentages (app-process CPU normalized against OS-reported logical cores and host-wide CPU),
 RAM, uptime, and load averages; the console samples it every three seconds while Operations is open.
@@ -136,8 +148,11 @@ Files newer than one hour are excluded from likely-orphan totals; incomplete sca
 instead of claiming a complete missing-file count. Operations is read-only and does not alter
 application content or files.
 
-Host user management is available only to host operators and searches chat-account usernames and
-display names; host operator identities remain separate. An instance ban blocks future sign-ins,
+Host user management is available only to host operators and searches chat-account username and
+display-name prefixes of at least two characters (select the search field). Results use indexed,
+bounded keyset pagination in the matching prefix order;
+the directory does not compute a full matching-account count or use offset scans. Host operator
+identities remain separate. An instance ban blocks future sign-ins,
 deletes existing chat sessions and push subscriptions, and closes active chat sockets. Restoring a
 ban permits a later sign-in but does not restore deleted sessions. Instance warnings are separate
 from space moderation and do not restrict access. Both warning scopes store a moderator-supplied
@@ -146,8 +161,20 @@ to the affected user. Space warning creation and revocation use the `warn_member
 `revoke_warnings` permissions (or legacy `manage_members`) and are included in the space audit log.
 Unacknowledged space warnings are also available across all of a user's spaces so they remain visible
 in chat even while the user is viewing a direct conversation or is no longer an active space member.
-Moderation reasons are administrative records, not chat messages; no encrypted message content or
-report evidence is returned by these routes.
+An instance-wide send timeout blocks a chat account from uploading or sending encrypted message
+envelopes in all spaces and direct conversations until expiry or moderator removal; the account can
+still sign in, read history, and receive realtime messages. Timeout replacement, removal, reason, and
+expiry are recorded in moderation history. Moderation reasons are administrative records, not chat
+messages; no encrypted message content or report evidence is returned by these routes.
+
+The host Spaces page shows opaque IDs, active-member totals, activation status, and paginated safe
+audit metadata only; decrypted space names are never requested or displayed. Deactivation is a
+reversible access freeze: existing members cannot read, send, upload, or use realtime in the space,
+and new members cannot join through invites. Data and memberships are retained, and reactivation
+restores access. Existing members continue to see a deactivated space in their space switcher and
+receive a status-only page when selecting it; room, message, and realtime access remains blocked.
+Every host activation change records the operator, reason, action, and timestamp in the selected
+space's audit history alongside ordinary space audit entries.
 
 ### User warning endpoints
 
@@ -199,7 +226,7 @@ the backend does not depend on that representation.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/servers` | List active server memberships |
+| `GET` | `/v1/servers` | List memberships, including deactivated spaces with their `deactivatedAt` status |
 | `POST` | `/v1/servers` | Create a server and its initial `general` channel |
 | `GET` | `/v1/servers/:serverId` | Fetch one authorized server |
 | `PATCH` | `/v1/servers/:serverId` | Replace encrypted server metadata and/or set the join-announcement and landing rooms (owner/admin) |

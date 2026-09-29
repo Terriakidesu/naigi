@@ -53,6 +53,16 @@
         <button id="mobile-sidebar-backdrop" class="mobile-sidebar-backdrop" type="button" aria-label="Close conversation list"></button>
 
         <main class="panel chat-main">
+          <section id="deactivated-space-view" class="deactivated-space-view" role="alert" aria-live="assertive" tabindex="-1" hidden>
+            <div class="deactivated-space-warning">
+              <span class="deactivated-space-icon" aria-hidden="true"><i data-lucide="lock-keyhole"></i></span>
+              <p class="deactivated-space-kicker">SPACE DEACTIVATED</p>
+              <h1>This space is deactivated</h1>
+              <p id="deactivated-space-name" class="deactivated-space-name"></p>
+              <p class="deactivated-space-description">A host administrator has frozen access to this space. Rooms and messages are unavailable while it is deactivated. The space data is retained and access returns if it is reactivated.</p>
+              <button id="deactivated-space-navigation" class="secondary deactivated-space-navigation" type="button"><i data-lucide="arrow-left"></i>Open space navigation</button>
+            </div>
+          </section>
           <header class="chat-header">
             <div class="chat-header-main">
               <div class="channel-heading">

@@ -4,48 +4,77 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="no-referrer">
-    <title>Users · Host console · Naigi</title>
+    <script src="/instance-admin-theme-init.js"></script>
+    <title>Accounts · Admin console · Naigi</title>
     <link rel="stylesheet" href="/app.css">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   </head>
   <body class="settings-page instance-admin-page">
-    <header class="topbar">
-      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">N</span><div><strong>Naigi</strong><span class="tag">host operator console</span></div></div>
-      <div class="topbar-links"><a class="text-link" href="/">Chat sign in</a><button id="admin-logout-users" class="secondary" type="button">Sign out operator</button></div>
-    </header>
+    <aside class="instance-admin-sidebar">
+      <a class="instance-admin-brand" href="/instance-admin" aria-label="Naigi Admin console home"><span class="instance-admin-brand-mark" aria-hidden="true">N</span><span><strong>Naigi</strong><small>ADMIN CONSOLE</small></span></a>
+      <nav class="instance-admin-sidebar-nav" aria-label="Admin console pages">
+        <p class="instance-admin-sidebar-caption">MODERATION</p>
+        <a href="/instance-admin"><i data-lucide="flag"></i><span>Reports</span></a>
+        <a href="/instance-admin/users" aria-current="page"><i data-lucide="users-round"></i><span>Accounts</span></a>
+        <p class="instance-admin-sidebar-caption" data-admin-only hidden>PLATFORM</p>
+        <a data-admin-only hidden href="/instance-admin/spaces"><i data-lucide="boxes"></i><span>Spaces</span></a>
+        <a data-admin-only hidden href="/instance-admin/operations"><i data-lucide="activity"></i><span>Operations</span></a>
+        <p class="instance-admin-sidebar-caption" data-admin-only hidden>SYSTEM</p>
+        <a data-admin-only hidden href="/instance-admin/maintenance"><i data-lucide="wrench"></i><span>Maintenance</span></a>
+        <a data-admin-only hidden href="/instance-admin/operators"><i data-lucide="shield-user"></i><span>Operators</span></a>
+      </nav>
+      <footer class="instance-admin-sidebar-footer">
+        <label class="instance-admin-theme-control" for="instance-admin-theme"><span><i data-lucide="monitor"></i>Theme</span><select id="instance-admin-theme" aria-label="Admin console theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <div class="instance-admin-operator"><span class="instance-admin-operator-mark"><i data-lucide="shield-check"></i></span><span><strong id="admin-operator-name">Host operator</strong><small id="admin-operator-role">Separate admin identity</small></span></div>
+        <a class="instance-admin-sidebar-action" href="/"><i data-lucide="log-in"></i><span>Chat sign in</span></a>
+        <button id="admin-logout-users" class="instance-admin-sidebar-action" type="button" aria-label="Sign out operator"><i data-lucide="log-out"></i><span>Sign out</span></button>
+      </footer>
+    </aside>
     <main class="instance-admin-main">
       <header class="instance-admin-heading">
-        <div><p class="eyebrow">HOST USER MANAGEMENT</p><h1>Users</h1><p class="muted">Search chat accounts, manage instance-wide access, and review warning history. Host operator accounts are stored separately.</p></div>
+        <div><p class="eyebrow">HOST ADMIN <span aria-hidden="true">/</span> MODERATION</p><h1>Chat accounts</h1><p class="muted">Find an account to review its instance access, warnings, and moderation history. Host operators use separate identities and never appear in this directory.</p></div>
+        <span class="instance-admin-session"><i data-lucide="shield-check"></i>Restricted console</span>
       </header>
-      <nav class="instance-admin-console-nav" aria-label="Host console pages">
-        <a href="/instance-admin">Reports</a>
-        <span aria-current="page">Users</span>
-        <a href="/instance-admin/operations">Operations</a>
-        <a href="/instance-admin/maintenance">Maintenance</a>
-      </nav>
-      <p id="instance-users-status" class="instance-operations-status" role="status" aria-live="polite">Search chat accounts to manage instance-wide access.</p>
+      <aside class="instance-admin-guidance instance-users-guidance" aria-label="Account search guidance">
+        <span class="instance-admin-guidance-icon" aria-hidden="true">i</span>
+        <div><strong>Search the directory</strong><p>Choose a field and enter a prefix of at least two characters. Results are capped at 50 per page and do not calculate a full account total.</p></div>
+        <span class="instance-admin-privacy-note"><i data-lucide="lock-keyhole"></i> No messages or encrypted content</span>
+      </aside>
+      <p id="instance-users-status" class="instance-operations-status" role="status" aria-live="polite">Search for at least two characters. Results are bounded and cursor-paginated; no full account count is computed.</p>
       <div class="instance-users-layout">
         <section class="instance-admin-panel instance-users-directory">
-          <header class="instance-users-heading"><div><p class="eyebrow">CHAT ACCOUNTS</p><h2>Directory</h2></div><span id="instance-users-count" class="muted small"></span></header>
+          <header class="instance-users-heading"><div><p class="eyebrow">CHAT ACCOUNTS</p><h2>Directory</h2></div><span id="instance-users-count" class="muted small">Search required</span></header>
           <form id="instance-users-search-form" class="instance-users-search">
-            <label for="instance-users-search">Search<input id="instance-users-search" type="search" maxlength="100" placeholder="Username or display name" autocomplete="off"></label>
+            <label for="instance-users-search">Search prefix<input id="instance-users-search" type="search" minlength="2" maxlength="100" placeholder="Enter at least 2 characters" autocomplete="off" aria-describedby="instance-users-search-hint"></label>
+            <label for="instance-users-search-field">Search by<select id="instance-users-search-field"><option value="username">Username</option><option value="displayName">Display name</option></select></label>
             <label for="instance-users-filter">Status<select id="instance-users-filter"><option value="all">All accounts</option><option value="active">Active</option><option value="banned">Banned</option></select></label>
             <button class="secondary" type="submit"><i data-lucide="search"></i>Search</button>
           </form>
-          <div id="instance-users-list" class="instance-users-list" role="list" aria-live="polite" aria-busy="true"><p class="muted">Loading accounts…</p></div>
+          <p id="instance-users-search-hint" class="instance-admin-field-hint">Username and display name searches are separate and case-insensitive.</p>
+          <div id="instance-users-list" class="instance-users-list" role="group" aria-label="Matching chat accounts" aria-live="polite" aria-busy="false"><p class="muted">Enter at least two characters to search usernames and display names.</p></div>
           <footer class="instance-users-pagination"><button id="instance-users-previous" class="secondary" type="button" disabled>Previous</button><span id="instance-users-page" class="muted small">Page 1</span><button id="instance-users-next" class="secondary" type="button" disabled>Next</button></footer>
         </section>
         <section id="instance-user-detail" class="instance-admin-panel instance-user-detail" hidden aria-live="polite">
           <div class="instance-users-heading"><div><p class="eyebrow">ACCOUNT MODERATION</p><h2 id="instance-user-title">Select a user</h2><p id="instance-user-meta" class="muted small"></p></div><span id="instance-user-state" class="instance-user-state"></span></div>
           <section class="instance-user-access">
             <div><h3>Instance-wide access</h3><p id="instance-user-ban-detail" class="muted small"></p></div>
-            <label id="instance-user-ban-reason-wrap" class="instance-user-reason" for="instance-user-ban-reason">Reason<textarea id="instance-user-ban-reason" maxlength="240" rows="2" placeholder="Why is this account being banned?" required></textarea></label>
+            <label id="instance-user-ban-reason-wrap" class="instance-user-reason" for="instance-user-ban-reason">Ban reason<textarea id="instance-user-ban-reason" maxlength="240" rows="2" placeholder="Explain why this account is being banned" aria-describedby="instance-user-ban-reason-hint" required></textarea><small id="instance-user-ban-reason-hint" class="instance-admin-field-hint">Required for the audit record. Maximum 240 characters.</small></label>
             <div class="instance-user-actions"><button id="instance-user-ban" class="danger-button" type="button">Ban account</button><button id="instance-user-restore" class="secondary" type="button" hidden>Restore account</button></div>
+          </section>
+          <section class="instance-user-warning-section instance-user-timeout-section">
+            <header><div><h3>Installation-wide send timeout</h3><p class="muted small">Blocks sending messages and uploads in every space and direct conversation. Sign-in, reading, and receiving remain available.</p></div><span id="instance-user-timeout-state" class="instance-user-state is-timed-out" hidden></span></header>
+            <p id="instance-user-timeout-detail" class="muted small">Timeout status will appear here.</p>
+            <form id="instance-user-timeout-form" class="instance-user-warning-form instance-user-timeout-form">
+              <label for="instance-user-timeout-reason">Timeout reason<textarea id="instance-user-timeout-reason" maxlength="240" rows="2" placeholder="Explain why this timeout is being applied" required></textarea><small class="instance-admin-field-hint">Required for the audit record. Maximum 240 characters.</small></label>
+              <label for="instance-user-timeout-duration">Duration<select id="instance-user-timeout-duration"><option value="600">10 minutes</option><option value="3600" selected>1 hour</option><option value="21600">6 hours</option><option value="86400">1 day</option><option value="604800">7 days</option><option value="2592000">30 days</option></select></label>
+              <div class="instance-user-actions"><button id="instance-user-timeout-submit" class="danger-button" type="submit">Apply timeout</button><button id="instance-user-timeout-remove" class="secondary" type="button" hidden>Remove timeout</button></div>
+            </form>
+            <div id="instance-user-timeouts" class="instance-user-history" aria-live="polite"><p class="muted small">Select an account to view its timeout history.</p></div>
           </section>
           <section class="instance-user-warning-section">
             <header><div><h3>Issue an instance warning</h3><p class="muted small">The user sees this notice in chat. It does not restrict access.</p></div></header>
             <form id="instance-user-warning-form" class="instance-user-warning-form">
-              <label for="instance-user-warning-reason">Warning reason<textarea id="instance-user-warning-reason" maxlength="240" rows="2" required></textarea></label>
+              <label for="instance-user-warning-reason">Warning reason<textarea id="instance-user-warning-reason" maxlength="240" rows="2" placeholder="Explain the behavior and expected change" aria-describedby="instance-user-warning-hint" required></textarea><small id="instance-user-warning-hint" class="instance-admin-field-hint">Visible to the affected user and kept in the moderation history.</small></label>
               <label for="instance-user-warning-duration">Expires<select id="instance-user-warning-duration"><option value="2592000">30 days</option><option value="7776000">90 days</option><option value="never">Never</option></select></label>
               <button type="submit">Issue warning</button>
             </form>

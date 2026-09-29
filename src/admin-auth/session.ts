@@ -1,11 +1,13 @@
 import { password } from "bun";
 import { config } from "../config";
 import { adminDb } from "../admin-db/client";
+import type { AdminRole } from "./permissions";
 
 type AdminUserRow = {
   id: string;
   username: string;
   password_hash: string;
+  role: AdminRole;
 };
 
 type AdminSessionRow = {
@@ -15,6 +17,7 @@ type AdminSessionRow = {
 export type AuthenticatedAdmin = {
   id: string;
   username: string;
+  role: AdminRole;
 };
 
 export function normalizeAdminUsername(username: string) {
@@ -56,14 +59,14 @@ export async function authenticateAdmin(cookieHeader?: string): Promise<Authenti
   if (!token) return null;
   const tokenHash = await hashAdminSessionToken(token);
   const [admin] = await adminDb<AdminUserRow[]>`
-    select u.id, u.username, u.password_hash
+    select u.id, u.username, u.password_hash, u.role
     from admin_sessions s
     join admin_users u on u.id = s.admin_user_id
     where s.token_hash = ${tokenHash} and s.expires_at > now() and u.disabled_at is null
   `;
   if (!admin) return null;
   await adminDb`update admin_sessions set last_used_at = now() where token_hash = ${tokenHash}`;
-  return { id: admin.id, username: admin.username };
+  return { id: admin.id, username: admin.username, role: admin.role };
 }
 
 export async function deleteAdminSession(token: string | undefined) {
@@ -74,7 +77,7 @@ export async function deleteAdminSession(token: string | undefined) {
 
 export async function verifyAdminPassword(username: string, candidate: string) {
   const [admin] = await adminDb<AdminUserRow[]>`
-    select id, username, password_hash from admin_users
+    select id, username, password_hash, role from admin_users
     where username = ${normalizeAdminUsername(username)} and disabled_at is null
   `;
   if (!admin) {
@@ -82,5 +85,5 @@ export async function verifyAdminPassword(username: string, candidate: string) {
     return null;
   }
   if (!(await password.verify(candidate, admin.password_hash))) return null;
-  return { id: admin.id, username: admin.username } satisfies AuthenticatedAdmin;
+  return { id: admin.id, username: admin.username, role: admin.role } satisfies AuthenticatedAdmin;
 }

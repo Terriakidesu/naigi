@@ -43,15 +43,23 @@ bun run dev
 ### Instance reports and host moderation
 
 Instance-wide reports and account suspensions are controlled by host operators, separately from
-space owners and moderators. After running `bun run db:migrate`, create a host-only identity with
-`bun run admin-users -- create <username>`. The command prompts for a password without echoing it;
-use `disable` or `enable` in place of `create` to revoke or restore an operator account. Operators
-are stored only in the separate admin database: they cannot sign in to chat, have chat profiles, or
-appear in member lists or recipient discovery. Use `password` to rotate an operator password and
-revoke their active sessions. For non-interactive shells, add `--password-stdin` and pipe two
-newline-separated password entries to the command; do not put passwords in command arguments.
+space owners and moderators. After running `bun run db:migrate`, bootstrap the first Admin identity
+with `bun run admin-users -- create <username>`. The command prompts for a password without echoing it;
+use `disable` or `enable` in place of `create` to revoke or restore an operator account. Admins can
+create and manage Admin and Moderator identities from `/instance-admin/operators`; operator role,
+enable, and disable changes are audited. Moderators can review reports and moderate chat accounts,
+but cannot access platform controls, maintenance, report evidence or evidence keys, or operator
+management. Admins and Moderators can apply audited installation-wide send timeouts of up to 30 days;
+timeouts block sending everywhere while allowing sign-in, reading, and receiving. Operators are
+stored only in the separate admin database: they cannot sign in to chat,
+have chat profiles, or appear in member lists or recipient discovery. Use `password` to rotate an
+operator password and revoke their active sessions. For non-interactive shells, add `--password-stdin`
+and pipe two newline-separated password entries to the command; do not put passwords in command
+arguments.
 The host-only moderation console is at `/instance-admin`; account search and instance-wide bans and
-warnings are on `/instance-admin/users`. Live operations and on-demand database and storage
+warnings are on `/instance-admin/users`. Opaque space IDs, reversible access freezes, and per-space
+audit history are on `/instance-admin/spaces`; deactivation retains memberships and data while
+blocking existing access and new joins. Live operations and on-demand database and storage
 measurements are on the separate `/instance-admin/operations` page. Storage cleanup is
 isolated on `/instance-admin/maintenance`: complete scans and a fresh reference check are required
 before files older than 24 hours can be quarantined. Quarantined files can be restored for 30 days;

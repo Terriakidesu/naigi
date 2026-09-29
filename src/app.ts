@@ -24,9 +24,11 @@ import {
   createAdminSession,
   deleteAdminSession,
   extractAdminCookieToken,
+  normalizeAdminUsername,
   verifyAdminPassword,
   type AuthenticatedAdmin,
 } from "./admin-auth/session";
+import { adminCan, type AdminCapability } from "./admin-auth/permissions";
 import { config } from "./config";
 import { getInstanceLiveResources, getInstanceOperationsOverview, getInstanceOperationsSnapshot } from "./admin-operations";
 import {
@@ -45,7 +47,7 @@ import {
 } from "./admin-maintenance";
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "./encoding";
 import { db, pingDatabase } from "./db/client";
-import { pingAdminDatabase } from "./admin-db/client";
+import { adminDb, pingAdminDatabase } from "./admin-db/client";
 import {
   ProfileImageInvalidError,
   profileBannerUrl,
@@ -125,6 +127,15 @@ async function publicFile(name: string, contentType: string) {
   const file = Bun.file(`${import.meta.dir}/../public/${name}`);
   if (!(await file.exists())) return null;
   return new Response(file, { headers: { "cache-control": "no-cache", "content-type": contentType } });
+}
+
+async function adminPageResponse(cookie: string | undefined, page: string, requiredCapability?: AdminCapability) {
+  const operator = await authenticateAdmin(cookie);
+  if (!operator) return publicFile("instance-admin-login.html", "text/html; charset=utf-8");
+  if (requiredCapability && !adminCan(operator.role, requiredCapability)) {
+    return new Response(null, { status: 302, headers: { location: "/instance-admin", "cache-control": "no-store" } });
+  }
+  return publicFile(page, "text/html; charset=utf-8");
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -283,6 +294,36 @@ function isUuid(value: unknown): value is string {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function encodePageCursor(value: Record<string, string>) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function decodePageCursor(value: string | undefined) {
+  if (!value || value.length > 512 || !/^[A-Za-z0-9_-]+$/.test(value)) return undefined;
+  try {
+    const decoded: unknown = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+    return objectValue(decoded) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isCursorTimestamp(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value);
+}
+
+function prefixUpperBound(value: string) {
+  const characters = Array.from(value);
+  for (let index = characters.length - 1; index >= 0; index -= 1) {
+    let codePoint = characters[index]!.codePointAt(0)!;
+    if (codePoint >= 0x10ffff) continue;
+    codePoint += 1;
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) codePoint = 0xe000;
+    return characters.slice(0, index).join("") + String.fromCodePoint(codePoint);
+  }
+  return undefined;
+}
+
 function parseCryptoUpload(value: unknown) {
   const body = objectValue(value);
   const deviceKeys = objectValue(body?.device_keys);
@@ -306,8 +347,10 @@ function decodeEncryptedMetadata(value: string | undefined) {
 
 async function serverMembership(serverId: string, userId: string) {
   const [membership] = await db<{ role: "owner" | "admin" | "member" }[]>`
-    select role from server_members
-    where server_id = ${serverId} and user_id = ${userId} and left_at is null
+    select sm.role from server_members sm
+    join servers s on s.id = sm.server_id
+    where sm.server_id = ${serverId} and sm.user_id = ${userId} and sm.left_at is null
+      and s.deactivated_at is null
   `;
   return membership;
 }
@@ -479,6 +522,7 @@ async function serverAuthorization(serverId: string, userId: string) {
     from server_members sm
     join servers s on s.id = sm.server_id
     where sm.server_id = ${serverId} and sm.user_id = ${userId} and sm.left_at is null
+      and s.deactivated_at is null
   `;
   if (!membership) return undefined;
 
@@ -840,6 +884,15 @@ async function isUserTimedOut(serverId: string, userId: string) {
   return Boolean(timeout);
 }
 
+async function isInstanceUserTimedOut(userId: string) {
+  const [timeout] = await db<{ id: string }[]>`
+    select id from instance_user_timeouts
+    where user_id = ${userId} and revoked_at is null and expires_at > now()
+    limit 1
+  `;
+  return Boolean(timeout);
+}
+
 function newInviteToken() {
   return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 }
@@ -946,43 +999,44 @@ export function createApp() {
       return file;
     })
     .get("/instance-admin", async ({ headers, set }) => {
-      const operator = await authenticateAdmin(headers.cookie);
-      const file = await publicFile(
-        operator ? "instance-admin.html" : "instance-admin-login.html",
-        "text/html; charset=utf-8",
-      );
+      const file = await adminPageResponse(headers.cookie, "instance-admin.html", "moderation");
       if (!file) return respondError(set, 404, "client_not_built");
       set.headers["cache-control"] = "no-store";
       return file;
     })
     .get("/instance-admin/operations", async ({ headers, set }) => {
-      const operator = await authenticateAdmin(headers.cookie);
-      const file = await publicFile(
-        operator ? "instance-operations.html" : "instance-admin-login.html",
-        "text/html; charset=utf-8",
-      );
+      const file = await adminPageResponse(headers.cookie, "instance-operations.html", "platform");
       if (!file) return respondError(set, 404, "client_not_built");
       set.headers["cache-control"] = "no-store";
       return file;
     })
     .get("/instance-admin/users", async ({ headers, set }) => {
-      const operator = await authenticateAdmin(headers.cookie);
-      const file = await publicFile(
-        operator ? "instance-users.html" : "instance-admin-login.html",
-        "text/html; charset=utf-8",
-      );
+      const file = await adminPageResponse(headers.cookie, "instance-users.html", "moderation");
+      if (!file) return respondError(set, 404, "client_not_built");
+      set.headers["cache-control"] = "no-store";
+      return file;
+    })
+    .get("/instance-admin/spaces", async ({ headers, set }) => {
+      const file = await adminPageResponse(headers.cookie, "instance-spaces.html", "platform");
       if (!file) return respondError(set, 404, "client_not_built");
       set.headers["cache-control"] = "no-store";
       return file;
     })
     .get("/instance-admin/maintenance", async ({ headers, set }) => {
-      const operator = await authenticateAdmin(headers.cookie);
-      const file = await publicFile(
-        operator ? "instance-maintenance.html" : "instance-admin-login.html",
-        "text/html; charset=utf-8",
-      );
+      const file = await adminPageResponse(headers.cookie, "instance-maintenance.html", "platform");
       if (!file) return respondError(set, 404, "client_not_built");
       set.headers["cache-control"] = "no-store";
+      return file;
+    })
+    .get("/instance-admin/operators", async ({ headers, set }) => {
+      const file = await adminPageResponse(headers.cookie, "instance-operators.html", "operatorManagement");
+      if (!file) return respondError(set, 404, "client_not_built");
+      set.headers["cache-control"] = "no-store";
+      return file;
+    })
+    .get("/instance-admin-theme-init.js", async ({ set }) => {
+      const file = await publicFile("instance-admin-theme-init.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
     .get("/auth.js", async ({ set }) => {
@@ -1027,6 +1081,16 @@ export function createApp() {
     })
     .get("/instance-users.js", async ({ set }) => {
       const file = await publicFile("instance-users.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/instance-operators.js", async ({ set }) => {
+      const file = await publicFile("instance-operators.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/instance-spaces.js", async ({ set }) => {
+      const file = await publicFile("instance-spaces.js", "text/javascript; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
@@ -1150,6 +1214,7 @@ export function createApp() {
     .get("/v1/instance-admin/reports", async ({ headers, query, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "moderation")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       const status = query.status ?? "open";
       const reports = await db<{
@@ -1196,7 +1261,7 @@ export function createApp() {
           messageId: report.message_id,
           reason: report.reason,
           status: report.status,
-          hasEvidence: report.has_evidence,
+          hasEvidence: user.role === "admin" && report.has_evidence,
           createdAt: report.created_at,
           reviewedAt: report.reviewed_at,
           suspended: report.suspended,
@@ -1210,6 +1275,7 @@ export function createApp() {
     .get("/v1/instance-admin/reports/:reportId", async ({ headers, params, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "moderation")) return respondError(set, 403, "forbidden");
       const [report] = await db<{
         id: string;
         reporter_user_id: string | null;
@@ -1260,7 +1326,7 @@ export function createApp() {
           createdAt: report.created_at,
           reviewedBy: report.reviewed_by,
           reviewedAt: report.reviewed_at,
-          evidence: report.evidence_ciphertext && report.evidence_wrapped_key && report.evidence_iv && report.evidence_key_id
+          evidence: user.role === "admin" && report.evidence_ciphertext && report.evidence_wrapped_key && report.evidence_iv && report.evidence_key_id
             ? {
               keyId: report.evidence_key_id,
               ciphertext: encodeBase64(report.evidence_ciphertext),
@@ -1276,6 +1342,7 @@ export function createApp() {
     .post("/v1/instance-admin/reports/:reportId/evidence-access", async ({ headers, params, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "evidenceKeys")) return respondError(set, 403, "forbidden");
       const [report] = await db<{ id: string; target_user_id: string | null; has_evidence: boolean }[]>`
         select id, target_user_id, evidence_ciphertext is not null as has_evidence
         from instance_reports where id = ${params.reportId}
@@ -1290,6 +1357,7 @@ export function createApp() {
     .patch("/v1/instance-admin/reports/:reportId", async ({ body, headers, params, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "moderation")) return respondError(set, 403, "forbidden");
       let updated: { id: string; target_user_id: string | null } | undefined;
       try {
         updated = await db.begin(async (transaction) => {
@@ -1323,6 +1391,7 @@ export function createApp() {
     .post("/v1/instance-admin/reports/:reportId/remove-message", async ({ headers, params, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "moderation")) return respondError(set, 403, "forbidden");
       const [report] = await db<{ id: string; target_user_id: string | null; message_id: string | null; conversation_id: string | null }[]>`
         select id, target_user_id, message_id, conversation_id
         from instance_reports where id = ${params.reportId}
@@ -1361,71 +1430,265 @@ export function createApp() {
     .get("/v1/instance-admin/users", async ({ headers, query, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "moderation")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
-      const search = query.search?.trim().slice(0, 100) ?? "";
-      const pattern = `%${search}%`;
+      const field = query.field ?? "username";
+      const rawSearch = (query.search?.trim() ?? "").replaceAll("\u0000", "");
+      const search = (field === "username" ? rawSearch.normalize("NFKC") : rawSearch).toLowerCase().slice(0, 100);
       const status = query.status ?? "all";
       const requestedLimit = Number(query.limit ?? 50);
-      const limit = Number.isInteger(requestedLimit) ? Math.max(10, Math.min(requestedLimit, 100)) : 50;
-      const requestedOffset = Number(query.offset ?? 0);
-      const offset = Number.isInteger(requestedOffset) ? Math.max(0, Math.min(requestedOffset, 1_000_000)) : 0;
-      const normalizeCount = (value: string | undefined) => {
-        const parsed = Number(value ?? 0);
-        return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : 0;
-      };
-      const [count] = await db<{ total: string }[]>`
-        select count(*)::text as total
-        from users u
-        left join instance_user_suspensions s on s.user_id = u.id
-        where (${search} = '' or u.username ilike ${pattern} or u.display_name ilike ${pattern})
-          and (${status} = 'all' or (${status} = 'banned' and s.user_id is not null)
-            or (${status} = 'active' and s.user_id is null))
-      `;
+      const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 50;
+      const cursor = decodePageCursor(query.cursor);
+      if (query.cursor && (!cursor || typeof cursor.key !== "string" || cursor.key.length > 240
+        || !isUuid(cursor.id) || cursor.context !== `${status}:${field}:${search}`)) {
+        return respondError(set, 400, "invalid_cursor");
+      }
+      if (search.length < 2) return { users: [], limit, nextCursor: null };
+      const searchColumn = field === "username"
+        ? db`u.username_normalized collate "C"`
+        : db`lower(u.display_name) collate "C"`;
+      const upperBound = prefixUpperBound(search);
+      const searchPredicate = upperBound
+        ? db`${searchColumn} >= ${search}::text collate "C" and ${searchColumn} < ${upperBound}::text collate "C"`
+        : db`${searchColumn} >= ${search}::text collate "C"`;
+      const statusPredicate = status === "banned"
+        ? db`and s.user_id is not null`
+        : status === "active" ? db`and s.user_id is null` : db``;
+      const cursorPredicate = cursor
+        ? db`and (${searchColumn}, u.id) > (${cursor.key}::text collate "C", ${cursor.id}::uuid)`
+        : db``;
       const users = await db<{
         id: string;
         username: string;
         display_name: string;
         created_at: Date;
+        cursor_key: string;
         banned: boolean;
+        timed_out: boolean;
         active_warning_count: string;
       }[]>`
         select u.id, u.username, u.display_name, u.created_at,
+          ${searchColumn} as cursor_key,
           (s.user_id is not null) as banned,
+          exists (
+            select 1 from instance_user_timeouts t
+            where t.user_id = u.id and t.revoked_at is null and t.expires_at > now()
+          ) as timed_out,
           (select count(*)::text from instance_user_warnings w
             where w.user_id = u.id and w.revoked_at is null
               and (w.expires_at is null or w.expires_at > now())) as active_warning_count
         from users u
         left join instance_user_suspensions s on s.user_id = u.id
-        where (${search} = '' or u.username ilike ${pattern} or u.display_name ilike ${pattern})
-          and (${status} = 'all' or (${status} = 'banned' and s.user_id is not null)
-            or (${status} = 'active' and s.user_id is null))
-        order by u.created_at desc, u.id
-        limit ${limit} offset ${offset}
+        where ${searchPredicate}
+          ${statusPredicate}
+          ${cursorPredicate}
+        order by ${searchColumn} asc, u.id asc
+        limit ${limit + 1}
       `;
+      const hasMore = users.length > limit;
+      const page = users.slice(0, limit);
       return {
-        users: users.map((row) => ({
+        users: page.map((row) => ({
           id: row.id,
           username: row.username,
           displayName: row.display_name,
           createdAt: row.created_at,
           banned: row.banned,
-          activeWarningCount: normalizeCount(row.active_warning_count),
+          timedOut: row.timed_out,
+          activeWarningCount: Number(row.active_warning_count) || 0,
         })),
-        total: normalizeCount(count?.total),
         limit,
-        offset,
+        nextCursor: hasMore && page.length
+          ? encodePageCursor({ key: page[page.length - 1]!.cursor_key, id: page[page.length - 1]!.id, context: `${status}:${field}:${search}` })
+          : null,
       };
     }, {
       query: t.Object({
         search: t.Optional(t.String({ maxLength: 100 })),
+        field: t.Optional(t.Union([t.Literal("username"), t.Literal("displayName")])),
         status: t.Optional(t.Union([t.Literal("all"), t.Literal("active"), t.Literal("banned")])),
         limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })),
-        offset: t.Optional(t.String({ pattern: "^[0-9]{1,7}$" })),
+        cursor: t.Optional(t.String({ maxLength: 512, pattern: "^[A-Za-z0-9_-]+$" })),
+      }),
+    })
+    .get("/v1/instance-admin/spaces", async ({ headers, query, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
+      set.headers["cache-control"] = "no-store";
+      const status = query.status ?? "all";
+      const requestedLimit = Number(query.limit ?? 50);
+      const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 50;
+      const cursor = decodePageCursor(query.cursor);
+      if (query.cursor && (!cursor || !isCursorTimestamp(cursor.createdAt) || !isUuid(cursor.id)
+        || cursor.context !== status)) return respondError(set, 400, "invalid_cursor");
+      const statusPredicate = status === "active"
+        ? db`and s.deactivated_at is null`
+        : status === "deactivated" ? db`and s.deactivated_at is not null` : db``;
+      const cursorPredicate = cursor
+        ? db`and (s.created_at, s.id) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`
+        : db``;
+      const rows = await db<{
+        id: string;
+        created_at: Date;
+        cursor_created_at: string;
+        deactivated_at: Date | null;
+        active_member_count: string;
+      }[]>`
+        select s.id, s.created_at, s.deactivated_at,
+          to_char(s.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_created_at,
+          (select count(*)::text from server_members sm where sm.server_id = s.id and sm.left_at is null) as active_member_count
+        from servers s
+        where true ${statusPredicate}
+          ${cursorPredicate}
+        order by s.created_at desc, s.id desc
+        limit ${limit + 1}
+      `;
+      const hasMore = rows.length > limit;
+      const page = rows.slice(0, limit);
+      return {
+        spaces: page.map((row) => ({
+          id: row.id,
+          createdAt: row.created_at,
+          deactivatedAt: row.deactivated_at,
+          activeMemberCount: Number(row.active_member_count) || 0,
+        })),
+        limit,
+        nextCursor: hasMore && page.length
+          ? encodePageCursor({ createdAt: page[page.length - 1]!.cursor_created_at, id: page[page.length - 1]!.id, context: status })
+          : null,
+      };
+    }, {
+      query: t.Object({
+        status: t.Optional(t.Union([t.Literal("all"), t.Literal("active"), t.Literal("deactivated")])),
+        limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })),
+        cursor: t.Optional(t.String({ maxLength: 512, pattern: "^[A-Za-z0-9_-]+$" })),
+      }),
+    })
+    .patch("/v1/instance-admin/spaces/:serverId/activation", async ({ body, headers, params, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
+      set.headers["cache-control"] = "no-store";
+      const reason = body.reason.trim();
+      if (!reason) return respondError(set, 400, "reason_required");
+      const result = await db.begin(async (transaction) => {
+        const [space] = await transaction<{ id: string; created_at: Date; deactivated_at: Date | null }[]>`
+          select id, created_at, deactivated_at from servers where id = ${params.serverId} for update
+        `;
+        if (!space) return undefined;
+        const currentlyActive = space.deactivated_at === null;
+        if (currentlyActive === body.active) return { space, changed: false };
+        const [updated] = await transaction<{ id: string; created_at: Date; deactivated_at: Date | null }[]>`
+          update servers set deactivated_at = ${body.active ? null : transaction`now()`}, updated_at = now()
+          where id = ${space.id}
+          returning id, created_at, deactivated_at
+        `;
+        const action = body.active ? "space.activated" : "space.deactivated";
+        await transaction`
+          insert into instance_server_audit_logs (server_id, admin_user_id, admin_username, action, reason)
+          values (${space.id}, ${operator.id}, ${operator.username}, ${action}, ${reason})
+        `;
+        return { space: updated!, changed: true };
+      });
+      if (!result) return respondError(set, 404, "space_not_found");
+      const [count] = await db<{ active_member_count: string }[]>`
+        select count(*)::text as active_member_count from server_members
+        where server_id = ${result.space.id} and left_at is null
+      `;
+      return {
+        space: {
+          id: result.space.id,
+          createdAt: result.space.created_at,
+          deactivatedAt: result.space.deactivated_at,
+          activeMemberCount: Number(count?.active_member_count) || 0,
+        },
+        changed: result.changed,
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+      body: t.Object({ active: t.Boolean(), reason: t.String({ minLength: 1, maxLength: 240 }) }),
+    })
+    .get("/v1/instance-admin/spaces/:serverId/audit", async ({ headers, params, query, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
+      set.headers["cache-control"] = "no-store";
+      const [exists] = await db<{ id: string }[]>`select id from servers where id = ${params.serverId}`;
+      if (!exists) return respondError(set, 404, "space_not_found");
+      const requestedLimit = Number(query.limit ?? 50);
+      const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 50;
+      const cursor = decodePageCursor(query.cursor);
+      if (query.cursor && (!cursor || !isCursorTimestamp(cursor.createdAt)
+        || typeof cursor.id !== "string" || !/^\d+$/.test(cursor.id)
+        || (cursor.source !== "space" && cursor.source !== "host") || cursor.context !== params.serverId)) {
+        return respondError(set, 400, "invalid_cursor");
+      }
+      const cursorPredicate = cursor
+        ? db`and (entry.created_at, entry.id, entry.source) < (${cursor.createdAt}::timestamptz, ${cursor.id}::bigint, ${cursor.source}::text)`
+        : db``;
+      const rows = await db<{
+        id: bigint | number | string;
+        source: "space" | "host";
+        action: string;
+        actor: string;
+        target_id: string | null;
+        target_user_id: string | null;
+        reason: string | null;
+        created_at: Date;
+        cursor_created_at: string;
+      }[]>`
+        with audit_entries as (
+          select l.id, 'space'::text as source, l.action,
+            actor.username as actor, l.target_id::text as target_id,
+            l.target_user_id::text as target_user_id, null::text as reason, l.created_at
+          from server_audit_logs l
+          join users actor on actor.id = l.actor_id
+          where l.server_id = ${params.serverId}
+          union all
+          select l.id, 'host'::text as source, l.action,
+            l.admin_username as actor, null::text as target_id,
+            null::text as target_user_id, l.reason, l.created_at
+          from instance_server_audit_logs l
+          where l.server_id = ${params.serverId}
+        )
+        select entry.id, entry.source, entry.action, entry.actor, entry.target_id, entry.target_user_id,
+          entry.reason, entry.created_at,
+          to_char(entry.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_created_at
+        from audit_entries entry
+        where true ${cursorPredicate}
+        order by entry.created_at desc, entry.id desc, entry.source desc
+        limit ${limit + 1}
+      `;
+      const hasMore = rows.length > limit;
+      const page = rows.slice(0, limit);
+      return {
+        logs: page.map((row) => ({
+          id: `${row.source}-${row.id}`,
+          source: row.source,
+          action: row.action,
+          actor: row.actor,
+          targetId: row.target_id,
+          targetUserId: row.target_user_id,
+          reason: row.reason,
+          createdAt: row.created_at,
+        })),
+        limit,
+        nextCursor: hasMore && page.length
+          ? encodePageCursor({ createdAt: page[page.length - 1]!.cursor_created_at, id: String(page[page.length - 1]!.id), source: page[page.length - 1]!.source, context: params.serverId })
+          : null,
+      };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+      query: t.Object({
+        limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })),
+        cursor: t.Optional(t.String({ maxLength: 512, pattern: "^[A-Za-z0-9_-]+$" })),
       }),
     })
     .get("/v1/instance-admin/users/:userId", async ({ headers, params, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "moderation")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       const [target] = await db<{
         id: string;
@@ -1442,7 +1705,7 @@ export function createApp() {
         where u.id = ${params.userId}
       `;
       if (!target) return respondError(set, 404, "user_not_found");
-      const [warnings, actions] = await Promise.all([
+      const [warnings, timeouts, actions] = await Promise.all([
         db<{
           id: string;
           reason: string;
@@ -1455,6 +1718,21 @@ export function createApp() {
           select id, reason, created_by_username, created_at, expires_at, acknowledged_at, revoked_at
           from instance_user_warnings where user_id = ${params.userId}
           order by created_at desc limit 100
+        `,
+        db<{
+          id: string;
+          reason: string;
+          created_by_username: string;
+          created_at: Date;
+          expires_at: Date;
+          revoked_at: Date | null;
+          revoked_by_username: string | null;
+          revocation_action: "removed" | "replaced" | "expired" | null;
+        }[]>`
+          select id, reason, created_by_username, created_at, expires_at,
+            revoked_at, revoked_by_username, revocation_action
+          from instance_user_timeouts where user_id = ${params.userId}
+          order by created_at desc, id desc limit 100
         `,
         db<{ id: bigint | number | string; action: string; admin_username: string; details: Record<string, unknown>; created_at: Date }[]>`
           select id, action, admin_username, details, created_at
@@ -1481,6 +1759,17 @@ export function createApp() {
           revokedAt: warning.revoked_at,
           active: !warning.revoked_at && (!warning.expires_at || warning.expires_at > new Date()),
         })),
+        timeouts: timeouts.map((timeout) => ({
+          id: timeout.id,
+          reason: timeout.reason,
+          createdByUsername: timeout.created_by_username,
+          createdAt: timeout.created_at,
+          expiresAt: timeout.expires_at,
+          revokedAt: timeout.revoked_at,
+          revokedByUsername: timeout.revoked_by_username,
+          revocationAction: timeout.revocation_action,
+          active: !timeout.revoked_at && timeout.expires_at > new Date(),
+        })),
         actions: actions.map((action) => ({
           id: String(action.id),
           action: action.action,
@@ -1492,9 +1781,114 @@ export function createApp() {
     }, {
       params: t.Object({ userId: t.String({ format: "uuid" }) }),
     })
+    .post("/v1/instance-admin/users/:userId/timeout", async ({ body, headers, params, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "moderation")) return respondError(set, 403, "forbidden");
+      const reason = body.reason.trim();
+      if (!reason) return respondError(set, 422, "timeout_reason_required");
+      set.headers["cache-control"] = "no-store";
+      const result = await db.begin(async (transaction) => {
+        await transaction`select pg_advisory_xact_lock(hashtextextended(${`instance-user-timeout:${params.userId}`}, 0))`;
+        const [target] = await transaction<{ id: string }[]>`
+          select id from users where id = ${params.userId} for update
+        `;
+        if (!target) return { kind: "not_found" as const };
+
+        await transaction`
+          update instance_user_timeouts
+          set revoked_at = now(), revocation_action = 'expired'
+          where user_id = ${params.userId} and revoked_at is null and expires_at <= now()
+        `;
+        const [previous] = await transaction<{ id: string }[]>`
+          select id from instance_user_timeouts
+          where user_id = ${params.userId} and revoked_at is null
+          for update
+        `;
+        if (previous) {
+          await transaction`
+            update instance_user_timeouts
+            set revoked_at = now(), revoked_by_admin_id = ${operator.id},
+              revoked_by_username = ${operator.username}, revocation_action = 'replaced'
+            where id = ${previous.id}
+          `;
+          await transaction`
+            insert into instance_admin_audit_logs (
+              admin_user_id, admin_username, admin_display_name, action, target_user_id, details
+            ) values (
+              ${operator.id}, ${operator.username}, ${operator.username}, 'user.timeout_replaced', ${params.userId},
+              ${JSON.stringify({ timeoutId: previous.id })}::jsonb
+            )
+          `;
+        }
+        const [created] = await transaction<{ id: string; created_at: Date; expires_at: Date }[]>`
+          insert into instance_user_timeouts (
+            user_id, created_by_admin_id, created_by_username, reason, expires_at
+          ) values (
+            ${params.userId}, ${operator.id}, ${operator.username}, ${reason},
+            now() + make_interval(secs => ${body.durationSeconds})
+          )
+          returning id, created_at, expires_at
+        `;
+        if (!created) throw new Error("Instance timeout insert did not return a row");
+        await transaction`
+          insert into instance_admin_audit_logs (
+            admin_user_id, admin_username, admin_display_name, action, target_user_id, details
+          ) values (
+            ${operator.id}, ${operator.username}, ${operator.username}, 'user.timed_out', ${params.userId},
+            ${JSON.stringify({ timeoutId: created.id, reason, expiresAt: created.expires_at })}::jsonb
+          )
+        `;
+        return { kind: "created" as const, timeout: created, replaced: Boolean(previous) };
+      });
+      if (result.kind === "not_found") return respondError(set, 404, "user_not_found");
+      set.status = 201;
+      return { timeout: result.timeout, replaced: result.replaced };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        reason: t.String({ minLength: 1, maxLength: 240 }),
+        durationSeconds: t.Integer({ minimum: 60, maximum: 2_592_000 }),
+      }),
+    })
+    .delete("/v1/instance-admin/users/:userId/timeout", async ({ headers, params, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "moderation")) return respondError(set, 403, "forbidden");
+      set.headers["cache-control"] = "no-store";
+      const removed = await db.begin(async (transaction) => {
+        await transaction`select pg_advisory_xact_lock(hashtextextended(${`instance-user-timeout:${params.userId}`}, 0))`;
+        const [timeout] = await transaction<{ id: string }[]>`
+          select id from instance_user_timeouts
+          where user_id = ${params.userId} and revoked_at is null and expires_at > now()
+          for update
+        `;
+        if (!timeout) return undefined;
+        await transaction`
+          update instance_user_timeouts
+          set revoked_at = now(), revoked_by_admin_id = ${operator.id},
+            revoked_by_username = ${operator.username}, revocation_action = 'removed'
+          where id = ${timeout.id}
+        `;
+        await transaction`
+          insert into instance_admin_audit_logs (
+            admin_user_id, admin_username, admin_display_name, action, target_user_id, details
+          ) values (
+            ${operator.id}, ${operator.username}, ${operator.username}, 'user.timeout_removed', ${params.userId},
+            ${JSON.stringify({ timeoutId: timeout.id })}::jsonb
+          )
+        `;
+        return timeout;
+      });
+      if (!removed) return respondError(set, 404, "timeout_not_found");
+      return { removed: true };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+    })
     .post("/v1/instance-admin/users/:userId/warnings", async ({ body, headers, params, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "moderation")) return respondError(set, 403, "forbidden");
       const reason = body.reason.trim();
       if (!reason) return respondError(set, 422, "warning_reason_required");
       const expiresInSeconds = body.expiresInSeconds ?? null;
@@ -1533,6 +1927,7 @@ export function createApp() {
     .delete("/v1/instance-admin/warnings/:warningId", async ({ headers, params, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "moderation")) return respondError(set, 403, "forbidden");
       const revoked = await db.begin(async (transaction) => {
         const [warning] = await transaction<{ id: string; user_id: string }[]>`
           update instance_user_warnings set revoked_at = coalesce(revoked_at, now())
@@ -1558,6 +1953,7 @@ export function createApp() {
     .post("/v1/instance-admin/users/:userId/suspend", async ({ body, headers, params, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "moderation")) return respondError(set, 403, "forbidden");
       const [target] = await db<{ id: string }[]>`select id from users where id = ${params.userId}`;
       if (!target) return respondError(set, 404, "user_not_found");
       if (body.reportId) {
@@ -1611,6 +2007,7 @@ export function createApp() {
     .delete("/v1/instance-admin/users/:userId/suspension", async ({ headers, params, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "moderation")) return respondError(set, 403, "forbidden");
       const restored = await db.begin(async (transaction) => {
         const [row] = await transaction<{ report_id: string | null }[]>`
           delete from instance_user_suspensions where user_id = ${params.userId}
@@ -1634,6 +2031,7 @@ export function createApp() {
     .get("/v1/instance-admin/report-keys", async ({ headers, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "evidenceKeys")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       const keys = await db<{ id: string; active: boolean; created_at: Date }[]>`
         select id, active, created_at from instance_report_keys order by created_at desc
@@ -1643,6 +2041,7 @@ export function createApp() {
     .post("/v1/instance-admin/report-keys", async ({ body, headers, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "evidenceKeys")) return respondError(set, 403, "forbidden");
       let publicKey: Buffer;
       try {
         publicKey = decodeBase64(body.publicKey, "publicKey", 2048);
@@ -1681,9 +2080,190 @@ export function createApp() {
         publicKey: t.String({ minLength: 300, maxLength: 4_096 }),
       }),
     })
+    .get("/v1/instance-admin/operators", async ({ headers, set }) => {
+      const actor = await authenticateAdmin(headers.cookie);
+      if (!actor) return respondError(set, 401, "unauthorized");
+      if (!adminCan(actor.role, "operatorManagement")) return respondError(set, 403, "forbidden");
+      set.headers["cache-control"] = "no-store";
+      const rows = await adminDb<{
+        id: string;
+        username: string;
+        role: "admin" | "moderator";
+        disabled_at: Date | null;
+        created_at: Date;
+      }[]>`
+        select id, username, role, disabled_at, created_at
+        from admin_users order by username collate "C" asc, id asc limit 201
+      `;
+      return { operators: rows.slice(0, 200).map((row) => ({
+        id: row.id,
+        username: row.username,
+        role: row.role,
+        disabled: row.disabled_at !== null,
+        createdAt: row.created_at,
+      })), truncated: rows.length > 200 };
+    })
+    .post("/v1/instance-admin/operators", async ({ body, headers, set }) => {
+      const actor = await authenticateAdmin(headers.cookie);
+      if (!actor) return respondError(set, 401, "unauthorized");
+      if (!adminCan(actor.role, "operatorManagement")) return respondError(set, 403, "forbidden");
+      const username = normalizeAdminUsername(body.username);
+      if (!/^[a-z0-9_.-]{3,32}$/.test(username)) return respondError(set, 400, "invalid_operator_username");
+      set.headers["cache-control"] = "no-store";
+      const passwordHash = await password.hash(body.password);
+      try {
+        const created = await adminDb.begin(async (transaction) => {
+          const [row] = await transaction<{ id: string; username: string; role: "admin" | "moderator"; created_at: Date }[]>`
+            insert into admin_users (username, password_hash, role)
+            values (${username}, ${passwordHash}, ${body.role})
+            returning id, username, role, created_at
+          `;
+          if (!row) throw new Error("Operator creation returned no row");
+          await transaction`
+            insert into admin_user_audit_logs (
+              actor_admin_user_id, actor_username, target_admin_user_id, target_username, action, details
+            ) values (
+              ${actor.id}, ${actor.username}, ${row.id}, ${row.username}, 'operator.created',
+              ${JSON.stringify({ role: row.role })}::jsonb
+            )
+          `;
+          return row;
+        });
+        set.status = 201;
+        return { operator: { id: created.id, username: created.username, role: created.role, disabled: false, createdAt: created.created_at } };
+      } catch (error) {
+        if (isUniqueViolation(error)) return respondError(set, 409, "operator_username_taken");
+        throw error;
+      }
+    }, {
+      body: t.Object({
+        username: t.String({ minLength: 3, maxLength: 32 }),
+        password: t.String({ minLength: 12, maxLength: 1_024 }),
+        role: t.Union([t.Literal("admin"), t.Literal("moderator")]),
+      }),
+    })
+    .patch("/v1/instance-admin/operators/:operatorId", async ({ body, headers, params, set }) => {
+      const actor = await authenticateAdmin(headers.cookie);
+      if (!actor) return respondError(set, 401, "unauthorized");
+      if (!adminCan(actor.role, "operatorManagement")) return respondError(set, 403, "forbidden");
+      if (body.role === undefined && body.disabled === undefined) return respondError(set, 400, "operator_change_required");
+      set.headers["cache-control"] = "no-store";
+      const result = await adminDb.begin(async (transaction) => {
+        await transaction`select pg_advisory_xact_lock(hashtextextended('admin-operator-management', 0))`;
+        const [current] = await transaction<{
+          id: string;
+          username: string;
+          role: "admin" | "moderator";
+          disabled_at: Date | null;
+          created_at: Date;
+        }[]>`
+          select id, username, role, disabled_at, created_at
+          from admin_users where id = ${params.operatorId} for update
+        `;
+        if (!current) return { kind: "not_found" as const };
+        const nextRole = body.role ?? current.role;
+        const wasDisabled = current.disabled_at !== null;
+        const nextDisabled = body.disabled ?? wasDisabled;
+        const roleChanged = nextRole !== current.role;
+        const disabledChanged = nextDisabled !== wasDisabled;
+        if (!roleChanged && !disabledChanged) return { kind: "unchanged" as const, operator: current };
+        if (current.id === actor.id) return { kind: "self_change" as const };
+        if (current.role === "admin" && !wasDisabled && (nextRole !== "admin" || nextDisabled)) {
+          const [activeAdmins] = await transaction<{ count: string }[]>`
+            select count(*)::text as count from admin_users where role = 'admin' and disabled_at is null
+          `;
+          if (Number(activeAdmins?.count ?? 0) <= 1) return { kind: "last_admin" as const };
+        }
+        const [updated] = await transaction<{
+          id: string;
+          username: string;
+          role: "admin" | "moderator";
+          disabled_at: Date | null;
+          created_at: Date;
+        }[]>`
+          update admin_users set role = ${nextRole},
+            disabled_at = case when ${nextDisabled} then coalesce(disabled_at, now()) else null end,
+            updated_at = now()
+          where id = ${current.id}
+          returning id, username, role, disabled_at, created_at
+        `;
+        if (!updated) return { kind: "not_found" as const };
+        if (roleChanged) {
+          await transaction`
+            insert into admin_user_audit_logs (
+              actor_admin_user_id, actor_username, target_admin_user_id, target_username, action, details
+            ) values (
+              ${actor.id}, ${actor.username}, ${updated.id}, ${updated.username}, 'operator.role_changed',
+              ${JSON.stringify({ from: current.role, to: updated.role })}::jsonb
+            )
+          `;
+        }
+        if (disabledChanged) {
+          await transaction`
+            insert into admin_user_audit_logs (
+              actor_admin_user_id, actor_username, target_admin_user_id, target_username, action, details
+            ) values (
+              ${actor.id}, ${actor.username}, ${updated.id}, ${updated.username},
+              ${nextDisabled ? "operator.disabled" : "operator.enabled"}, '{}'::jsonb
+            )
+          `;
+        }
+        if (roleChanged || nextDisabled) await transaction`delete from admin_sessions where admin_user_id = ${updated.id}`;
+        return { kind: "changed" as const, operator: updated };
+      });
+      if (result.kind === "not_found") return respondError(set, 404, "operator_not_found");
+      if (result.kind === "self_change") return respondError(set, 409, "cannot_change_own_operator");
+      if (result.kind === "last_admin") return respondError(set, 409, "last_active_admin_required");
+      return {
+        changed: result.kind === "changed",
+        operator: {
+          id: result.operator.id,
+          username: result.operator.username,
+          role: result.operator.role,
+          disabled: result.operator.disabled_at !== null,
+          createdAt: result.operator.created_at,
+        },
+      };
+    }, {
+      params: t.Object({ operatorId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        role: t.Optional(t.Union([t.Literal("admin"), t.Literal("moderator")])),
+        disabled: t.Optional(t.Boolean()),
+      }),
+    })
+    .get("/v1/instance-admin/operators/audit", async ({ headers, query, set }) => {
+      const actor = await authenticateAdmin(headers.cookie);
+      if (!actor) return respondError(set, 401, "unauthorized");
+      if (!adminCan(actor.role, "operatorManagement")) return respondError(set, 403, "forbidden");
+      set.headers["cache-control"] = "no-store";
+      const requestedLimit = Number(query.limit ?? 50);
+      const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 50;
+      const rows = await adminDb<{
+        id: bigint | number | string;
+        actor_username: string;
+        target_username: string;
+        action: string;
+        details: Record<string, unknown>;
+        created_at: Date;
+      }[]>`
+        select id, actor_username, target_username, action, details, created_at
+        from admin_user_audit_logs order by created_at desc, id desc limit ${limit}
+      `;
+      return { logs: rows.map((row) => ({
+        id: String(row.id),
+        actorUsername: row.actor_username,
+        targetUsername: row.target_username,
+        action: row.action,
+        details: row.details ?? {},
+        createdAt: row.created_at,
+      })) };
+    }, {
+      query: t.Object({ limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })) }),
+    })
     .get("/v1/instance-admin/audit", async ({ headers, query, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (!adminCan(user.role, "moderation")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       const limit = Math.min(Number(query.limit ?? 100), 200);
       const rows = await db<{
@@ -1700,6 +2280,7 @@ export function createApp() {
         select l.id, l.admin_user_id, l.admin_username, l.admin_display_name, l.action, l.details, l.report_id,
           l.target_user_id, l.created_at
         from instance_admin_audit_logs l
+        where (${user.role} = 'admin' or l.action like 'report.%' or l.action like 'user.%')
         order by l.created_at desc, l.id desc limit ${Number.isInteger(limit) ? limit : 100}
       `;
       return { logs: rows.map((row) => ({
@@ -1719,36 +2300,42 @@ export function createApp() {
     .get("/v1/instance-admin/operations", async ({ headers, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       return await getInstanceOperationsSnapshot();
     })
     .get("/v1/instance-admin/operations/live", async ({ headers, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       return getInstanceLiveResources();
     })
     .get("/v1/instance-admin/operations/overview", async ({ headers, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       return await getInstanceOperationsOverview();
     })
     .get("/v1/instance-admin/maintenance/summary", async ({ headers, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       return await getStorageMaintenanceSummary(operator);
     })
     .post("/v1/instance-admin/maintenance/preview", async ({ headers, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       return await inspectStorageMaintenance();
     })
     .post("/v1/instance-admin/maintenance/quarantine", async ({ headers, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       try {
         return await quarantineOrphanedStorage(operator);
@@ -1760,6 +2347,7 @@ export function createApp() {
     .post("/v1/instance-admin/maintenance/restore", async ({ headers, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       try {
         return await restoreQuarantinedStorage(operator);
@@ -1771,6 +2359,7 @@ export function createApp() {
     .post("/v1/instance-admin/maintenance/purge", async ({ headers, set }) => {
       const operator = await authenticateAdmin(headers.cookie);
       if (!operator) return respondError(set, 401, "unauthorized");
+      if (!adminCan(operator.role, "platform")) return respondError(set, 403, "forbidden");
       set.headers["cache-control"] = "no-store";
       try {
         return await purgeExpiredQuarantinedStorage(operator);
@@ -2223,6 +2812,14 @@ export function createApp() {
 
       if (body.messageId) {
         if (!body.conversationId) return respondError(set, 400, "invalid_report_reference");
+        const channelContext = await conversationChannelAuthorization(body.conversationId, user.id);
+        if (channelContext) {
+          const channelAccess = channelContext.access;
+          if (!channelAccess) return respondError(set, 400, "invalid_report_reference");
+          if (!channelAccess.canView && !await isMetadataChannel(channelContext.channel.server_id, channelContext.channel.id)) {
+            return respondError(set, 400, "invalid_report_reference");
+          }
+        }
         const [reportedMessage] = await db<{ sender_user_id: string }[]>`
           select d.user_id as sender_user_id
           from messages m join devices d on d.id = m.sender_device_id
@@ -2241,6 +2838,7 @@ export function createApp() {
           select exists (
             select 1 from server_members mine
             join server_members target on target.server_id = mine.server_id and target.left_at is null
+            join servers s on s.id = mine.server_id and s.deactivated_at is null
             where mine.user_id = ${user.id} and mine.left_at is null and target.user_id = ${body.targetUserId}
           ) as shared
         `;
@@ -2382,6 +2980,7 @@ export function createApp() {
           landingChannelId: created.channel.id,
           iconUrl: null,
           bannerUrl: null,
+          deactivatedAt: null,
           createdAt: created.server.created_at,
         },
         channel: {
@@ -2412,18 +3011,19 @@ export function createApp() {
         landing_channel_id: string | null;
         icon_storage_key: string | null;
         banner_storage_key: string | null;
+        deactivated_at: Date | null;
         created_at: Date;
       }[]>`
         select s.id, s.owner_id, s.encrypted_metadata, sm.role,
           count(c.id)::int as channel_count, s.onboarding_channel_id,
-          s.landing_channel_id,
+          s.landing_channel_id, s.deactivated_at,
           s.icon_storage_key, s.banner_storage_key, s.created_at
         from servers s
         join server_members sm on sm.server_id = s.id
         left join channels c on c.server_id = s.id and c.archived_at is null
         where sm.user_id = ${user.id} and sm.left_at is null
           group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at,
-            s.onboarding_channel_id, s.landing_channel_id,
+            s.onboarding_channel_id, s.landing_channel_id, s.deactivated_at,
             s.icon_storage_key, s.banner_storage_key
         order by s.created_at asc
       `;
@@ -2434,12 +3034,15 @@ export function createApp() {
           ownerId: server.owner_id,
           encryptedMetadata: encodeBase64(server.encrypted_metadata),
           role: server.role,
-          permissions: (await serverAuthorization(server.id, user.id))?.permissions ?? permissionMap(undefined),
+          permissions: server.deactivated_at
+            ? permissionMap(undefined)
+            : (await serverAuthorization(server.id, user.id))?.permissions ?? permissionMap(undefined),
           channelCount: server.channel_count,
           onboardingChannelId: server.onboarding_channel_id,
           landingChannelId: server.landing_channel_id,
-          iconUrl: serverBrandingUrl(server.id, "icon", server.icon_storage_key),
-          bannerUrl: serverBrandingUrl(server.id, "banner", server.banner_storage_key),
+          iconUrl: server.deactivated_at ? null : serverBrandingUrl(server.id, "icon", server.icon_storage_key),
+          bannerUrl: server.deactivated_at ? null : serverBrandingUrl(server.id, "banner", server.banner_storage_key),
+          deactivatedAt: server.deactivated_at,
           createdAt: server.created_at,
         }))),
       };
@@ -2466,7 +3069,8 @@ export function createApp() {
         from servers s
         join server_members sm on sm.server_id = s.id
         left join channels c on c.server_id = s.id and c.archived_at is null
-        where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
+         where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
+           and s.deactivated_at is null
          group by s.id, s.owner_id, s.encrypted_metadata, sm.role, s.created_at,
             s.onboarding_channel_id, s.landing_channel_id,
             s.icon_storage_key, s.banner_storage_key
@@ -2485,6 +3089,7 @@ export function createApp() {
           landingChannelId: server.landing_channel_id,
           iconUrl: serverBrandingUrl(server.id, "icon", server.icon_storage_key),
           bannerUrl: serverBrandingUrl(server.id, "banner", server.banner_storage_key),
+          deactivatedAt: null,
           createdAt: server.created_at,
         },
       };
@@ -2570,6 +3175,7 @@ export function createApp() {
           landingChannelId: server.landing_channel_id,
           iconUrl: serverBrandingUrl(server.id, "icon", server.icon_storage_key),
           bannerUrl: serverBrandingUrl(server.id, "banner", server.banner_storage_key),
+          deactivatedAt: null,
           createdAt: server.created_at,
         },
       };
@@ -2587,13 +3193,15 @@ export function createApp() {
       const [server] = params.asset === "icon"
         ? await db<{ storage_key: string | null; mime_type: string | null }[]>`
             select s.icon_storage_key as storage_key, s.icon_mime_type as mime_type
-            from servers s join server_members sm on sm.server_id = s.id
-            where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
+             from servers s join server_members sm on sm.server_id = s.id
+             where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
+               and s.deactivated_at is null
           `
         : await db<{ storage_key: string | null; mime_type: string | null }[]>`
             select s.banner_storage_key as storage_key, s.banner_mime_type as mime_type
-            from servers s join server_members sm on sm.server_id = s.id
-            where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
+             from servers s join server_members sm on sm.server_id = s.id
+             where s.id = ${params.serverId} and sm.user_id = ${user.id} and sm.left_at is null
+               and s.deactivated_at is null
           `;
       if (!server?.storage_key || !server.mime_type) return respondError(set, 404, "server_branding_not_found");
       const path = profileImagePath(server.storage_key);
@@ -4247,18 +4855,21 @@ export function createApp() {
         const [invite] = await transaction<{
           id: string;
           server_id: string;
+          deactivated_at: Date | null;
           onboarding_channel_id: string | null;
           max_uses: number;
           uses: number;
           expires_at: Date | null;
           revoked_at: Date | null;
         }[]>`
-           select i.id, i.server_id, s.onboarding_channel_id, i.max_uses, i.uses, i.expires_at, i.revoked_at
+           select i.id, i.server_id, s.deactivated_at, s.onboarding_channel_id,
+             i.max_uses, i.uses, i.expires_at, i.revoked_at
            from server_invites i
            join servers s on s.id = i.server_id
-           where i.token_hash = ${tokenHash} for update
-        `;
+           where i.token_hash = ${tokenHash} for update of i, s
+         `;
         if (!invite) return { error: "invite_not_found" as const };
+        if (invite.deactivated_at) return { error: "space_deactivated" as const };
         if (invite.revoked_at || (invite.expires_at && invite.expires_at.getTime() <= Date.now())) {
           return { error: "invite_expired" as const };
         }
@@ -5040,6 +5651,7 @@ export function createApp() {
             from server_members mine
             join server_members target on target.server_id = mine.server_id
               and target.left_at is null
+            join servers s on s.id = mine.server_id and s.deactivated_at is null
             where mine.user_id = ${user.id}
               and mine.left_at is null
               and target.user_id in ${db(memberIds)}
@@ -5184,8 +5796,12 @@ export function createApp() {
       if (!user) return respondError(set, 401, "unauthorized");
       if (await directConversationIsBlocked(params.conversationId, user.id)) return respondError(set, 403, "blocked_user");
       const channelContext = await conversationChannelAuthorization(params.conversationId, user.id);
-      if (channelContext && !channelContext.access?.canView && !await isMetadataChannel(channelContext.channel.server_id, channelContext.channel.id)) {
-        return respondError(set, 403, "channel_not_visible");
+      if (channelContext) {
+        const channelAccess = channelContext.access;
+        if (!channelAccess) return respondError(set, 403, "channel_not_visible");
+        if (!channelAccess.canView && !await isMetadataChannel(channelContext.channel.server_id, channelContext.channel.id)) {
+          return respondError(set, 403, "channel_not_visible");
+        }
       }
 
       const [membership] = await db<{ user_id: string }[]>`
@@ -5266,6 +5882,7 @@ export function createApp() {
         where conversation_id = ${params.conversationId} and user_id = ${user.id} and left_at is null
       `;
       if (!membership) return respondError(set, 403, "not_a_conversation_member");
+      if (await isInstanceUserTimedOut(user.id)) return respondError(set, 403, "instance_user_timed_out");
 
       const metadata = attachmentMetadata(body.extension, body.mimeType);
       if (!metadata) return respondError(set, 400, "unsupported_attachment_type");
@@ -5329,6 +5946,7 @@ export function createApp() {
         where a.id = ${params.attachmentId} and m.user_id = ${user.id} and m.left_at is null
       `;
       if (!attachment) return respondError(set, 404, "attachment_not_found");
+      if (await isInstanceUserTimedOut(user.id)) return respondError(set, 403, "instance_user_timed_out");
       if (await directConversationIsBlocked(attachment.conversation_id, user.id)) return respondError(set, 403, "blocked_user");
       const channelContext = await conversationChannelAuthorization(attachment.conversation_id, user.id);
       if (channelContext) {
@@ -5454,6 +6072,7 @@ export function createApp() {
         where conversation_id = ${params.conversationId} and user_id = ${user.id} and left_at is null
       `;
       if (!membership) return respondError(set, 403, "not_a_conversation_member");
+      if (await isInstanceUserTimedOut(user.id)) return respondError(set, 403, "instance_user_timed_out");
 
       if (hasAttachments) {
         const uploadedAttachments = await db<{ id: string }[]>`

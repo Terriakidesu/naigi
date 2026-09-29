@@ -37,6 +37,17 @@ async function accountIsSuspended(userId: string) {
   return result?.suspended === true;
 }
 
+async function conversationIsInDeactivatedSpace(conversationId: string) {
+  const [result] = await db<{ deactivated: boolean }[]>`
+    select exists (
+      select 1 from channels c
+      join servers s on s.id = c.server_id
+      where c.conversation_id = ${conversationId} and s.deactivated_at is not null
+    ) as deactivated
+  `;
+  return result?.deactivated === true;
+}
+
 export async function createRealtimeConnection(socket: RealtimeSocket, userId: string): Promise<RealtimeConnection> {
   await connectRedis();
   const subscriber = await redis.duplicate();
@@ -60,6 +71,7 @@ export async function createRealtimeConnection(socket: RealtimeSocket, userId: s
         if (typeof payload.conversationId === "string") scopedConversationId = payload.conversationId;
       }
       if (scopedConversationId && await directConversationIsBlocked(scopedConversationId, userId)) return;
+      if (scopedConversationId && await conversationIsInDeactivatedSpace(scopedConversationId)) return;
       const status = socket.send(message);
       if (status <= 0) socket.close(1013, "realtime_backpressure");
     })().catch(() => {
@@ -79,6 +91,7 @@ export async function createRealtimeConnection(socket: RealtimeSocket, userId: s
         return false;
       }
       if (await directConversationIsBlocked(conversationId, userId)) return false;
+      if (await conversationIsInDeactivatedSpace(conversationId)) return false;
 
       const [membership] = await db<{ user_id: string }[]>`
         select user_id from conversation_members
@@ -107,6 +120,7 @@ export async function createRealtimeConnection(socket: RealtimeSocket, userId: s
         return false;
       }
       if (await directConversationIsBlocked(conversationId, userId)) return false;
+      if (await conversationIsInDeactivatedSpace(conversationId)) return false;
       const [membership] = await db<{ user_id: string }[]>`
         select user_id from conversation_members
         where conversation_id = ${conversationId} and user_id = ${userId} and left_at is null

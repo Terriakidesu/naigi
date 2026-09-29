@@ -81,11 +81,20 @@ async function run() {
   if (operation === "create") {
     const secret = await newPassword(useStdin);
     const passwordHash = await password.hash(secret);
-    const [created] = await adminDb<{ id: string }[]>`
-      insert into admin_users (username, password_hash)
-      values (${username}, ${passwordHash})
-      returning id
-    `;
+    const created = await adminDb.begin(async (transaction) => {
+      const [row] = await transaction<{ id: string }[]>`
+        insert into admin_users (username, password_hash, role)
+        values (${username}, ${passwordHash}, 'admin')
+        returning id
+      `;
+      if (!row) throw new Error("Operator creation returned no row");
+      await transaction`
+        insert into admin_user_audit_logs (
+          actor_username, target_admin_user_id, target_username, action, details
+        ) values ('CLI', ${row.id}, ${username}, 'operator.created', '{"role":"admin","source":"cli"}'::jsonb)
+      `;
+      return row;
+    });
     console.log(`Created host operator ${username} (${created.id}).`);
     return;
   }
@@ -93,27 +102,67 @@ async function run() {
   if (operation === "password") {
     const secret = await newPassword(useStdin);
     const passwordHash = await password.hash(secret);
-    const [operator] = await adminDb<{ id: string }[]>`
-      update admin_users set password_hash = ${passwordHash}, updated_at = now()
-      where username = ${username}
-      returning id
-    `;
+    const operator = await adminDb.begin(async (transaction) => {
+      const [row] = await transaction<{ id: string; username: string }[]>`
+        update admin_users set password_hash = ${passwordHash}, updated_at = now()
+        where username = ${username}
+        returning id, username
+      `;
+      if (!row) return undefined;
+      await transaction`delete from admin_sessions where admin_user_id = ${row.id}`;
+      await transaction`
+        insert into admin_user_audit_logs (
+          actor_username, target_admin_user_id, target_username, action, details
+        ) values ('CLI', ${row.id}, ${row.username}, 'operator.password_changed', '{"source":"cli"}'::jsonb)
+      `;
+      return row;
+    });
     if (!operator) throw new Error(`No host operator named ${username} exists`);
-    await adminDb`delete from admin_sessions where admin_user_id = ${operator.id}`;
     console.log(`Changed the password and revoked active sessions for ${username}.`);
     return;
   }
 
   if (useStdin) throw new Error("--password-stdin is only valid with create or password");
   if (operation === "disable" || operation === "enable") {
-    const [operator] = await adminDb<{ id: string }[]>`
-      update admin_users
-      set disabled_at = ${operation === "disable" ? new Date() : null}, updated_at = now()
-      where username = ${username}
-      returning id
-    `;
+    const operator = await adminDb.begin(async (transaction) => {
+      await transaction`select pg_advisory_xact_lock(hashtextextended('admin-operator-management', 0))`;
+      const [current] = await transaction<{
+        id: string;
+        username: string;
+        role: "admin" | "moderator";
+        disabled_at: Date | null;
+      }[]>`
+        select id, username, role, disabled_at from admin_users where username = ${username} for update
+      `;
+      if (!current) return undefined;
+      const disable = operation === "disable";
+      const wasDisabled = current.disabled_at !== null;
+      if (disable === wasDisabled) return current;
+      if (disable && current.role === "admin") {
+        const [activeAdmins] = await transaction<{ count: string }[]>`
+          select count(*)::text as count from admin_users where role = 'admin' and disabled_at is null
+        `;
+        if (Number(activeAdmins?.count ?? 0) <= 1) {
+          throw new Error("Cannot disable the last active Admin operator");
+        }
+      }
+      await transaction`
+        update admin_users
+        set disabled_at = ${disable ? new Date() : null}, updated_at = now()
+        where id = ${current.id}
+      `;
+      if (disable) await transaction`delete from admin_sessions where admin_user_id = ${current.id}`;
+      await transaction`
+        insert into admin_user_audit_logs (
+          actor_username, target_admin_user_id, target_username, action, details
+        ) values (
+          'CLI', ${current.id}, ${current.username}, ${disable ? "operator.disabled" : "operator.enabled"},
+          '{"source":"cli"}'::jsonb
+        )
+      `;
+      return current;
+    });
     if (!operator) throw new Error(`No host operator named ${username} exists`);
-    if (operation === "disable") await adminDb`delete from admin_sessions where admin_user_id = ${operator.id}`;
     console.log(`${operation === "disable" ? "Disabled" : "Enabled"} host operator ${username}.`);
     return;
   }

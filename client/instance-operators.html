@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <script src="/instance-admin-theme-init.js"></script>
+    <title>Operators · Admin console · Naigi</title>
+    <link rel="stylesheet" href="/app.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  </head>
+  <body class="settings-page instance-admin-page" data-admin-role-required="admin">
+    <aside class="instance-admin-sidebar">
+      <a class="instance-admin-brand" href="/instance-admin" aria-label="Naigi Admin console home"><span class="instance-admin-brand-mark" aria-hidden="true">N</span><span><strong>Naigi</strong><small>ADMIN CONSOLE</small></span></a>
+      <nav class="instance-admin-sidebar-nav" aria-label="Admin console pages">
+        <p class="instance-admin-sidebar-caption">MODERATION</p>
+        <a href="/instance-admin"><i data-lucide="flag"></i><span>Reports</span></a>
+        <a href="/instance-admin/users"><i data-lucide="users-round"></i><span>Accounts</span></a>
+        <p class="instance-admin-sidebar-caption" data-admin-only hidden>PLATFORM</p>
+        <a data-admin-only hidden href="/instance-admin/spaces"><i data-lucide="boxes"></i><span>Spaces</span></a>
+        <a data-admin-only hidden href="/instance-admin/operations"><i data-lucide="activity"></i><span>Operations</span></a>
+        <p class="instance-admin-sidebar-caption" data-admin-only hidden>SYSTEM</p>
+        <a data-admin-only hidden href="/instance-admin/maintenance"><i data-lucide="wrench"></i><span>Maintenance</span></a>
+        <a data-admin-only hidden href="/instance-admin/operators" aria-current="page"><i data-lucide="shield-user"></i><span>Operators</span></a>
+      </nav>
+      <footer class="instance-admin-sidebar-footer">
+        <label class="instance-admin-theme-control" for="instance-admin-theme"><span><i data-lucide="monitor"></i>Theme</span><select id="instance-admin-theme" aria-label="Admin console theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <div class="instance-admin-operator"><span class="instance-admin-operator-mark"><i data-lucide="shield-check"></i></span><span><strong id="admin-operator-name">Host operator</strong><small id="admin-operator-role">Separate admin identity</small></span></div>
+        <a class="instance-admin-sidebar-action" href="/"><i data-lucide="log-in"></i><span>Chat sign in</span></a>
+        <button id="admin-logout-operators" class="instance-admin-sidebar-action" type="button" aria-label="Sign out operator"><i data-lucide="log-out"></i><span>Sign out</span></button>
+      </footer>
+    </aside>
+    <main class="instance-admin-main">
+      <header class="instance-admin-heading">
+        <div><p class="eyebrow">HOST ADMIN <span aria-hidden="true">/</span> ACCESS CONTROL</p><h1>Operator access</h1><p class="muted">Create host-operator identities and assign their dashboard role. Host operators remain separate from chat accounts.</p></div>
+        <span class="instance-admin-session"><i data-lucide="shield-check"></i>Admin-only controls</span>
+      </header>
+      <p id="instance-operators-status" class="instance-operations-status" role="status" aria-live="polite"></p>
+      <aside class="instance-admin-guidance" aria-label="Role permissions">
+        <span class="instance-admin-guidance-icon" aria-hidden="true">i</span>
+        <div><strong>Role boundaries</strong><p>Moderators can review reports and moderate chat accounts. Space controls, operations, maintenance, evidence decryption and key management, and operator management are Admin-only.</p></div>
+        <span class="instance-admin-privacy-note"><i data-lucide="lock-keyhole"></i> Separate host identities</span>
+      </aside>
+      <section class="instance-admin-panel instance-operator-create-panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">NEW OPERATOR</p><h2>Create an operator</h2></div></div>
+        <form id="instance-operator-create-form" class="instance-operator-create-form">
+          <label for="instance-operator-username">Username<input id="instance-operator-username" name="username" autocomplete="off" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.-]{3,32}" required></label>
+          <label for="instance-operator-password">Initial password<input id="instance-operator-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="1024" required><small>At least 12 characters. Share it with the operator through a secure channel.</small></label>
+          <label for="instance-operator-role">Role<select id="instance-operator-role" name="role"><option value="moderator">Moderator</option><option value="admin">Admin</option></select></label>
+          <button id="instance-operator-create" type="submit">Create operator</button>
+        </form>
+      </section>
+      <section class="instance-admin-panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">HOST IDENTITIES</p><h2>Operators</h2><span class="muted small">Passwords and chat-account data are never shown here.</span></div><button id="refresh-instance-operators" class="secondary" type="button"><i data-lucide="refresh-cw"></i>Refresh</button></div>
+        <div id="instance-operators-list" class="instance-operators-list" aria-live="polite" aria-busy="true"><p class="muted">Loading operators…</p></div>
+      </section>
+      <section class="instance-admin-panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">ACCOUNTABILITY</p><h2>Operator access history</h2></div><button id="refresh-instance-operator-audit" class="secondary" type="button"><i data-lucide="refresh-cw"></i>Refresh history</button></div>
+        <div id="instance-operator-audit" class="instance-admin-audit" aria-live="polite"><p class="muted">Loading operator history…</p></div>
+      </section>
+    </main>
+    <script type="module" src="/instance-operators.js"></script>
+  </body>
+</html>

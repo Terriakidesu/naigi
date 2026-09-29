@@ -6,7 +6,12 @@ const username = document.getElementById("admin-auth-username") as HTMLInputElem
 const password = document.getElementById("admin-auth-password") as HTMLInputElement;
 const submit = document.getElementById("admin-auth-submit") as HTMLButtonElement;
 const status = document.getElementById("admin-auth-status") as HTMLElement;
-const returnTo = ["/instance-admin/operations", "/instance-admin/maintenance"].includes(window.location.pathname)
+const returnTo = [
+  "/instance-admin/users",
+  "/instance-admin/spaces",
+  "/instance-admin/operations",
+  "/instance-admin/maintenance",
+].includes(window.location.pathname)
   ? window.location.pathname
   : "/instance-admin";
 

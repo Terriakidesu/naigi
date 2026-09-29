@@ -1,5 +1,7 @@
 import { ApiClient, ApiError, type StorageMaintenanceActionResult, type StorageMaintenancePreview, type StorageMaintenanceSummary } from "./api";
 import { renderIcons } from "./icons";
+import { initializeAdminTheme } from "./instance-admin-theme";
+import { initializeAdminDashboard } from "./instance-admin-dashboard";
 
 const api = new ApiClient();
 const logoutButton = document.getElementById("admin-logout-maintenance") as HTMLButtonElement;
@@ -336,6 +338,8 @@ logoutButton.addEventListener("click", async () => {
   }
 });
 
+initializeAdminTheme();
 renderIcons(document);
+void initializeAdminDashboard(api).catch((error) => console.error("Unable to load operator identity", error));
 updateWorkflow();
 void loadSummary();

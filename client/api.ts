@@ -74,6 +74,7 @@ export type Server = {
   landingChannelId: string | null;
   iconUrl: string | null;
   bannerUrl: string | null;
+  deactivatedAt: string | null;
   createdAt: string;
 };
 
@@ -201,7 +202,45 @@ export type InstanceUserDirectoryEntry = {
   displayName: string;
   createdAt: string;
   banned: boolean;
+  timedOut: boolean;
   activeWarningCount: number;
+};
+
+export type InstanceSpaceDirectoryEntry = {
+  id: string;
+  createdAt: string;
+  deactivatedAt: string | null;
+  activeMemberCount: number;
+};
+
+export type InstanceSpaceAuditEntry = {
+  id: string;
+  source: "space" | "host";
+  action: string;
+  actor: string;
+  targetId: string | null;
+  targetUserId: string | null;
+  reason: string | null;
+  createdAt: string;
+};
+
+export type AdminOperator = {
+  id: string;
+  username: string;
+  role: "admin" | "moderator";
+  disabled: boolean;
+  createdAt: string;
+};
+
+export type AdminIdentity = Pick<AdminOperator, "id" | "username" | "role">;
+
+export type AdminOperatorAuditEntry = {
+  id: string;
+  actorUsername: string;
+  targetUsername: string;
+  action: string;
+  details: Record<string, unknown>;
+  createdAt: string;
 };
 
 export type InstanceUserModeration = {
@@ -220,6 +259,17 @@ export type InstanceUserModeration = {
     expiresAt: string | null;
     acknowledgedAt: string | null;
     revokedAt: string | null;
+    active: boolean;
+  }>;
+  timeouts: Array<{
+    id: string;
+    reason: string;
+    createdByUsername: string;
+    createdAt: string;
+    expiresAt: string;
+    revokedAt: string | null;
+    revokedByUsername: string | null;
+    revocationAction: "removed" | "replaced" | "expired" | null;
     active: boolean;
   }>;
   actions: Array<{
@@ -777,9 +827,26 @@ export class ApiClient {
     return this.get<{ reports: InstanceReportSummary[] }>(`/v1/instance-admin/reports?status=${status}`);
   }
 
-  instanceUsers(search: string, status: "all" | "active" | "banned", limit: number, offset: number) {
-    const query = new URLSearchParams({ search, status, limit: String(limit), offset: String(offset) });
-    return this.get<{ users: InstanceUserDirectoryEntry[]; total: number; limit: number; offset: number }>(`/v1/instance-admin/users?${query}`);
+  instanceUsers(search: string, field: "username" | "displayName", status: "all" | "active" | "banned", limit: number, cursor?: string) {
+    const query = new URLSearchParams({ search, field, status, limit: String(limit) });
+    if (cursor) query.set("cursor", cursor);
+    return this.get<{ users: InstanceUserDirectoryEntry[]; limit: number; nextCursor: string | null }>(`/v1/instance-admin/users?${query}`);
+  }
+
+  instanceSpaces(status: "all" | "active" | "deactivated", limit: number, cursor?: string) {
+    const query = new URLSearchParams({ status, limit: String(limit) });
+    if (cursor) query.set("cursor", cursor);
+    return this.get<{ spaces: InstanceSpaceDirectoryEntry[]; limit: number; nextCursor: string | null }>(`/v1/instance-admin/spaces?${query}`);
+  }
+
+  setInstanceSpaceActivation(serverId: string, active: boolean, reason: string) {
+    return this.patch<{ space: InstanceSpaceDirectoryEntry; changed: boolean }>(`/v1/instance-admin/spaces/${encodeURIComponent(serverId)}/activation`, { active, reason });
+  }
+
+  instanceSpaceAudit(serverId: string, limit: number, cursor?: string) {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (cursor) query.set("cursor", cursor);
+    return this.get<{ logs: InstanceSpaceAuditEntry[]; limit: number; nextCursor: string | null }>(`/v1/instance-admin/spaces/${encodeURIComponent(serverId)}/audit?${query}`);
   }
 
   instanceUser(userId: string) {
@@ -787,18 +854,37 @@ export class ApiClient {
   }
 
   adminLogin(username: string, password: string) {
-    return this.post<{ operator: { id: string; username: string } }>("/v1/instance-admin/auth/login", {
+    return this.post<{ operator: AdminIdentity }>("/v1/instance-admin/auth/login", {
       username,
       password,
     });
   }
 
   adminMe() {
-    return this.get<{ operator: { id: string; username: string } }>("/v1/instance-admin/auth/me");
+    return this.get<{ operator: AdminIdentity }>("/v1/instance-admin/auth/me");
   }
 
   adminLogout() {
     return this.post<{ loggedOut: boolean }>("/v1/instance-admin/auth/logout", {});
+  }
+
+  adminOperators() {
+    return this.get<{ operators: AdminOperator[]; truncated: boolean }>("/v1/instance-admin/operators");
+  }
+
+  createAdminOperator(username: string, password: string, role: AdminOperator["role"]) {
+    return this.post<{ operator: AdminOperator }>("/v1/instance-admin/operators", { username, password, role });
+  }
+
+  updateAdminOperator(operatorId: string, changes: { role?: AdminOperator["role"]; disabled?: boolean }) {
+    return this.patch<{ changed: boolean; operator: AdminOperator }>(
+      `/v1/instance-admin/operators/${encodeURIComponent(operatorId)}`,
+      changes,
+    );
+  }
+
+  adminOperatorAudit(limit = 50) {
+    return this.get<{ logs: AdminOperatorAuditEntry[] }>(`/v1/instance-admin/operators/audit?limit=${limit}`);
   }
 
   instanceReport(reportId: string) {
@@ -823,6 +909,17 @@ export class ApiClient {
 
   banInstanceUser(userId: string, reason: string) {
     return this.post<{ suspended: boolean }>(`/v1/instance-admin/users/${encodeURIComponent(userId)}/suspend`, { reason });
+  }
+
+  timeoutInstanceUser(userId: string, reason: string, durationSeconds: number) {
+    return this.post<{ timeout: { id: string; createdAt: string; expiresAt: string }; replaced: boolean }>(
+      `/v1/instance-admin/users/${encodeURIComponent(userId)}/timeout`,
+      { reason, durationSeconds },
+    );
+  }
+
+  removeInstanceUserTimeout(userId: string) {
+    return this.delete<{ removed: boolean }>(`/v1/instance-admin/users/${encodeURIComponent(userId)}/timeout`);
   }
 
   restoreInstanceUser(userId: string) {

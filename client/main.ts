@@ -268,6 +268,7 @@ function byId<T extends HTMLElement>(id: string) {
 }
 
 const chatLayout = byId<HTMLElement>("chat-panel");
+const chatMain = document.querySelector<HTMLElement>(".chat-main")!;
 const sidebar = byId<HTMLElement>("workspace-sidebar");
 const statusLine = byId<HTMLElement>("status-line");
 const connectionIndicator = byId<HTMLElement>("connection-indicator");
@@ -283,6 +284,9 @@ const conversationSearch = byId<HTMLInputElement>("conversation-search");
 const mobileServerSelect = byId<HTMLSelectElement>("mobile-server-select");
 const conversationTitle = byId<HTMLElement>("conversation-title");
 const conversationSubtitle = byId<HTMLElement>("conversation-subtitle");
+const deactivatedSpaceView = byId<HTMLElement>("deactivated-space-view");
+const deactivatedSpaceName = byId<HTMLElement>("deactivated-space-name");
+const deactivatedSpaceNavigation = byId<HTMLButtonElement>("deactivated-space-navigation");
 const messagesPanel = byId<HTMLElement>("messages");
 const moderationNotices = byId<HTMLElement>("moderation-notices");
 const memberList = byId<HTMLElement>("member-list");
@@ -2750,6 +2754,7 @@ function readableError(error: unknown) {
     if (error.code === "channel_not_visible") return "You no longer have access to that channel.";
     if (error.code === "insufficient_channel_permissions") return "Your role cannot send messages or upload files here.";
     if (error.code === "member_timed_out") return "You are temporarily timed out in this server.";
+    if (error.code === "instance_user_timed_out") return "A host moderator has temporarily restricted sending for this account. You can still read messages; try again after the timeout expires.";
     if (error.code === "message_not_found") return "That message was already deleted.";
     if (error.code === "server_banned") return "This account is banned from that server.";
     return error.code;
@@ -3046,11 +3051,14 @@ function renderServers() {
     const button = document.createElement("button");
     button.className = "space-rail-button";
     button.type = "button";
-    const unread = serverUnreadCount(server.id);
-    button.title = unread > 0 ? `${serverDisplayName(server)} · ${unread} unread` : serverDisplayName(server);
+    const deactivated = Boolean(server.deactivatedAt);
+    const unread = deactivated ? 0 : serverUnreadCount(server.id);
+    button.title = [serverDisplayName(server), deactivated ? "Deactivated" : "", unread > 0 ? `${unread} unread` : ""]
+      .filter(Boolean).join(" · ");
     button.setAttribute("aria-label", button.title);
     button.setAttribute("aria-pressed", String(server.id === selectedServerId));
     button.classList.toggle("selected", server.id === selectedServerId);
+    button.classList.toggle("deactivated", deactivated);
     if (server.iconUrl) {
       const icon = document.createElement("img");
       icon.className = "space-rail-image";
@@ -3080,7 +3088,7 @@ function renderServers() {
   for (const server of servers) {
     const option = document.createElement("option");
     option.value = server.id;
-    option.textContent = serverDisplayName(server);
+    option.textContent = `${serverDisplayName(server)}${server.deactivatedAt ? " · Deactivated" : ""}`;
     mobileServerSelect.append(option);
   }
   mobileServerSelect.value = selectedServerId ?? "";
@@ -3089,7 +3097,9 @@ function renderServers() {
   homeRailButton.setAttribute("aria-pressed", String(!selectedServerId));
   const activeServer = selectedServerId ? servers.find((server) => server.id === selectedServerId) : undefined;
   workspaceName.textContent = activeServer ? serverDisplayName(activeServer) : "Private inbox";
-  workspaceSubtitle.textContent = selectedServerId ? "Private encrypted space" : "Encrypted home";
+  workspaceSubtitle.textContent = activeServer?.deactivatedAt
+    ? "Space deactivated"
+    : selectedServerId ? "Private encrypted space" : "Encrypted home";
   const canManageChannels = Boolean(activeServer && (
     activeServer.permissions.manage_channels
     || activeServer.permissions.create_channels
@@ -3147,8 +3157,9 @@ function renderChannels() {
     const query = conversationSearchQuery.trim().toLowerCase();
     return !query || `${channelDisplayName(channel)} ${channel.id}`.toLowerCase().includes(query);
   }) : [];
-  channelSectionHeading.hidden = !selectedServerId;
-  channelList.hidden = !selectedServerId;
+  const deactivated = Boolean(activeServer()?.deactivatedAt);
+  channelSectionHeading.hidden = !selectedServerId || deactivated;
+  channelList.hidden = !selectedServerId || deactivated;
   channelList.replaceChildren();
   if (!selectedServerId) return;
   channelSectionCount.textContent = conversationSearchQuery.trim()
@@ -3418,7 +3429,7 @@ async function refreshServers() {
   const result = await api.servers();
   servers = result.servers;
   renderServers();
-  void Promise.all(servers.map(async (server) => {
+  void Promise.all(servers.filter((server) => !server.deactivatedAt).map(async (server) => {
     try {
       const result = await api.serverChannels(server.id);
       channelsByServer.set(server.id, result.channels);
@@ -3441,15 +3452,22 @@ async function refreshServers() {
   // the first server in the rail.
   if (requestedLocation.conversationId) return;
   if (selectedServerId && servers.some((server) => server.id === selectedServerId)) {
+    if (servers.find((server) => server.id === selectedServerId)?.deactivatedAt
+      || chatMain.classList.contains("is-space-deactivated")) {
+      await selectServer(selectedServerId);
+      return;
+    }
     renderServers();
     return;
   }
-  if (servers[0]) {
-    await selectServer(servers[0].id);
+  const initialServer = servers.find((server) => !server.deactivatedAt) ?? servers[0];
+  if (initialServer) {
+    await selectServer(initialServer.id);
     return;
   }
   selectedServerId = undefined;
   selectedChannelId = undefined;
+  clearDeactivatedSpaceView();
   channels = [];
   categories = [];
   renderServers();
@@ -3522,6 +3540,7 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   uploadAbortController?.abort();
   hideMentionSuggestions();
   const token = ++serverSelectionToken;
+  clearDeactivatedSpaceView();
   selectedServerId = serverId;
   void refreshModerationNotices(serverId);
   selectedChannelId = undefined;
@@ -3544,6 +3563,11 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   conversationTitle.textContent = serverNameForId(serverId);
   conversationSubtitle.textContent = "Loading encrypted channels…";
   setChannelIcon("message-square");
+
+  if (servers.find((server) => server.id === serverId)?.deactivatedAt) {
+    renderDeactivatedSpace(serverId);
+    return;
+  }
 
   try {
     const [channelResult, categoryResult, roleResult] = await Promise.all([
@@ -3598,6 +3622,20 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
     }
   } catch (error) {
     if (token !== serverSelectionToken) return;
+    if (error instanceof ApiError && error.code === "not_a_server_member") {
+      try {
+        const refreshed = await api.servers();
+        if (token !== serverSelectionToken) return;
+        servers = refreshed.servers;
+        renderServers();
+        if (servers.find((server) => server.id === serverId)?.deactivatedAt) {
+          renderDeactivatedSpace(serverId);
+          return;
+        }
+      } catch {
+        // Keep the original access error if the membership refresh also fails.
+      }
+    }
     setStatus(readableError(error), true);
     renderConversationWelcome("Unable to load this space", "Try selecting it again after checking your connection.");
   }
@@ -3647,6 +3685,7 @@ async function hydrateChannelLabels(serverId: string, snapshot: ServerChannel[],
 }
 
 async function openDirectMessage(conversationId: string) {
+  clearDeactivatedSpaceView();
   selectedServerId = undefined;
   void refreshModerationNotices(undefined);
   selectedChannelId = undefined;
@@ -3668,6 +3707,7 @@ async function showDirectMessages() {
   uploadAbortController?.abort();
   hideMentionSuggestions();
   selectionToken += 1;
+  clearDeactivatedSpaceView();
   selectedServerId = undefined;
   selectedChannelId = undefined;
   clearCustomEmojiAssets();
@@ -3798,6 +3838,39 @@ function renderConversationWelcome(title: string, description: string) {
   body.textContent = description;
   empty.append(icon, heading, body);
   messagesPanel.append(empty);
+}
+
+// I have nothing but my burger and I want nothing more
+function renderDeactivatedSpace(serverId: string) {
+  selectedChannelId = undefined;
+  selectedConversationId = undefined;
+  selectedMembers = [];
+  conversationReady = false;
+  channels = [];
+  categories = [];
+  serverRoles = [];
+  activeServerWelcome = undefined;
+  clearCustomEmojiAssets();
+  renderServers();
+  renderChannels();
+  renderMembers([]);
+  updateComposerState();
+  conversationTitle.textContent = serverNameForId(serverId);
+  conversationSubtitle.textContent = "Space deactivated";
+  setChannelIcon("lock-keyhole");
+  releaseMediaResources(messagesPanel);
+  messagesPanel.replaceChildren();
+  deactivatedSpaceName.textContent = serverNameForId(serverId);
+  chatMain.classList.add("is-space-deactivated");
+  deactivatedSpaceView.hidden = false;
+  renderIcons(deactivatedSpaceView);
+  deactivatedSpaceView.focus({ preventScroll: true });
+  setMobileSidebar(false);
+}
+
+function clearDeactivatedSpaceView() {
+  chatMain.classList.remove("is-space-deactivated");
+  deactivatedSpaceView.hidden = true;
 }
 
 function renderServerWelcome() {
@@ -6368,6 +6441,7 @@ function setMobileSidebar(open: boolean, focusSearch = false) {
 mobileSidebarToggle.addEventListener("click", () => {
   setMobileSidebar(!chatLayout.classList.contains("mobile-sidebar-open"), true);
 });
+deactivatedSpaceNavigation.addEventListener("click", () => setMobileSidebar(true, true));
 mobileSidebarClose.addEventListener("click", () => {
   setMobileSidebar(false);
   mobileSidebarToggle.focus();

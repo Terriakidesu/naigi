@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="no-referrer">
-    <title>Host operator sign in · Naigi</title>
+    <title>Host admin sign in · Naigi</title>
     <link rel="stylesheet" href="/app.css">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   </head>
@@ -13,15 +13,15 @@
     <header class="topbar auth-topbar">
       <div class="brand-lockup">
         <span class="brand-mark" aria-hidden="true">N</span>
-        <div><strong>Naigi</strong><span class="tag">host operator console</span></div>
+        <div><strong>Naigi</strong><span class="tag">Admin console</span></div>
       </div>
       <div class="topbar-links"><a class="text-link" href="/">Chat sign in</a></div>
     </header>
     <main class="auth-panel panel">
       <div class="auth-mark" aria-hidden="true">N</div>
-      <p class="eyebrow">HOST OPERATOR</p>
-      <h1>Operator sign in</h1>
-      <p class="muted">Use an operator identity provisioned by the host. This account is separate from chat accounts.</p>
+      <p class="eyebrow">RESTRICTED ADMIN ACCESS</p>
+      <h1>Host admin sign in</h1>
+      <p class="muted">Use an operator identity provisioned by the host. Admin identities are stored separately and cannot sign in to chat.</p>
       <form id="admin-auth-form" class="stack">
         <label>Operator username
           <input id="admin-auth-username" autocomplete="username" required minlength="3" maxlength="32">
@@ -29,7 +29,7 @@
         <label>Password
           <input id="admin-auth-password" type="password" autocomplete="current-password" required minlength="12" maxlength="1024">
         </label>
-        <button id="admin-auth-submit" type="submit">Sign in to console</button>
+        <button id="admin-auth-submit" type="submit">Sign in to admin console</button>
       </form>
       <p id="admin-auth-status" class="form-status" role="status" aria-live="polite"></p>
     </main>

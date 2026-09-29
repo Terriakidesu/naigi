@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Admins can assign host operators Admin or Moderator access from the dashboard; operator changes are audited, and Moderators are limited to reports and chat-account moderation.
+- Admins and Moderators can apply audited installation-wide send timeouts to chat accounts, with automatic expiry and a separate removal action.
+- Host operators can activate or deactivate spaces using a reversible access freeze; changes record an operator, reason, and timestamp in paginated per-space audit history.
+
+### Changed
+
+- The host admin console now supports browser-local System, Light, and Dark themes across its dashboard pages.
+- Host account management now requires a two-character username/display-name prefix search and uses bounded keyset pagination without full result counts or deep offset scans.
+- Members can still see deactivated spaces in their space switcher and receive a clear status page when selecting one; room and message access remains blocked.
+- The host Spaces directory exposes opaque IDs and minimal activation metadata only; deactivated spaces retain their data and memberships while blocking member access, realtime activity, uploads, and new joins.
+
 ## [0.17.0] - 2026-09-29
 
 ### Added

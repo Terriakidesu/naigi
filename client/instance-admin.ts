@@ -12,6 +12,8 @@ import {
   makeReportPrivateKeyNonExtractable,
 } from "./report-evidence";
 import { iconElement, renderIcons } from "./icons";
+import { initializeAdminTheme } from "./instance-admin-theme";
+import { initializeAdminDashboard } from "./instance-admin-dashboard";
 
 const api = new ApiClient();
 const status = document.getElementById("instance-admin-status") as HTMLElement;
@@ -45,10 +47,12 @@ const keyList = document.getElementById("report-key-list") as HTMLElement;
 const auditList = document.getElementById("instance-admin-audit") as HTMLElement;
 const refreshAuditButton = document.getElementById("refresh-admin-audit") as HTMLButtonElement;
 const logoutButton = document.getElementById("admin-logout") as HTMLButtonElement;
+let operatorRole: "admin" | "moderator" = "moderator";
 
 const unlockedKeys = new Map<string, CryptoKey>();
 let reports: InstanceReportSummary[] = [];
 let selectedReport: InstanceReport | undefined;
+let selectedReportId: string | undefined;
 let detailRequest = 0;
 
 const reasonLabels: Record<InstanceReportSummary["reason"], string> = {
@@ -68,6 +72,7 @@ function setStatus(message: string, isError = false) {
 
 function setEmptyDetail() {
   selectedReport = undefined;
+  selectedReportId = undefined;
   detail.hidden = true;
   emptyDetail.hidden = false;
   reportDetailPanel.hidden = reports.length === 0;
@@ -163,7 +168,7 @@ function renderReportList() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "instance-report-item";
-    button.setAttribute("aria-current", String(report.id === selectedReport?.id));
+    button.setAttribute("aria-current", String(report.id === selectedReportId));
     const line = document.createElement("span");
     line.className = "instance-report-reason";
     const reason = document.createElement("strong");
@@ -198,7 +203,7 @@ async function loadReports(keepSelection = true) {
   reportList.setAttribute("aria-busy", "true");
   reportCount.textContent = "Loading…";
   try {
-    const previousId = keepSelection ? selectedReport?.id : undefined;
+    const previousId = keepSelection ? selectedReportId : undefined;
     const result = await api.instanceReports(statusFilter.value as "all" | "open" | "reviewing" | "resolved" | "dismissed");
     reports = result.reports;
     renderReportList();
@@ -213,6 +218,7 @@ async function loadReports(keepSelection = true) {
     detailRequest += 1;
     reports = [];
     selectedReport = undefined;
+    selectedReportId = undefined;
     reportList.replaceChildren();
     reportList.setAttribute("aria-busy", "false");
     reportGrid.removeAttribute("data-empty");
@@ -237,6 +243,7 @@ async function openReport(reportId: string) {
   const request = ++detailRequest;
   const summary = reports.find((report) => report.id === reportId);
   if (!summary) return;
+  selectedReportId = reportId;
   selectedReport = undefined;
   for (const button of [
     markReviewingButton, removeMessageButton, suspendUserButton, restoreUserButton,
@@ -266,7 +273,7 @@ async function openReport(reportId: string) {
     addMetadata("Message reference", result.report.messageId ?? "Not supplied");
     addMetadata("Review status", result.report.status);
     addMetadata("Reviewed", result.report.reviewedAt ? readableDate(result.report.reviewedAt) : "Not reviewed");
-    evidenceSection.hidden = !result.report.evidence;
+  evidenceSection.hidden = operatorRole !== "admin" || !result.report.evidence;
     decryptEvidenceButton.disabled = !result.report.evidence || !unlockedKeys.has(result.report.evidence.keyId);
     decryptEvidenceButton.textContent = result.report.evidence && !unlockedKeys.has(result.report.evidence.keyId)
       ? `Matching key ${result.report.evidence.keyId.slice(0, 8)} not unlocked`
@@ -303,8 +310,8 @@ async function updateReportStatus(nextStatus: InstanceReport["status"]) {
 }
 
 async function refreshSelectedReport() {
-  if (!selectedReport) return;
-  await openReport(selectedReport.id);
+  if (!selectedReportId) return;
+  await openReport(selectedReportId);
 }
 
 function downloadBackup(contents: string, keyId: string) {
@@ -549,7 +556,15 @@ logoutButton.addEventListener("click", async () => {
   }
 });
 
+initializeAdminTheme();
 renderIcons(document);
-void Promise.all([loadReports(false), loadReportKeys(), loadAudit()]).catch((error) => {
+void initializeAdminDashboard(api).then((operator) => {
+  operatorRole = operator.role;
+  return Promise.all([
+    loadReports(false),
+    ...(operator.role === "admin" ? [loadReportKeys()] : []),
+    loadAudit(),
+  ]);
+}).catch((error) => {
   setStatus(error instanceof Error ? error.message : "Unable to load the instance admin console.", true);
 });

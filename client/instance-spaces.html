@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <script src="/instance-admin-theme-init.js"></script>
+    <title>Spaces · Admin console · Naigi</title>
+    <link rel="stylesheet" href="/app.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  </head>
+  <body class="settings-page instance-admin-page">
+    <aside class="instance-admin-sidebar">
+      <a class="instance-admin-brand" href="/instance-admin" aria-label="Naigi Admin console home"><span class="instance-admin-brand-mark" aria-hidden="true">N</span><span><strong>Naigi</strong><small>ADMIN CONSOLE</small></span></a>
+      <nav class="instance-admin-sidebar-nav" aria-label="Admin console pages">
+        <p class="instance-admin-sidebar-caption">MODERATION</p>
+        <a href="/instance-admin"><i data-lucide="flag"></i><span>Reports</span></a>
+        <a href="/instance-admin/users"><i data-lucide="users-round"></i><span>Accounts</span></a>
+        <p class="instance-admin-sidebar-caption" data-admin-only hidden>PLATFORM</p>
+        <a data-admin-only hidden href="/instance-admin/spaces" aria-current="page"><i data-lucide="boxes"></i><span>Spaces</span></a>
+        <a data-admin-only hidden href="/instance-admin/operations"><i data-lucide="activity"></i><span>Operations</span></a>
+        <p class="instance-admin-sidebar-caption" data-admin-only hidden>SYSTEM</p>
+        <a data-admin-only hidden href="/instance-admin/maintenance"><i data-lucide="wrench"></i><span>Maintenance</span></a>
+        <a data-admin-only hidden href="/instance-admin/operators"><i data-lucide="shield-user"></i><span>Operators</span></a>
+      </nav>
+      <footer class="instance-admin-sidebar-footer">
+        <label class="instance-admin-theme-control" for="instance-admin-theme"><span><i data-lucide="monitor"></i>Theme</span><select id="instance-admin-theme" aria-label="Admin console theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <div class="instance-admin-operator"><span class="instance-admin-operator-mark"><i data-lucide="shield-check"></i></span><span><strong id="admin-operator-name">Host operator</strong><small id="admin-operator-role">Separate admin identity</small></span></div>
+        <a class="instance-admin-sidebar-action" href="/"><i data-lucide="log-in"></i><span>Chat sign in</span></a>
+        <button id="admin-logout-spaces" class="instance-admin-sidebar-action" type="button" aria-label="Sign out operator"><i data-lucide="log-out"></i><span>Sign out</span></button>
+      </footer>
+    </aside>
+    <main class="instance-admin-main">
+      <header class="instance-admin-heading">
+        <div><p class="eyebrow">HOST ADMIN <span aria-hidden="true">/</span> PLATFORM</p><h1>Spaces</h1><p class="muted">Freeze or restore access without deleting data or memberships. Space names remain encrypted and are never shown here.</p></div>
+        <span class="instance-admin-session"><i data-lucide="shield-check"></i>Restricted console</span>
+      </header>
+      <p id="instance-spaces-status" class="instance-operations-status" role="status" aria-live="polite">Loading opaque space identifiers and activation state…</p>
+      <div class="instance-spaces-layout">
+        <section class="instance-admin-panel instance-spaces-directory">
+          <header class="instance-users-heading"><div><p class="eyebrow">SPACE DIRECTORY</p><h2>Spaces</h2></div><span id="instance-spaces-count" class="muted small"></span></header>
+          <label class="instance-spaces-filter" for="instance-spaces-filter">Status<select id="instance-spaces-filter"><option value="all">All spaces</option><option value="active">Active</option><option value="deactivated">Deactivated</option></select></label>
+          <div id="instance-spaces-list" class="instance-spaces-list" role="list" aria-live="polite" aria-busy="true"><p class="muted">Loading spaces…</p></div>
+          <footer class="instance-users-pagination"><button id="instance-spaces-previous" class="secondary" type="button" disabled>Previous</button><span id="instance-spaces-page" class="muted small">Page 1</span><button id="instance-spaces-next" class="secondary" type="button" disabled>Next</button></footer>
+        </section>
+        <section id="instance-space-detail" class="instance-admin-panel instance-space-detail" hidden aria-live="polite">
+          <header class="instance-users-heading"><div><p class="eyebrow">SPACE ACCESS</p><h2>Selected space</h2><code id="instance-space-id" class="instance-space-id"></code><p id="instance-space-meta" class="muted small"></p></div><span id="instance-space-state" class="instance-space-state"></span></header>
+          <section class="instance-space-control">
+            <div><h3 id="instance-space-control-title">Deactivate this space?</h3><p id="instance-space-control-copy" class="muted small">Existing members and new joins will lose access. Space data and memberships are retained for reactivation.</p></div>
+            <label for="instance-space-reason">Audit reason<textarea id="instance-space-reason" maxlength="240" rows="2" placeholder="Why is this space being deactivated?" required></textarea></label>
+            <button id="instance-space-toggle" class="danger-button" type="button">Deactivate space</button>
+          </section>
+          <section class="instance-space-audit-section">
+            <header><div><h3>Space audit history</h3><p class="muted small">Recent space actions and host activation changes. No message or encrypted space content is included.</p></div></header>
+            <div id="instance-space-audit" class="instance-space-audit" aria-live="polite"><p class="muted small">Select a space to view its audit history.</p></div>
+            <footer class="instance-users-pagination"><button id="instance-space-audit-previous" class="secondary" type="button" disabled>Previous</button><span id="instance-space-audit-page" class="muted small"></span><button id="instance-space-audit-next" class="secondary" type="button" disabled>Next</button></footer>
+          </section>
+        </section>
+        <section id="instance-space-empty" class="instance-admin-panel instance-space-empty"><i data-lucide="boxes"></i><h2>Choose a space</h2><p class="muted">Only opaque IDs, activation state, member totals, and safe audit metadata are shown.</p></section>
+      </div>
+    </main>
+    <script type="module" src="/instance-spaces.js"></script>
+  </body>
+</html>

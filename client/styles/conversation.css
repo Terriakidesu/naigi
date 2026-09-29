@@ -1,4 +1,18 @@
 .chat-main { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 250px; grid-template-rows: 58px minmax(0, 1fr); min-width: 0; min-height: 0; border: 0; border-radius: 0; background: var(--bg); }
+.chat-main.is-space-deactivated { display: flex; flex-direction: column; }
+.chat-main.is-space-deactivated > :not(.deactivated-space-view) { display: none !important; }
+.deactivated-space-view { display: grid; flex: 1 1 auto; place-items: center; min-width: 0; min-height: 0; padding: clamp(1rem, 5vw, 4rem); background: var(--bg); }
+.deactivated-space-view[hidden] { display: none; }
+.deactivated-space-warning { display: grid; justify-items: center; width: min(760px, 100%); padding: clamp(1.6rem, 5vw, 4rem); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line-soft)); border-radius: 24px; background: linear-gradient(145deg, color-mix(in srgb, var(--danger) 8%, var(--bg-elevated)), var(--bg-sidebar)); box-shadow: 0 20px 65px rgba(0, 0, 0, 0.2); text-align: center; }
+.deactivated-space-icon { display: grid; place-items: center; width: 76px; height: 76px; margin-bottom: 1.4rem; border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); border-radius: 24px; color: var(--danger-text); background: color-mix(in srgb, var(--danger) 16%, var(--bg-elevated)); }
+.deactivated-space-icon svg { width: 36px; height: 36px; }
+.deactivated-space-kicker { margin: 0 0 0.45rem; color: var(--danger-text); font-size: 0.74rem; font-weight: 800; letter-spacing: 0.14em; }
+.deactivated-space-warning h1 { margin: 0; color: var(--text); font-size: clamp(1.8rem, 4vw, 2.65rem); line-height: 1.12; }
+.deactivated-space-name { margin: 0.8rem 0 0; color: var(--text-muted); font-size: 1.05rem; font-weight: 700; }
+.deactivated-space-description { max-width: 560px; margin: 0.8rem 0 0; color: var(--text-muted); font-size: 0.95rem; line-height: 1.65; }
+.deactivated-space-navigation { display: none; align-items: center; gap: 0.5rem; min-height: 42px; margin-top: 1.5rem; }
+.deactivated-space-navigation svg { width: 17px; height: 17px; }
+@media (max-width: 760px) { .deactivated-space-navigation { display: inline-flex; } }
 .chat-header { display: flex; grid-column: 1 / -1; grid-row: 1; align-items: center; justify-content: space-between; gap: 1rem; min-width: 0; padding: 0 1.2rem; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 92%, var(--accent)); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
 .chat-header-main { display: flex; align-items: center; gap: 1rem; min-width: 0; }
 .channel-heading { min-width: 0; gap: 0.7rem; }

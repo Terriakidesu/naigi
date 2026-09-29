@@ -4,41 +4,57 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="no-referrer">
-    <title>Reports &amp; moderation · Naigi</title>
+    <script src="/instance-admin-theme-init.js"></script>
+    <title>Reports · Admin console · Naigi</title>
     <link rel="stylesheet" href="/app.css">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   </head>
   <body class="settings-page instance-admin-page">
-    <header class="topbar">
-      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">N</span><div><strong>Naigi</strong><span class="tag">host operator console</span></div></div>
-      <div class="topbar-links"><a class="text-link" href="/">Chat sign in</a><button id="admin-logout" class="secondary" type="button">Sign out operator</button></div>
-    </header>
+    <aside class="instance-admin-sidebar">
+      <a class="instance-admin-brand" href="/instance-admin" aria-label="Naigi Admin console home"><span class="instance-admin-brand-mark" aria-hidden="true">N</span><span><strong>Naigi</strong><small>ADMIN CONSOLE</small></span></a>
+      <nav class="instance-admin-sidebar-nav" aria-label="Admin console pages">
+        <p class="instance-admin-sidebar-caption">MODERATION</p>
+        <a href="/instance-admin" aria-current="page"><i data-lucide="flag"></i><span>Reports</span></a>
+        <a href="/instance-admin/users"><i data-lucide="users-round"></i><span>Accounts</span></a>
+        <p class="instance-admin-sidebar-caption" data-admin-only hidden>PLATFORM</p>
+        <a data-admin-only hidden href="/instance-admin/spaces"><i data-lucide="boxes"></i><span>Spaces</span></a>
+        <a data-admin-only hidden href="/instance-admin/operations"><i data-lucide="activity"></i><span>Operations</span></a>
+        <p class="instance-admin-sidebar-caption" data-admin-only hidden>SYSTEM</p>
+        <a data-admin-only hidden href="/instance-admin/maintenance"><i data-lucide="wrench"></i><span>Maintenance</span></a>
+        <a data-admin-only hidden href="/instance-admin/operators"><i data-lucide="shield-user"></i><span>Operators</span></a>
+      </nav>
+      <footer class="instance-admin-sidebar-footer">
+        <label class="instance-admin-theme-control" for="instance-admin-theme"><span><i data-lucide="monitor"></i>Theme</span><select id="instance-admin-theme" aria-label="Admin console theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <div class="instance-admin-operator"><span class="instance-admin-operator-mark"><i data-lucide="shield-check"></i></span><span><strong id="admin-operator-name">Host operator</strong><small id="admin-operator-role">Separate admin identity</small></span></div>
+        <a class="instance-admin-sidebar-action" href="/"><i data-lucide="log-in"></i><span>Chat sign in</span></a>
+        <button id="admin-logout" class="instance-admin-sidebar-action" type="button" aria-label="Sign out operator"><i data-lucide="log-out"></i><span>Sign out</span></button>
+      </footer>
+    </aside>
     <main class="instance-admin-main">
       <header class="instance-admin-heading">
-        <div><p class="eyebrow">HOST MODERATION</p><h1>Reports &amp; moderation</h1><p class="muted">Review installation-wide reports, encrypted evidence, and moderation history. Space owners cannot access this queue.</p></div>
+        <div><p class="eyebrow">HOST ADMIN <span aria-hidden="true">/</span> MODERATION</p><h1>Reports</h1><p class="muted">Review installation-wide reports and account actions. This queue is restricted to host operators; space moderators cannot access it.</p></div>
+        <span class="instance-admin-session"><i data-lucide="shield-check"></i>Restricted console</span>
       </header>
-      <nav class="instance-admin-console-nav" aria-label="Host console pages">
-        <span aria-current="page">Reports</span>
-        <a href="/instance-admin/users">Users</a>
-        <a href="/instance-admin/operations">Operations</a>
-        <a href="/instance-admin/maintenance">Maintenance</a>
-      </nav>
 
       <div id="instance-admin-status" class="form-status instance-admin-status" role="status" aria-live="polite"></div>
+      <aside class="instance-admin-guidance" aria-label="Report review guidance">
+        <div class="instance-admin-guidance-intro"><span class="instance-admin-guidance-icon" aria-hidden="true">i</span><div><strong>Review standard</strong><p>Use report metadata to assess the case. Message content stays encrypted unless you explicitly unlock optional reporter-submitted evidence.</p></div></div>
+        <ol class="instance-admin-guidance-steps"><li><b>1</b><span><strong>Review</strong><small>Check reason and references</small></span></li><li><b>2</b><span><strong>Act proportionately</strong><small>Remove or suspend only when warranted</small></span></li><li><b>3</b><span><strong>Close the case</strong><small>Resolve or dismiss with the outcome</small></span></li></ol>
+      </aside>
       <div class="instance-admin-view">
         <div class="instance-admin-grid">
           <section class="instance-admin-panel report-queue-panel">
             <div class="settings-section-heading">
               <div><p class="eyebrow">CASE QUEUE</p><h2>Reports</h2><span id="report-list-count" class="instance-admin-count" aria-live="polite">Loading…</span></div>
               <div class="instance-admin-queue-controls">
-                <label for="report-status-filter">Filter<select id="report-status-filter"><option value="open">Open</option><option value="reviewing">Reviewing</option><option value="all">All reports</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option></select></label>
-                <button id="refresh-reports" class="secondary" type="button">Refresh</button>
+                <label for="report-status-filter">Queue status<select id="report-status-filter"><option value="open">Open</option><option value="reviewing">Reviewing</option><option value="all">All reports</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option></select></label>
+                <button id="refresh-reports" class="secondary" type="button" aria-label="Refresh report queue"><i data-lucide="refresh-cw"></i><span>Refresh</span></button>
               </div>
             </div>
             <div id="instance-report-list" class="instance-report-list" aria-live="polite" aria-busy="true"><p class="muted">Loading reports…</p></div>
           </section>
           <section class="instance-admin-panel report-detail-panel" aria-live="polite">
-            <div id="instance-report-empty" class="instance-admin-empty"><i data-lucide="inbox"></i><h2>Select a report</h2><p class="muted">Report metadata is visible to designated host operators. Message contents are not.</p></div>
+            <div id="instance-report-empty" class="instance-admin-empty"><i data-lucide="inbox"></i><h2>Select a report</h2><p class="muted">Choose a case from the queue to review its status, reporter, target, and safe references.</p><span class="instance-admin-privacy-note"><i data-lucide="lock-keyhole"></i> Message content is not included</span></div>
             <div id="instance-report-detail" hidden>
               <div class="settings-section-heading"><div><p class="eyebrow">REPORT DETAILS</p><h2 id="report-detail-title">Report</h2></div><span id="report-detail-status" class="instance-report-status"></span></div>
               <dl id="report-detail-metadata" class="instance-report-metadata"></dl>
@@ -48,20 +64,20 @@
                 <button id="decrypt-report-evidence" class="secondary" type="button">Decrypt in this browser</button>
                 <pre id="report-evidence-plaintext" hidden></pre>
               </section>
-              <div class="instance-report-actions">
-                <button id="mark-report-reviewing" class="secondary" type="button">Mark reviewing</button>
-                <button id="remove-reported-message" class="danger-button" type="button" hidden>Remove reported message</button>
-                <button id="suspend-reported-user" class="danger-button" type="button">Suspend account</button>
-                <button id="restore-reported-user" class="secondary" type="button" hidden>Restore account</button>
-                <button id="resolve-report" type="button">Resolve</button>
-                <button id="dismiss-report" class="secondary" type="button">Dismiss</button>
-              </div>
+              <section class="instance-report-action-group" aria-labelledby="report-disposition-heading">
+                <header><div><h3 id="report-disposition-heading">Case disposition</h3><p>Choose how this report is recorded. Changes are included in the admin audit log.</p></div></header>
+                <div class="instance-report-actions"><button id="mark-report-reviewing" class="secondary" type="button">Mark reviewing</button><button id="resolve-report" type="button">Resolve</button><button id="dismiss-report" class="secondary" type="button">Dismiss</button></div>
+              </section>
+              <section class="instance-report-action-group is-sensitive" aria-labelledby="report-enforcement-heading">
+                <header><div><h3 id="report-enforcement-heading">Account and message actions</h3><p>These actions affect people or retained server history. Review the target and references before proceeding.</p></div></header>
+                <div class="instance-report-actions"><button id="remove-reported-message" class="danger-button" type="button" hidden>Remove reported message</button><button id="suspend-reported-user" class="danger-button" type="button">Suspend account</button><button id="restore-reported-user" class="secondary" type="button" hidden>Restore account</button></div>
+              </section>
             </div>
           </section>
         </div>
 
-        <section class="instance-admin-panel instance-report-key-panel">
-          <div class="settings-section-heading"><div><p class="eyebrow">REPORT PRIVACY</p><h2>Evidence encryption keys</h2></div><span class="muted small">Private keys never leave this browser</span></div>
+        <section class="instance-admin-panel instance-report-key-panel" data-admin-only hidden>
+          <div class="settings-section-heading"><div><p class="eyebrow">EVIDENCE SECURITY</p><h2>Encryption keys</h2></div><span class="instance-admin-privacy-note"><i data-lucide="lock-keyhole"></i> Private keys stay in this browser</span></div>
           <p class="muted">Generate a host evidence key and download its passphrase-encrypted backup. Keep backups offline and share them only with trusted host operators. If a key backup is lost, its evidence cannot be recovered.</p>
           <div class="instance-key-grid">
             <div class="settings-form">
@@ -79,7 +95,7 @@
         </section>
 
         <section class="instance-admin-panel">
-          <div class="settings-section-heading"><div><p class="eyebrow">ACCOUNTABILITY</p><h2>Admin audit log</h2></div><button id="refresh-admin-audit" class="secondary" type="button">Refresh log</button></div>
+          <div class="settings-section-heading"><div><p class="eyebrow">ACCOUNTABILITY</p><h2>Host admin audit log</h2></div><button id="refresh-admin-audit" class="secondary" type="button"><i data-lucide="refresh-cw"></i>Refresh log</button></div>
           <div id="instance-admin-audit" class="instance-admin-audit"><p class="muted">Loading audit log…</p></div>
         </section>
       </div>
