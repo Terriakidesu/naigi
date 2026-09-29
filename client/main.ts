@@ -4736,7 +4736,18 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
       cryptoClient.syncToDevice().catch(() => undefined),
     ]);
     if (token !== selectionToken) return;
-    if (cached.length > 0) await renderMessageHistory({ scrollToBottom: true });
+    // Cache is already on screen. Rebuild only when the early render found
+    // missing room keys that the completed to-device sync may have supplied.
+    if (cached.length > 0 && unavailableMessageNotices.size > 0) {
+      const wasAtLatest = isAtLatestMessage();
+      const scrollAnchor = wasAtLatest ? null : captureScrollAnchor();
+      const scrollTop = messagesPanel.scrollTop;
+      await renderMessageHistory({
+        scrollAnchor: scrollAnchor ?? undefined,
+        scrollToBottom: wasAtLatest,
+      });
+      if (!wasAtLatest && !scrollAnchor) messagesPanel.scrollTop = scrollTop;
+    }
     conversationReady = true;
     updateComposerState();
     updateVoiceCallButton();
@@ -4812,7 +4823,9 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
     updateComposerState();
     if (loadedMessages.length > 0) {
       conversationSubtitle.textContent = "Showing locally cached encrypted history";
-      await renderMessageHistory({ scrollToBottom: true });
+      // The cache has already been rendered; don't tear it down again if a
+      // later metadata/network step failed without changing the message set.
+      if (lastMessagesKey !== messagesKey()) await renderMessageHistory({ scrollToBottom: true });
     } else {
       conversationSubtitle.textContent = canSend ? "Message history unavailable" : "Could not load this conversation";
       renderConversationWelcome(canSend ? "History unavailable" : "Unable to open conversation", canSend

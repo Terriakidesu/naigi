@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-09-30
+
+### Fixed
+
+- Cached conversation history no longer gets unnecessarily rebuilt after key sync or an unrelated loading error; key-recovery retries preserve the reader's scroll position.
+
 ## [0.20.0] - 2026-09-30
 
 ### Added
@@ -185,6 +191,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.20.1](docs/changelogs/0.20.1.md) — 2026-09-30
 - [0.20.0](docs/changelogs/0.20.0.md) — 2026-09-30
 - [0.19.1](docs/changelogs/0.19.1.md) — 2026-09-30
 - [0.19.0](docs/changelogs/0.19.0.md) — 2026-09-30

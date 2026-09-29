@@ -1010,7 +1010,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.20.0" };
+         ?? { name: "Naigi", version: "0.20.1" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
