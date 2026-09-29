@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Changing a custom theme's starting palette now updates its color controls, gradient colors, and live preview.
+
 ## [0.18.0] - 2026-09-29
 
 ### Added

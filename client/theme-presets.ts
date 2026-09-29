@@ -242,6 +242,20 @@ export const builtInThemeColors: Record<AppTheme, ThemeColors> = {
   },
 };
 
+export function setThemeBasePalette(theme: CustomThemePreset, baseTheme: AppTheme): CustomThemePreset {
+  const colors = builtInThemeColors[baseTheme];
+  return {
+    ...theme,
+    baseTheme,
+    colors: { ...colors },
+    design: {
+      ...theme.design,
+      gradientStart: colors.bg,
+      gradientEnd: colors.bgDeep,
+    },
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

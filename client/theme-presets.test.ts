@@ -9,6 +9,7 @@ import {
   normalizeThemeDesign,
   normalizeThemeColors,
   normalizeThemeHex,
+  setThemeBasePalette,
   type CustomThemePreset,
 } from "./theme-presets";
 
@@ -30,6 +31,30 @@ describe("custom theme presets", () => {
 
   test("keeps valid custom presets and skips malformed stored entries", () => {
     expect(normalizeCustomThemePresets([null, theme, { ...theme, id: "dark" }])).toEqual([theme]);
+  });
+
+  test("switches a custom preset to the selected base palette and refreshes its gradient stops", () => {
+    const customized: CustomThemePreset = {
+      ...theme,
+      colors: { ...theme.colors, bg: "#112233", accent: "#445566" },
+      design: {
+        ...theme.design,
+        backgroundMode: "gradient",
+        gradientStart: "#112233",
+        gradientEnd: "#445566",
+        radius: 22,
+      },
+    };
+    const updated = setThemeBasePalette(customized, "light");
+
+    expect(updated.baseTheme).toBe("light");
+    expect(updated.colors).toEqual(builtInThemeColors.light);
+    expect(updated.design.gradientStart).toBe(builtInThemeColors.light.bg);
+    expect(updated.design.gradientEnd).toBe(builtInThemeColors.light.bgDeep);
+    expect(updated.design.backgroundMode).toBe("gradient");
+    expect(updated.design.radius).toBe(22);
+    expect(customized.baseTheme).toBe("black");
+    expect(customized.colors.bg).toBe("#112233");
   });
 
   test("backfills design defaults for saved presets and rejects unsafe design values", () => {

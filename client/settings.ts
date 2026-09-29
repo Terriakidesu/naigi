@@ -12,6 +12,7 @@ import {
   MAX_THEME_PACKAGE_LENGTH,
   MAX_THEME_NAME_LENGTH,
   normalizeThemeHex,
+  setThemeBasePalette,
   themeImageMimeTypes,
   themeColorTokens,
   type CustomThemePreset,
@@ -1431,11 +1432,16 @@ customThemeName.addEventListener("keydown", (event) => {
 customThemeBase.addEventListener("change", () => {
   const theme = selectedCustomTheme();
   if (!theme) return;
-  theme.baseTheme = customThemeBase.value as AppTheme;
+  const updatedTheme = setThemeBasePalette(theme, customThemeBase.value as AppTheme);
+  const themeIndex = draftCustomThemes.findIndex((candidate) => candidate.id === theme.id);
+  if (themeIndex < 0) return;
+  draftCustomThemes[themeIndex] = updatedTheme;
   invalidateThemeShareCode();
-  renderThemeCards(theme.id);
-  renderThemePreview(themeEditorPreview, theme.name, theme.baseTheme, theme.colors, theme.design);
-  renderThemeContrastWarning(theme);
+  renderThemeColorControls(updatedTheme);
+  renderThemeDesignControls(updatedTheme);
+  renderThemeCards(updatedTheme.id);
+  renderThemePreview(themeEditorPreview, updatedTheme.name, updatedTheme.baseTheme, updatedTheme.colors, updatedTheme.design);
+  renderThemeContrastWarning(updatedTheme);
   syncAppPreferencesDirty();
 });
 themeBackgroundMode.addEventListener("change", () => updateSelectedThemeDesign({ backgroundMode: themeBackgroundMode.value as ThemeDesign["backgroundMode"] }));
