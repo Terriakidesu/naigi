@@ -3,6 +3,8 @@ import { applyAppPreferences, defaultAppPreferences, loadAppPreferences, saveApp
 import { CryptoClient, LocalCryptoStoreError } from "./crypto";
 import { iconElement, renderIcons } from "./icons";
 import { clearLocalData } from "./local-data";
+import { disableFcmPush, synchronizeFcmPush } from "./push-notifications";
+import { cachedMessageCacheStats, clearCachedMessages } from "./message-cache";
 import { setupProfileSettings } from "./profile-settings";
 import { clearSessionPassphrase, forgetRememberedPassphrase, lockLocalSession } from "./unlock-vault";
 
@@ -23,6 +25,8 @@ const status = document.getElementById("settings-status") as HTMLElement;
 const logout = document.getElementById("logout-button") as HTMLButtonElement;
 const profileForm = document.getElementById("profile-form") as HTMLFormElement;
 const displayNameInput = document.getElementById("settings-display-name") as HTMLInputElement;
+const profileFormState = document.getElementById("profile-form-state") as HTMLElement;
+const discardProfileChanges = document.getElementById("discard-profile-changes") as HTMLButtonElement;
 const profileImageInput = document.getElementById("profile-image-input") as HTMLInputElement;
 const removeProfileImage = document.getElementById("remove-profile-image") as HTMLButtonElement;
 const profileBannerInput = document.getElementById("profile-banner-input") as HTMLInputElement;
@@ -42,23 +46,41 @@ const recoveryFile = document.getElementById("recovery-file") as HTMLInputElemen
 const recoveryImportPassphrase = document.getElementById("recovery-import-passphrase") as HTMLInputElement;
 const importRecoveryButton = document.getElementById("import-recovery-button") as HTMLButtonElement;
 const clearLocalDataButton = document.getElementById("clear-local-data-button") as HTMLButtonElement;
+const messageCacheStatus = document.getElementById("message-cache-status") as HTMLElement;
+const clearMessageCacheButton = document.getElementById("clear-message-cache-button") as HTMLButtonElement;
+const blockedUsersList = document.getElementById("blocked-users-list") as HTMLElement;
 const appPreferencesForm = document.getElementById("app-preferences-form") as HTMLFormElement;
 const appTheme = document.getElementById("app-theme") as HTMLSelectElement;
 const appAccent = document.getElementById("app-accent") as HTMLInputElement;
-const appScale = document.getElementById("app-scale") as HTMLSelectElement;
+const appScale = document.getElementById("app-scale") as HTMLInputElement;
+const appScaleValue = document.getElementById("app-scale-value") as HTMLOutputElement;
+const appMessageTextSize = document.getElementById("app-message-text-size") as HTMLInputElement;
+const appMessageTextSizeValue = document.getElementById("app-message-text-size-value") as HTMLOutputElement;
+const appMessageSizePreview = document.getElementById("app-message-size-preview") as HTMLElement;
+const appMessageSizePreviewText = document.getElementById("app-message-size-preview-text") as HTMLElement;
 const appSounds = document.getElementById("app-sounds") as HTMLInputElement;
-const appAutoplayMedia = document.getElementById("app-autoplay-media") as HTMLInputElement;
+const appAutoLoadMedia = document.getElementById("app-auto-load-media") as HTMLInputElement;
 const appExternalPreviews = document.getElementById("app-external-previews") as HTMLInputElement;
 const appEnterToSend = document.getElementById("app-enter-to-send") as HTMLInputElement;
 const appCompactMessages = document.getElementById("app-compact-messages") as HTMLInputElement;
 const appReducedMotion = document.getElementById("app-reduced-motion") as HTMLInputElement;
+const appNotificationMode = document.getElementById("app-notification-mode") as HTMLSelectElement;
+const appQuietHoursEnabled = document.getElementById("app-quiet-hours-enabled") as HTMLInputElement;
+const appQuietHoursStart = document.getElementById("app-quiet-hours-start") as HTMLInputElement;
+const appQuietHoursEnd = document.getElementById("app-quiet-hours-end") as HTMLInputElement;
+const appPreferencesStatus = document.getElementById("app-preferences-status") as HTMLElement;
+const discardAppPreferencesButton = document.getElementById("discard-app-preferences-button") as HTMLButtonElement;
+const saveAppPreferencesButton = document.getElementById("save-app-preferences-button") as HTMLButtonElement;
 const settingsLayout = document.getElementById("settings-layout") as HTMLElement;
 const settingsSidebar = document.getElementById("settings-sidebar") as HTMLElement;
 const mobileSidebarToggle = document.getElementById("settings-mobile-sidebar-toggle") as HTMLButtonElement;
 const mobileSidebarClose = document.getElementById("settings-mobile-sidebar-close") as HTMLButtonElement;
 const mobileSidebarBackdrop = document.getElementById("settings-mobile-sidebar-backdrop") as HTMLButtonElement;
+const settingsPageTitle = document.getElementById("settings-page-title") as HTMLElement;
+const settingsPageDescription = document.getElementById("settings-page-description") as HTMLElement;
 let currentUserId: string | undefined;
 let appPreferences: AppPreferences = { ...defaultAppPreferences };
+let appPreferencesLoaded = false;
 let recoveryCrypto: CryptoClient | undefined;
 
 function setStatus(message: string, error = false) {
@@ -128,26 +150,67 @@ function renderDevices(devices: Device[]) {
   }
 }
 
-function syncSettingsNav() {
+function currentSettingsHash() {
   const requestedHash = window.location.hash || "#profile";
   const views = [...document.querySelectorAll<HTMLElement>("[data-settings-view]")];
-  const hash = views.some((view) => `#${view.id}` === requestedHash) ? requestedHash : "#profile";
+  return views.some((view) => `#${view.id}` === requestedHash) ? requestedHash : "#profile";
+}
+
+let lastSettingsHash = currentSettingsHash();
+
+function syncSettingsNav() {
+  const hash = currentSettingsHash();
+  const views = [...document.querySelectorAll<HTMLElement>("[data-settings-view]")];
   for (const view of views) view.hidden = `#${view.id}` !== hash;
+  let activeLink: HTMLAnchorElement | undefined;
   for (const link of document.querySelectorAll<HTMLAnchorElement>(".settings-nav-item")) {
     const active = link.hash === hash;
     link.classList.toggle("active", active);
-    if (active) link.setAttribute("aria-current", "location");
+    if (active) {
+      activeLink = link;
+      link.setAttribute("aria-current", "location");
+    }
     else link.removeAttribute("aria-current");
   }
+  settingsPageTitle.textContent = activeLink?.dataset.title ?? "Settings";
+  settingsPageDescription.textContent = activeLink?.dataset.description ?? "Manage your Naigi account and this browser.";
 }
 
 for (const link of document.querySelectorAll<HTMLAnchorElement>(".settings-nav-item")) {
-  link.addEventListener("click", () => {
+  link.addEventListener("click", (event: MouseEvent) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const targetHash = link.hash;
+    if (currentSettingsHash() === "#app" && targetHash !== "#app" && appPreferencesAreDirty()) {
+      event.preventDefault();
+      void (async () => {
+        if (!await resolveAppPreferencesBeforeLeave()) return;
+        if (window.matchMedia("(max-width: 760px)").matches) setMobileSidebar(false);
+        window.location.hash = targetHash;
+      })();
+      return;
+    }
     if (window.matchMedia("(max-width: 760px)").matches) setMobileSidebar(false);
   });
 }
 
-window.addEventListener("hashchange", syncSettingsNav);
+window.addEventListener("hashchange", () => {
+  const nextHash = currentSettingsHash();
+  const previousHash = lastSettingsHash;
+  if (previousHash === "#app" && nextHash !== "#app" && appPreferencesAreDirty()) {
+    void (async () => {
+      if (!await resolveAppPreferencesBeforeLeave()) {
+        window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}${previousHash}`);
+        syncSettingsNav();
+        return;
+      }
+      lastSettingsHash = nextHash;
+      syncSettingsNav();
+    })();
+    return;
+  }
+  lastSettingsHash = nextHash;
+  syncSettingsNav();
+});
 syncSettingsNav();
 mobileSidebarToggle.addEventListener("click", () => {
   setMobileSidebar(!settingsLayout.classList.contains("mobile-sidebar-open"), true);
@@ -168,13 +231,205 @@ function renderAppPreferences(preferences: AppPreferences) {
   appPreferences = applyAppPreferences(preferences, settingsLayout);
   appTheme.value = appPreferences.theme;
   appAccent.value = appPreferences.accent;
-  appScale.value = String(appPreferences.scale);
+  appScale.value = String(Math.round(appPreferences.scale * 100));
+  updateAppScaleValue();
+  appMessageTextSize.value = String(appPreferences.messageTextSize);
+  updateMessageTextSizeValue();
   appSounds.checked = appPreferences.sounds;
-  appAutoplayMedia.checked = appPreferences.autoplayMedia;
+  appAutoLoadMedia.checked = appPreferences.autoLoadMedia;
   appExternalPreviews.checked = appPreferences.externalPreviews;
   appEnterToSend.checked = appPreferences.enterToSend;
   appCompactMessages.checked = appPreferences.compactMessages;
   appReducedMotion.checked = appPreferences.reducedMotion;
+  appNotificationMode.value = appPreferences.notificationMode;
+  appNotificationMode.disabled = typeof Notification === "undefined";
+  appQuietHoursEnabled.checked = appPreferences.quietHoursEnabled;
+  appQuietHoursStart.value = appPreferences.quietHoursStart;
+  appQuietHoursEnd.value = appPreferences.quietHoursEnd;
+  syncAppPreferencesDirty();
+}
+
+function readAppPreferencesForm(notificationMode = appNotificationMode.value as AppPreferences["notificationMode"]): AppPreferences {
+  return {
+    theme: appTheme.value as AppPreferences["theme"],
+    accent: appAccent.value,
+    scale: Number(appScale.value) / 100,
+    messageTextSize: Number(appMessageTextSize.value),
+    sounds: appSounds.checked,
+    autoLoadMedia: appAutoLoadMedia.checked,
+    externalPreviews: appExternalPreviews.checked,
+    enterToSend: appEnterToSend.checked,
+    compactMessages: appCompactMessages.checked,
+    reducedMotion: appReducedMotion.checked,
+    notificationMode,
+    quietHoursEnabled: appQuietHoursEnabled.checked,
+    quietHoursStart: appQuietHoursStart.value,
+    quietHoursEnd: appQuietHoursEnd.value,
+  };
+}
+
+function syncAppPreferencesDirty() {
+  const dirty = appPreferencesAreDirty();
+  appPreferencesStatus.textContent = dirty ? "Unsaved changes" : "No unsaved changes";
+  appPreferencesStatus.dataset.state = dirty ? "dirty" : "saved";
+  discardAppPreferencesButton.hidden = !dirty;
+  saveAppPreferencesButton.disabled = !dirty;
+}
+
+function appPreferencesAreDirty() {
+  if (!appPreferencesLoaded) return false;
+  const draft = readAppPreferencesForm();
+  return (Object.keys(draft) as (keyof AppPreferences)[]).some((key) => draft[key] !== appPreferences[key]);
+}
+
+type LeavePreferencesChoice = "save" | "discard" | "stay";
+
+function promptToLeaveAppPreferences(): Promise<LeavePreferencesChoice> {
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "app-dialog app-preferences-leave-dialog";
+    const title = document.createElement("h2");
+    title.textContent = "Unsaved app preferences";
+    title.id = "app-preferences-leave-title";
+    const description = document.createElement("p");
+    description.className = "muted";
+    description.textContent = "Save your changes before leaving App preferences, discard them, or stay here to keep editing.";
+    description.id = "app-preferences-leave-description";
+    dialog.setAttribute("aria-labelledby", title.id);
+    dialog.setAttribute("aria-describedby", description.id);
+
+    const actions = document.createElement("div");
+    actions.className = "app-dialog-actions app-preferences-leave-actions";
+    const stay = document.createElement("button");
+    stay.className = "secondary";
+    stay.type = "button";
+    stay.textContent = "Stay here";
+    const discard = document.createElement("button");
+    discard.className = "secondary";
+    discard.type = "button";
+    discard.textContent = "Discard changes";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.textContent = "Save changes";
+    actions.append(stay, discard, save);
+    dialog.append(title, description, actions);
+    document.body.append(dialog);
+
+    let choice: LeavePreferencesChoice = "stay";
+    const closeWith = (nextChoice: LeavePreferencesChoice) => {
+      choice = nextChoice;
+      dialog.close();
+    };
+    stay.addEventListener("click", () => closeWith("stay"));
+    discard.addEventListener("click", () => closeWith("discard"));
+    save.addEventListener("click", () => closeWith("save"));
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      resolve(choice);
+    }, { once: true });
+    dialog.showModal();
+    stay.focus();
+  });
+}
+
+async function resolveAppPreferencesBeforeLeave() {
+  if (!appPreferencesAreDirty()) return true;
+  const choice = await promptToLeaveAppPreferences();
+  if (choice === "stay") return false;
+  if (choice === "discard") {
+    renderAppPreferences(appPreferences);
+    appPreferencesStatus.textContent = "Unsaved changes discarded.";
+    return true;
+  }
+  return saveAppPreferencesDraft();
+}
+
+function updateAppScaleValue() {
+  const value = `${appScale.value}%`;
+  appScaleValue.value = value;
+  appScaleValue.textContent = value;
+  appScale.setAttribute("aria-valuetext", value);
+  appMessageSizePreview.style.setProperty("--preview-interface-scale", String(Number(appScale.value) / 100));
+}
+
+function updateMessageTextSizeValue() {
+  const value = `${appMessageTextSize.value}px`;
+  appMessageTextSizeValue.value = value;
+  appMessageTextSizeValue.textContent = value;
+  appMessageTextSize.setAttribute("aria-valuetext", value);
+  appMessageSizePreviewText.style.setProperty("--preview-message-text-size", value);
+}
+
+function formatCacheSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function refreshMessageCacheStatus() {
+  if (!currentUserId) return;
+  try {
+    const stats = await cachedMessageCacheStats(currentUserId);
+    if (!stats) {
+      messageCacheStatus.textContent = "Encrypted message cache is unavailable in this browser.";
+      clearMessageCacheButton.disabled = true;
+      return;
+    }
+    messageCacheStatus.textContent = `${stats.messages.toLocaleString()} cached encrypted ${stats.messages === 1 ? "message" : "messages"} · approximately ${formatCacheSize(stats.bytes)}`;
+    clearMessageCacheButton.disabled = stats.messages === 0;
+  } catch {
+    messageCacheStatus.textContent = "Unable to read encrypted message cache usage.";
+    clearMessageCacheButton.disabled = true;
+  }
+}
+
+async function loadBlockedUsers() {
+  blockedUsersList.replaceChildren();
+  try {
+    const result = await api.blockedUsers();
+    if (result.users.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "You have not blocked anyone.";
+      blockedUsersList.append(empty);
+      return;
+    }
+    for (const user of result.users) {
+      const row = document.createElement("div");
+      row.className = "settings-list-row";
+      const copy = document.createElement("div");
+      copy.className = "settings-row-copy";
+      const displayName = document.createElement("strong");
+      displayName.textContent = user.displayName;
+      const usernameLabel = document.createElement("span");
+      usernameLabel.className = "muted small";
+      usernameLabel.textContent = `@${user.username}`;
+      copy.append(displayName, usernameLabel);
+      const unblock = document.createElement("button");
+      unblock.type = "button";
+      unblock.className = "secondary";
+      unblock.textContent = "Unblock";
+      unblock.addEventListener("click", async () => {
+        unblock.disabled = true;
+        try {
+          await api.unblockUser(user.id);
+          await loadBlockedUsers();
+          setStatus(`@${user.username} unblocked.`);
+        } catch (error) {
+          unblock.disabled = false;
+          setStatus(error instanceof Error ? error.message : "Unable to unblock this user.", true);
+        }
+      });
+      row.append(copy, unblock);
+      blockedUsersList.append(row);
+    }
+  } catch (error) {
+    const message = document.createElement("p");
+    message.className = "muted";
+    message.textContent = "Unable to load blocked users.";
+    blockedUsersList.append(message);
+    setStatus(error instanceof Error ? error.message : "Unable to load blocked users.", true);
+  }
 }
 
 const profileSettings = setupProfileSettings(api, {
@@ -184,6 +439,8 @@ const profileSettings = setupProfileSettings(api, {
   username,
   profileForm,
   displayNameInput,
+  profileFormState,
+  discardProfileChanges,
   profileImageInput,
   removeProfileImage,
   profileBannerInput,
@@ -198,30 +455,76 @@ async function boot() {
   try {
     const result = await api.me();
     currentUserId = result.user.id;
-    renderAppPreferences(loadAppPreferences(currentUserId));
+    const preferences = loadAppPreferences(currentUserId);
+    appPreferencesLoaded = true;
+    renderAppPreferences(preferences);
     profileSettings.renderProfile(result.user);
-    await loadDevices();
+    await Promise.all([loadDevices(), loadBlockedUsers()]);
+    await refreshMessageCacheStatus();
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) window.location.assign("/");
     else setStatus(error instanceof Error ? error.message : "Unable to load settings.", true);
   }
 }
 
-appPreferencesForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  appPreferences = saveAppPreferences(currentUserId, {
-    theme: appTheme.value as AppPreferences["theme"],
-    accent: appAccent.value,
-    scale: Number(appScale.value),
-    sounds: appSounds.checked,
-    autoplayMedia: appAutoplayMedia.checked,
-    externalPreviews: appExternalPreviews.checked,
-    enterToSend: appEnterToSend.checked,
-    compactMessages: appCompactMessages.checked,
-    reducedMotion: appReducedMotion.checked,
-  });
+async function saveAppPreferencesDraft() {
+  let notificationMode = appNotificationMode.value as AppPreferences["notificationMode"];
+  let notificationPermissionMessage = "";
+  if (notificationMode !== "off") {
+    if (typeof Notification === "undefined") {
+      notificationMode = "off";
+      notificationPermissionMessage = "Desktop notifications are unavailable in this browser.";
+    } else if (Notification.permission !== "granted") {
+      let granted = false;
+      if (Notification.permission !== "denied") {
+        try {
+          granted = await Notification.requestPermission() === "granted";
+        } catch {
+          granted = false;
+        }
+      }
+      if (!granted) {
+        notificationMode = "off";
+        notificationPermissionMessage = Notification.permission === "denied"
+          ? " Allow notifications in browser site settings to enable them."
+          : " Notification permission was not granted.";
+      }
+    }
+  }
+  appPreferences = saveAppPreferences(currentUserId, readAppPreferencesForm(notificationMode));
+  if (currentUserId) void synchronizeFcmPush(api, currentUserId, appPreferences);
   renderAppPreferences(appPreferences);
-  setStatus("App settings saved on this browser.");
+  appPreferencesStatus.textContent = "Changes saved on this browser.";
+  setStatus(`App settings saved on this browser.${notificationPermissionMessage}`);
+  return true;
+}
+
+appPreferencesForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await saveAppPreferencesDraft();
+});
+
+appScale.addEventListener("input", updateAppScaleValue);
+appMessageTextSize.addEventListener("input", updateMessageTextSizeValue);
+appPreferencesForm.addEventListener("input", syncAppPreferencesDirty);
+appPreferencesForm.addEventListener("change", syncAppPreferencesDirty);
+discardAppPreferencesButton.addEventListener("click", () => {
+  renderAppPreferences(appPreferences);
+  appPreferencesStatus.textContent = "Unsaved changes discarded.";
+});
+
+clearMessageCacheButton.addEventListener("click", async () => {
+  if (!currentUserId) return;
+  if (!window.confirm("Clear only this browser’s cached encrypted messages? This does not affect server history, queued messages, local keys, or device settings.")) return;
+  clearMessageCacheButton.disabled = true;
+  try {
+    const cleared = await clearCachedMessages(currentUserId);
+    await refreshMessageCacheStatus();
+    setStatus(`Cleared ${cleared.toLocaleString()} cached encrypted ${cleared === 1 ? "message" : "messages"}. Server history and local keys are unchanged.`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Unable to clear the encrypted message cache.", true);
+    clearMessageCacheButton.disabled = false;
+  }
 });
 
 passwordForm.addEventListener("submit", async (event) => {
@@ -323,8 +626,13 @@ clearLocalDataButton.addEventListener("click", async () => {
   try {
     if (recoveryCrypto) await recoveryCrypto.close().catch(() => undefined);
     recoveryCrypto = undefined;
+    const pushRegistrationRemoved = await disableFcmPush(api, currentUserId);
     const result = await clearLocalData(currentUserId);
-    setStatus(result.cleared ? "Local data cleared from this browser." : "Local data was mostly cleared; a browser tab is still using one local database.", !result.cleared);
+    setStatus(result.cleared && pushRegistrationRemoved
+      ? "Local data cleared from this browser."
+      : result.cleared
+        ? "Local data cleared, but the push registration could not be removed; its token was retained so removal can be retried."
+        : "Local data was mostly cleared; a browser tab is still using one local database.", !result.cleared || !pushRegistrationRemoved);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Unable to clear local data.", true);
   } finally {
@@ -351,6 +659,7 @@ forgetDevice.addEventListener("click", async () => {
 });
 
 logout.addEventListener("click", async () => {
+  if (currentUserId) await disableFcmPush(api, currentUserId);
   await api.logout().catch(() => undefined);
   if (recoveryCrypto) await recoveryCrypto.close().catch(() => undefined);
   recoveryCrypto = undefined;

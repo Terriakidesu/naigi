@@ -14,6 +14,7 @@ import {
   type ServerPermissionMap,
 } from "./api";
 import { renderAvatar } from "./avatar";
+import { readableAccentText, type AppTheme } from "./app-preferences";
 import { CryptoClient, LocalCryptoStoreError } from "./crypto";
 import { renderIcons } from "./icons";
 import { showOneTimeToken } from "./ui-dialog";
@@ -25,6 +26,12 @@ import {
 } from "./unlock-vault";
 
 const api = new ApiClient();
+
+function currentAppTheme(): AppTheme {
+  const theme = document.documentElement.dataset.appTheme;
+  return theme === "light" || theme === "dim" ? theme : "dark";
+}
+
 const serverId = new URLSearchParams(window.location.search).get("server");
 const title = document.getElementById("server-settings-title") as HTMLElement;
 const roleLabel = document.getElementById("server-settings-role") as HTMLElement;
@@ -901,6 +908,7 @@ function renderRoles() {
   const canEditPermissions = canEditThisRole && canEditRolePermissions();
   const canEditRolePosition = canEditThisRole && canReorderRoles();
   const canEditChannelAccess = canEditThisRole && canManageRoleAccess();
+  const canEditSeparation = canEditThisRole && !everyoneRole && canEditRoleAppearance();
   const card = document.createElement("article");
   card.className = "role-settings-card role-editor";
   card.style.setProperty("--role-color", role.color);
@@ -972,6 +980,23 @@ function renderRoles() {
   const mentionableText = document.createElement("span");
   mentionableText.textContent = "Mentionable role";
   mentionableLabel.append(mentionable, mentionableText);
+  const separateMembersLabel = document.createElement("label");
+  separateMembersLabel.className = "checkbox-label role-toggle role-separation-toggle";
+  const separateMembers = document.createElement("input");
+  separateMembers.type = "checkbox";
+  separateMembers.checked = role.separateMembers;
+  separateMembers.disabled = !canEditSeparation || !metadataReady;
+  separateMembers.addEventListener("change", markDirty);
+  const separateMembersCopy = document.createElement("span");
+  separateMembersCopy.className = "role-separation-copy";
+  const separateMembersText = document.createElement("strong");
+  separateMembersText.textContent = "Separate from others";
+  const separateMembersDescription = document.createElement("small");
+  separateMembersDescription.textContent = everyoneRole
+    ? "All members is already the default group."
+    : "Members with multiple separated roles are grouped by their highest-priority role.";
+  separateMembersCopy.append(separateMembersText, separateMembersDescription);
+  separateMembersLabel.append(separateMembers, separateMembersCopy);
   const viewAllLabel = document.createElement("label");
   viewAllLabel.className = "checkbox-label role-toggle";
   const viewAll = document.createElement("input");
@@ -982,7 +1007,7 @@ function renderRoles() {
   const viewAllText = document.createElement("span");
   viewAllText.textContent = "View every room";
   viewAllLabel.append(viewAll, viewAllText);
-  controls.append(mentionableLabel, viewAllLabel);
+  controls.append(mentionableLabel, viewAllLabel, separateMembersLabel);
   card.append(controls);
 
   const permissionsHeading = document.createElement("h3");
@@ -1137,6 +1162,7 @@ function renderRoles() {
         updates.color = color.value;
         updates.mentionable = mentionable.checked;
       }
+      if (canEditSeparation) updates.separateMembers = separateMembers.checked;
       if (canEditRolePosition && !ownerRole && !everyoneRole) {
         updates.position = Math.max(0, Number(position.value) || 0);
       }
@@ -1228,7 +1254,7 @@ function renderMembers() {
       .filter((role): role is CustomServerRole => Boolean(role))
       .sort((left, right) => right.position - left.position);
     const highestRole = assignedRoles[0];
-    if (highestRole?.color) name.style.color = highestRole.color;
+    if (highestRole?.color) name.style.color = readableAccentText(highestRole.color, currentAppTheme());
     for (const role of assignedRoles) {
       const badge = document.createElement("span");
       badge.className = "role-badge";

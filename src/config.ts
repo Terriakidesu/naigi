@@ -68,6 +68,87 @@ function gifProviders(): GifProviderConfig[] {
   return providers;
 }
 
+function adminDatabaseUrl(databaseUrl: string) {
+  const value = Bun.env.ADMIN_DATABASE_URL;
+  let url: URL;
+  try {
+    url = new URL(value ?? databaseUrl);
+  } catch {
+    throw new Error("ADMIN_DATABASE_URL must be a valid PostgreSQL URL");
+  }
+
+  if (!value) {
+    const databaseName = url.pathname.replace(/^\//, "");
+    if (!databaseName) throw new Error("DATABASE_URL must include a database name to derive ADMIN_DATABASE_URL");
+    url.pathname = `/${databaseName}_admin`;
+  }
+
+  const appUrl = new URL(databaseUrl);
+  const postgresProtocols = new Set(["postgres:", "postgresql:"]);
+  const sameDatabase = postgresProtocols.has(url.protocol)
+    && postgresProtocols.has(appUrl.protocol)
+    && url.hostname === appUrl.hostname
+    && (url.port || "5432") === (appUrl.port || "5432")
+    && decodeURIComponent(url.pathname) === decodeURIComponent(appUrl.pathname);
+  if (sameDatabase && environment !== "test") {
+    throw new Error("ADMIN_DATABASE_URL must point to a separate database from DATABASE_URL");
+  }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    throw new Error("ADMIN_DATABASE_URL must use the postgres or postgresql protocol");
+  }
+
+  return url.toString();
+}
+
+function firebaseMessagingConfiguration() {
+  const serviceAccountJson = Bun.env.FCM_SERVICE_ACCOUNT_JSON?.trim();
+  const webConfigJson = Bun.env.FCM_WEB_CONFIG_JSON?.trim();
+  const vapidKey = Bun.env.FCM_VAPID_KEY?.trim();
+  if (!serviceAccountJson && !webConfigJson && !vapidKey) return undefined;
+  if (!serviceAccountJson || !webConfigJson || !vapidKey) {
+    throw new Error("FCM_SERVICE_ACCOUNT_JSON, FCM_WEB_CONFIG_JSON, and FCM_VAPID_KEY must be configured together");
+  }
+
+  let serviceAccount: Record<string, unknown>;
+  let web: Record<string, unknown>;
+  try {
+    serviceAccount = JSON.parse(serviceAccountJson) as Record<string, unknown>;
+    web = JSON.parse(webConfigJson) as Record<string, unknown>;
+  } catch {
+    throw new Error("FCM_SERVICE_ACCOUNT_JSON and FCM_WEB_CONFIG_JSON must contain valid JSON");
+  }
+
+  const projectId = typeof serviceAccount.project_id === "string" ? serviceAccount.project_id : "";
+  const clientEmail = typeof serviceAccount.client_email === "string" ? serviceAccount.client_email : "";
+  const privateKey = typeof serviceAccount.private_key === "string" ? serviceAccount.private_key.replace(/\\n/g, "\n") : "";
+  const publicProjectId = typeof web.projectId === "string" ? web.projectId : "";
+  const apiKey = typeof web.apiKey === "string" ? web.apiKey : "";
+  const appId = typeof web.appId === "string" ? web.appId : "";
+  const messagingSenderId = typeof web.messagingSenderId === "string" ? web.messagingSenderId : "";
+  const authDomain = typeof web.authDomain === "string" ? web.authDomain : undefined;
+
+  if (!projectId || !clientEmail || !privateKey || !privateKey.includes("PRIVATE KEY")) {
+    throw new Error("FCM_SERVICE_ACCOUNT_JSON must include project_id, client_email, and private_key");
+  }
+  if (publicProjectId !== projectId || !apiKey || !appId || !messagingSenderId) {
+    throw new Error("FCM_WEB_CONFIG_JSON must include apiKey, appId, messagingSenderId, and the matching projectId");
+  }
+  if (!/^[A-Za-z0-9_-]{20,256}$/.test(vapidKey)) {
+    throw new Error("FCM_VAPID_KEY must be a valid Firebase Web Push certificate key");
+  }
+
+  return {
+    projectId,
+    clientEmail,
+    privateKey,
+    vapidKey,
+    webConfig: { apiKey, appId, messagingSenderId, projectId, ...(authDomain ? { authDomain } : {}) },
+  };
+}
+
+const firebaseMessaging = firebaseMessagingConfiguration();
+const databaseUrl = Bun.env.DATABASE_URL ?? "postgres://localhost:5432/priv_chat";
+
 if (!["development", "test", "production"].includes(environment)) {
   throw new Error("NODE_ENV must be development, test, or production");
 }
@@ -76,8 +157,10 @@ export const config = {
   environment: environment as "development" | "test" | "production",
   host: Bun.env.HOST ?? "127.0.0.1",
   port: integerEnvironment("PORT", 3000, 1, 65_535),
-  databaseUrl: Bun.env.DATABASE_URL ?? "postgres://localhost:5432/priv_chat",
+  databaseUrl,
+  adminDatabaseUrl: adminDatabaseUrl(databaseUrl),
   redisUrl: Bun.env.REDIS_URL ?? "redis://localhost:6379",
+  firebaseMessaging,
   attachmentsDirectory: Bun.env.ATTACHMENTS_DIR ?? "./data/attachments",
   profileImagesDirectory: Bun.env.PROFILE_IMAGES_DIR ?? "./data/profile-images",
   twitterPreviewApiUrl: twitterPreviewApiUrl(),

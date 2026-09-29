@@ -1,4 +1,5 @@
 import { password } from "bun";
+import { createPublicKey } from "node:crypto";
 import { Elysia, t } from "elysia";
 import {
   AttachmentSizeMismatchError,
@@ -18,9 +19,18 @@ import {
   normalizeUsername,
   verifyPassword,
 } from "./auth/session";
+import {
+  authenticateAdmin,
+  createAdminSession,
+  deleteAdminSession,
+  extractAdminCookieToken,
+  verifyAdminPassword,
+  type AuthenticatedAdmin,
+} from "./admin-auth/session";
 import { config } from "./config";
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "./encoding";
 import { db, pingDatabase } from "./db/client";
+import { pingAdminDatabase } from "./admin-db/client";
 import {
   ProfileImageInvalidError,
   profileBannerUrl,
@@ -32,6 +42,12 @@ import {
   validProfileImageBytes,
 } from "./profile-images";
 import { pingRedis, publishMessageCreated } from "./redis/client";
+import {
+  publicFirebaseMessagingConfiguration,
+  registerFcmPushToken,
+  removeFcmPushToken,
+  sendGenericFcmPush,
+} from "./push/fcm";
 import { createRealtimeConnection, type RealtimeConnection } from "./realtime";
 import { fetchTwitterPreview, parseTwitterStatusUrl } from "./twitter-preview";
 
@@ -78,6 +94,17 @@ function clearSessionCookie(set: { headers: Record<string, string | number | und
   set.headers["set-cookie"] = `priv_chat_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
 
+function setAdminSessionCookie(set: { headers: Record<string, string | number | undefined> }, token: string) {
+  const secure = config.environment === "production" ? "; Secure" : "";
+  set.headers["set-cookie"] =
+    `priv_chat_admin_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${config.sessionTtlSeconds}${secure}`;
+}
+
+function clearAdminSessionCookie(set: { headers: Record<string, string | number | undefined> }) {
+  const secure = config.environment === "production" ? "; Secure" : "";
+  set.headers["set-cookie"] = `priv_chat_admin_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`;
+}
+
 async function publicFile(name: string, contentType: string) {
   if (!/^[A-Za-z0-9_.-]+$/.test(name)) return null;
   const file = Bun.file(`${import.meta.dir}/../public/${name}`);
@@ -85,8 +112,44 @@ async function publicFile(name: string, contentType: string) {
   return new Response(file, { headers: { "cache-control": "no-cache", "content-type": contentType } });
 }
 
-function isUniqueViolation(error: unknown) {
-  return error instanceof Error && "code" in error && (error as { code?: string }).code === "23505";
+function isUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const postgresError = error as { code?: string; errno?: string | number; cause?: unknown };
+  return postgresError.code === "23505"
+    || String(postgresError.errno ?? "") === "23505"
+    || isUniqueViolation(postgresError.cause);
+}
+
+async function recordInstanceAdminAudit(
+  operator: AuthenticatedAdmin,
+  action: string,
+  reportId: string | null = null,
+  targetUserId: string | null = null,
+) {
+  await db`
+    insert into instance_admin_audit_logs (
+      admin_user_id, admin_username, admin_display_name, action, report_id, target_user_id
+    ) values (
+      ${operator.id}, ${operator.username}, ${operator.username}, ${action}, ${reportId}, ${targetUserId}
+    )
+  `;
+}
+
+async function directConversationIsBlocked(conversationId: string, userId: string) {
+  const [result] = await db<{ blocked: boolean }[]>`
+    select exists (
+      select 1
+      from conversations c
+      join conversation_members mine on mine.conversation_id = c.id
+        and mine.user_id = ${userId} and mine.left_at is null
+      join conversation_members other_member on other_member.conversation_id = c.id
+        and other_member.user_id <> mine.user_id and other_member.left_at is null
+      join user_blocks b on (b.blocker_user_id = mine.user_id and b.blocked_user_id = other_member.user_id)
+        or (b.blocker_user_id = other_member.user_id and b.blocked_user_id = mine.user_id)
+      where c.id = ${conversationId} and c.kind = 'dm'
+    ) as blocked
+  `;
+  return result?.blocked === true;
 }
 
 function toPublicUser(user: Pick<UserRow, "id" | "username" | "display_name" | "created_at"> & Partial<Pick<UserRow, "profile_image_storage_key" | "profile_banner_storage_key">>) {
@@ -707,6 +770,7 @@ type ServerRoleRow = {
   position: number;
   permissions: unknown;
   mentionable: boolean;
+  separate_members: boolean;
   view_all_channels: boolean;
   is_system: boolean;
   system_key: ServerSystemKey | null;
@@ -727,6 +791,7 @@ function publicServerRole(
     position: role.position,
     permissions: permissionMap(role.permissions, role.system_key ? defaultRolePermissions(role.system_key) : undefined),
     mentionable: role.mentionable,
+    separateMembers: role.separate_members,
     viewAllChannels: role.view_all_channels,
     isSystem: role.is_system,
     systemKey: role.system_key,
@@ -793,7 +858,11 @@ const realtimeCommand = t.Union([
 ]);
 
 export function createApp() {
-  const realtimeConnections = new WeakMap<object, RealtimeConnection>();
+  const realtimeConnections = new Map<object, {
+    userId: string;
+    connection: RealtimeConnection;
+    close: () => void;
+  }>();
 
   return new Elysia()
     .onError(({ code, error, request, set }) => {
@@ -838,6 +907,16 @@ export function createApp() {
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
+    .get("/instance-admin", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      const file = await publicFile(
+        operator ? "instance-admin.html" : "instance-admin-login.html",
+        "text/html; charset=utf-8",
+      );
+      if (!file) return respondError(set, 404, "client_not_built");
+      set.headers["cache-control"] = "no-store";
+      return file;
+    })
     .get("/auth.js", async ({ set }) => {
       const file = await publicFile("auth.js", "text/javascript; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
@@ -868,6 +947,16 @@ export function createApp() {
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
+    .get("/instance-admin.js", async ({ set }) => {
+      const file = await publicFile("instance-admin.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/instance-admin-login.js", async ({ set }) => {
+      const file = await publicFile("instance-admin-login.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
     .get("/server-settings", async ({ set }) => {
       const file = await publicFile("server-settings.html", "text/html; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
@@ -886,6 +975,13 @@ export function createApp() {
     .get("/favicon.svg", async ({ set }) => {
       const file = await publicFile("favicon.svg", "image/svg+xml");
       if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/push-sw.js", async ({ set }) => {
+      const file = await publicFile("push-sw.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      set.headers["service-worker-allowed"] = "/";
+      set.headers["cache-control"] = "no-cache";
       return file;
     })
     .get("/assets/twemoji/:asset", async ({ params, set }) => {
@@ -907,18 +1003,432 @@ export function createApp() {
     })
     .get("/health/live", () => ({ status: "ok" }))
     .get("/health/ready", async ({ set }) => {
-      const [database, redis] = await Promise.allSettled([pingDatabase(), pingRedis()]);
-      const ready = database.status === "fulfilled" && redis.status === "fulfilled";
+      const [database, adminDatabase, redis] = await Promise.allSettled([
+        pingDatabase(), pingAdminDatabase(), pingRedis(),
+      ]);
+      const ready = database.status === "fulfilled"
+        && adminDatabase.status === "fulfilled"
+        && redis.status === "fulfilled";
       const response = {
         status: ready ? "ok" : "degraded",
         dependencies: {
           database: database.status === "fulfilled" ? "ok" : "unavailable",
+          adminDatabase: adminDatabase.status === "fulfilled" ? "ok" : "unavailable",
           redis: redis.status === "fulfilled" ? "ok" : "unavailable",
         },
       };
 
       if (!ready) set.status = 503;
       return response;
+    })
+    .get("/v1/push/config", ({ set }) => {
+      set.headers["cache-control"] = "no-store";
+      return publicFirebaseMessagingConfiguration();
+    })
+    .get("/v1/reports/public-key", async ({ headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const [key] = await db<{ id: string; public_key: Buffer }[]>`
+        select id, public_key from instance_report_keys where active limit 1
+      `;
+      return key
+        ? { configured: true, keyId: key.id, publicKey: encodeBase64(key.public_key) }
+        : { configured: false as const };
+    })
+    .post("/v1/instance-admin/auth/login", async ({ body, headers, set }) => {
+      set.headers["cache-control"] = "no-store";
+      const existing = await authenticateAdmin(headers.cookie);
+      if (existing) return { operator: existing };
+      const operator = await verifyAdminPassword(body.username, body.password);
+      if (!operator) return respondError(set, 401, "invalid_credentials");
+      const session = await createAdminSession(operator.id);
+      if (!session) return respondError(set, 401, "invalid_credentials");
+      setAdminSessionCookie(set, session.token);
+      return { operator };
+    }, {
+      body: t.Object({
+        username: t.String({ minLength: 3, maxLength: 128 }),
+        password: t.String({ minLength: 1, maxLength: 1_024 }),
+      }),
+    })
+    .get("/v1/instance-admin/auth/me", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      return { operator };
+    })
+    .post("/v1/instance-admin/auth/logout", async ({ headers, set }) => {
+      await deleteAdminSession(extractAdminCookieToken(headers.cookie));
+      clearAdminSessionCookie(set);
+      set.headers["cache-control"] = "no-store";
+      return { loggedOut: true };
+    })
+    .get("/v1/instance-admin/reports", async ({ headers, query, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const status = query.status ?? "open";
+      const reports = await db<{
+        id: string;
+        reporter_user_id: string | null;
+        reporter_username: string | null;
+        reporter_display_name: string | null;
+        target_user_id: string | null;
+        target_username: string | null;
+        target_display_name: string | null;
+        conversation_id: string | null;
+        message_id: string | null;
+        reason: string;
+        status: string;
+        has_evidence: boolean;
+        created_at: Date;
+        reviewed_at: Date | null;
+        suspended: boolean;
+      }[]>`
+        select r.id, r.reporter_user_id, reporter.username as reporter_username,
+          reporter.display_name as reporter_display_name, r.target_user_id,
+          target.username as target_username, target.display_name as target_display_name,
+          r.conversation_id, r.message_id, r.reason, r.status,
+          (r.evidence_ciphertext is not null) as has_evidence, r.created_at, r.reviewed_at,
+          exists(select 1 from instance_user_suspensions s where s.user_id = r.target_user_id) as suspended
+        from instance_reports r
+        left join users reporter on reporter.id = r.reporter_user_id
+        left join users target on target.id = r.target_user_id
+        where (${status} = 'all' or r.status = ${status})
+        order by case when r.status in ('open', 'reviewing') then 0 else 1 end,
+          r.created_at desc
+        limit 200
+      `;
+      return {
+        reports: reports.map((report) => ({
+          id: report.id,
+          reporterUserId: report.reporter_user_id,
+          reporterUsername: report.reporter_username,
+          reporterDisplayName: report.reporter_display_name,
+          targetUserId: report.target_user_id,
+          targetUsername: report.target_username,
+          targetDisplayName: report.target_display_name,
+          conversationId: report.conversation_id,
+          messageId: report.message_id,
+          reason: report.reason,
+          status: report.status,
+          hasEvidence: report.has_evidence,
+          createdAt: report.created_at,
+          reviewedAt: report.reviewed_at,
+          suspended: report.suspended,
+        })),
+      };
+    }, {
+      query: t.Object({ status: t.Optional(t.Union([
+        t.Literal("all"), t.Literal("open"), t.Literal("reviewing"), t.Literal("resolved"), t.Literal("dismissed"),
+      ])) }),
+    })
+    .get("/v1/instance-admin/reports/:reportId", async ({ headers, params, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [report] = await db<{
+        id: string;
+        reporter_user_id: string | null;
+        reporter_username: string | null;
+        reporter_display_name: string | null;
+        target_user_id: string | null;
+        target_username: string | null;
+        target_display_name: string | null;
+        conversation_id: string | null;
+        message_id: string | null;
+        reason: string;
+        status: string;
+        evidence_key_id: string | null;
+        evidence_ciphertext: Buffer | null;
+        evidence_wrapped_key: Buffer | null;
+        evidence_iv: Buffer | null;
+        created_at: Date;
+        reviewed_by: string | null;
+        reviewed_at: Date | null;
+      }[]>`
+        select r.id, r.reporter_user_id, reporter.username as reporter_username,
+          reporter.display_name as reporter_display_name, r.target_user_id,
+          target.username as target_username, target.display_name as target_display_name,
+          r.conversation_id, r.message_id, r.reason, r.status, r.evidence_key_id,
+          r.evidence_ciphertext, r.evidence_wrapped_key, r.evidence_iv, r.created_at,
+          r.reviewed_by, r.reviewed_at
+        from instance_reports r
+        left join users reporter on reporter.id = r.reporter_user_id
+        left join users target on target.id = r.target_user_id
+        where r.id = ${params.reportId}
+      `;
+      if (!report) return respondError(set, 404, "report_not_found");
+      await recordInstanceAdminAudit(user, "report.viewed", report.id, report.target_user_id);
+      set.headers["cache-control"] = "no-store";
+      return {
+        report: {
+          id: report.id,
+          reporterUserId: report.reporter_user_id,
+          reporterUsername: report.reporter_username,
+          reporterDisplayName: report.reporter_display_name,
+          targetUserId: report.target_user_id,
+          targetUsername: report.target_username,
+          targetDisplayName: report.target_display_name,
+          conversationId: report.conversation_id,
+          messageId: report.message_id,
+          reason: report.reason,
+          status: report.status,
+          createdAt: report.created_at,
+          reviewedBy: report.reviewed_by,
+          reviewedAt: report.reviewed_at,
+          evidence: report.evidence_ciphertext && report.evidence_wrapped_key && report.evidence_iv && report.evidence_key_id
+            ? {
+              keyId: report.evidence_key_id,
+              ciphertext: encodeBase64(report.evidence_ciphertext),
+              wrappedKey: encodeBase64(report.evidence_wrapped_key),
+              iv: encodeBase64(report.evidence_iv),
+            }
+            : null,
+        },
+      };
+    }, {
+      params: t.Object({ reportId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/instance-admin/reports/:reportId/evidence-access", async ({ headers, params, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [report] = await db<{ id: string; target_user_id: string | null; has_evidence: boolean }[]>`
+        select id, target_user_id, evidence_ciphertext is not null as has_evidence
+        from instance_reports where id = ${params.reportId}
+      `;
+      if (!report) return respondError(set, 404, "report_not_found");
+      if (!report.has_evidence) return respondError(set, 409, "report_has_no_evidence");
+      await recordInstanceAdminAudit(user, "report.evidence_accessed", report.id, report.target_user_id);
+      return { audited: true };
+    }, {
+      params: t.Object({ reportId: t.String({ format: "uuid" }) }),
+    })
+    .patch("/v1/instance-admin/reports/:reportId", async ({ body, headers, params, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      let updated: { id: string; target_user_id: string | null } | undefined;
+      try {
+        updated = await db.begin(async (transaction) => {
+          const [row] = await transaction<{ id: string; target_user_id: string | null }[]>`
+            update instance_reports
+            set status = ${body.status}, reviewed_by = ${user.id},
+              reviewed_by_username = ${user.username}, reviewed_by_display_name = ${user.username}, reviewed_at = now()
+            where id = ${params.reportId}
+            returning id, target_user_id
+          `;
+          if (!row) return undefined;
+          await transaction`
+            insert into instance_admin_audit_logs (
+              admin_user_id, admin_username, admin_display_name, action, report_id, target_user_id
+            ) values (
+              ${user.id}, ${user.username}, ${user.username}, ${`report.${body.status}`}, ${row.id}, ${row.target_user_id}
+            )
+          `;
+          return row;
+        });
+      } catch (error) {
+        if (isUniqueViolation(error)) return respondError(set, 409, "report_conflicts_with_open_report");
+        throw error;
+      }
+      if (!updated) return respondError(set, 404, "report_not_found");
+      return { updated: true };
+    }, {
+      params: t.Object({ reportId: t.String({ format: "uuid" }) }),
+      body: t.Object({ status: t.Union([t.Literal("open"), t.Literal("reviewing"), t.Literal("resolved"), t.Literal("dismissed")]) }),
+    })
+    .post("/v1/instance-admin/reports/:reportId/remove-message", async ({ headers, params, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [report] = await db<{ id: string; target_user_id: string | null; message_id: string | null; conversation_id: string | null }[]>`
+        select id, target_user_id, message_id, conversation_id
+        from instance_reports where id = ${params.reportId}
+      `;
+      if (!report) return respondError(set, 404, "report_not_found");
+      if (!report.message_id || !report.conversation_id) return respondError(set, 409, "report_has_no_message");
+      const recipients = await db<{ user_id: string }[]>`
+        select user_id from conversation_members
+        where conversation_id = ${report.conversation_id} and left_at is null
+      `;
+      const deleted = await db.begin(async (transaction) => {
+        const [row] = await transaction<{ id: string }[]>`
+          delete from messages where id = ${report.message_id} and conversation_id = ${report.conversation_id}
+          returning id
+        `;
+        if (!row) return undefined;
+        await transaction`
+          insert into instance_admin_audit_logs (
+            admin_user_id, admin_username, admin_display_name, action, report_id, target_user_id
+          ) values (
+            ${user.id}, ${user.username}, ${user.username}, 'report.message_removed', ${report.id}, ${report.target_user_id}
+          )
+        `;
+        return row;
+      });
+      if (!deleted) return respondError(set, 404, "message_not_found");
+      await publishMessageCreated(report.conversation_id, {
+        type: "message.deleted",
+        messageId: deleted.id,
+        conversationId: report.conversation_id,
+      }, recipients.map((recipient) => recipient.user_id));
+      return { removed: true };
+    }, {
+      params: t.Object({ reportId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/instance-admin/users/:userId/suspend", async ({ body, headers, params, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [target] = await db<{ id: string }[]>`select id from users where id = ${params.userId}`;
+      if (!target) return respondError(set, 404, "user_not_found");
+      if (body.reportId) {
+        const [report] = await db<{ id: string }[]>`
+          select id from instance_reports where id = ${body.reportId} and target_user_id = ${params.userId}
+        `;
+        if (!report) return respondError(set, 400, "report_target_mismatch");
+      }
+      await db.begin(async (transaction) => {
+        await transaction`
+          insert into instance_user_suspensions (
+            user_id, created_by, created_by_username, created_by_display_name, report_id
+          ) values (
+            ${params.userId}, ${user.id}, ${user.username}, ${user.username}, ${body.reportId ?? null}
+          )
+          on conflict (user_id) do update
+            set created_by = excluded.created_by,
+              created_by_username = excluded.created_by_username,
+              created_by_display_name = excluded.created_by_display_name,
+              report_id = excluded.report_id, created_at = now()
+        `;
+        await transaction`delete from sessions where user_id = ${params.userId}`;
+        await transaction`delete from fcm_push_subscriptions where user_id = ${params.userId}`;
+        if (body.reportId) {
+          await transaction`
+            update instance_reports set status = 'resolved', reviewed_by = ${user.id},
+              reviewed_by_username = ${user.username}, reviewed_by_display_name = ${user.username}, reviewed_at = now()
+            where id = ${body.reportId}
+          `;
+        }
+        await transaction`
+          insert into instance_admin_audit_logs (
+            admin_user_id, admin_username, admin_display_name, action, report_id, target_user_id
+          ) values (
+            ${user.id}, ${user.username}, ${user.username}, 'user.suspended', ${body.reportId ?? null}, ${params.userId}
+          )
+        `;
+      });
+      for (const active of realtimeConnections.values()) {
+        if (active.userId === params.userId) active.close();
+      }
+      return { suspended: true };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+      body: t.Object({ reportId: t.Optional(t.String({ format: "uuid" })) }),
+    })
+    .delete("/v1/instance-admin/users/:userId/suspension", async ({ headers, params, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const restored = await db.begin(async (transaction) => {
+        const [row] = await transaction<{ report_id: string | null }[]>`
+          delete from instance_user_suspensions where user_id = ${params.userId}
+          returning report_id
+        `;
+        if (!row) return undefined;
+        await transaction`
+          insert into instance_admin_audit_logs (
+            admin_user_id, admin_username, admin_display_name, action, report_id, target_user_id
+          ) values (
+            ${user.id}, ${user.username}, ${user.username}, 'user.restored', ${row.report_id}, ${params.userId}
+          )
+        `;
+        return row;
+      });
+      if (!restored) return respondError(set, 404, "user_not_suspended");
+      return { restored: true };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+    })
+    .get("/v1/instance-admin/report-keys", async ({ headers, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const keys = await db<{ id: string; active: boolean; created_at: Date }[]>`
+        select id, active, created_at from instance_report_keys order by created_at desc
+      `;
+      return { keys: keys.map((key) => ({ id: key.id, active: key.active, createdAt: key.created_at })) };
+    })
+    .post("/v1/instance-admin/report-keys", async ({ body, headers, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      let publicKey: Buffer;
+      try {
+        publicKey = decodeBase64(body.publicKey, "publicKey", 2048);
+        const parsedKey = createPublicKey({ key: publicKey, format: "der", type: "spki" });
+        if (parsedKey.asymmetricKeyType !== "rsa" || (parsedKey.asymmetricKeyDetails?.modulusLength ?? 0) < 3072) {
+          return respondError(set, 400, "invalid_report_public_key");
+        }
+      } catch (error) {
+        if (error instanceof InvalidEncodingError || error instanceof Error) return respondError(set, 400, "invalid_report_public_key");
+        throw error;
+      }
+      const key = await db.begin(async (transaction) => {
+        await transaction`select pg_advisory_xact_lock(hashtextextended('instance-report-key', 0))`;
+        await transaction`update instance_report_keys set active = false where active`;
+        const [created] = await transaction<{ id: string; created_at: Date }[]>`
+          insert into instance_report_keys (
+            id, public_key, created_by, created_by_username, created_by_display_name, active
+          ) values (
+            ${body.keyId}, ${publicKey}, ${user.id}, ${user.username}, ${user.username}, true
+          )
+          returning id, created_at
+        `;
+        await transaction`
+          insert into instance_admin_audit_logs (
+            admin_user_id, admin_username, admin_display_name, action
+          ) values (${user.id}, ${user.username}, ${user.username}, 'report_key.created')
+        `;
+        return created;
+      });
+      if (!key) throw new Error("report encryption key insert did not return a row");
+      set.status = 201;
+      return { key: { id: key.id, createdAt: key.created_at } };
+    }, {
+      body: t.Object({
+        keyId: t.String({ format: "uuid" }),
+        publicKey: t.String({ minLength: 300, maxLength: 4_096 }),
+      }),
+    })
+    .get("/v1/instance-admin/audit", async ({ headers, query, set }) => {
+      const user = await authenticateAdmin(headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const limit = Math.min(Number(query.limit ?? 100), 200);
+      const rows = await db<{
+        id: bigint | number | string;
+        admin_user_id: string;
+        admin_username: string;
+        admin_display_name: string;
+        action: string;
+        report_id: string | null;
+        target_user_id: string | null;
+        created_at: Date;
+      }[]>`
+        select l.id, l.admin_user_id, l.admin_username, l.admin_display_name, l.action, l.report_id,
+          l.target_user_id, l.created_at
+        from instance_admin_audit_logs l
+        order by l.created_at desc, l.id desc limit ${Number.isInteger(limit) ? limit : 100}
+      `;
+      return { logs: rows.map((row) => ({
+        id: String(row.id),
+        adminUserId: row.admin_user_id,
+        adminUsername: row.admin_username,
+        adminDisplayName: row.admin_display_name,
+        action: row.action,
+        reportId: row.report_id,
+        targetUserId: row.target_user_id,
+        createdAt: row.created_at,
+      })) };
+    }, {
+      query: t.Object({ limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })) }),
     })
     .post("/v1/previews/twitter", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -970,6 +1480,10 @@ export function createApp() {
       `;
       const valid = await verifyPassword(user, body.password);
       if (!valid || !user) return respondError(set, 401, "invalid_credentials");
+      const [suspension] = await db<{ user_id: string }[]>`
+        select user_id from instance_user_suspensions where user_id = ${user.id}
+      `;
+      if (suspension) return respondError(set, 403, "account_suspended");
 
       const session = await createSession(user.id);
       setSessionCookie(set, session.token);
@@ -985,6 +1499,24 @@ export function createApp() {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
       return { user };
+    })
+    .post("/v1/push/subscriptions", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      if (!config.firebaseMessaging) return respondError(set, 503, "push_not_configured");
+      await registerFcmPushToken(user.id, body.token);
+      set.status = 201;
+      return { registered: true };
+    }, {
+      body: t.Object({ token: t.String({ minLength: 20, maxLength: 4096 }) }),
+    })
+    .post("/v1/push/subscriptions/remove", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const removed = await removeFcmPushToken(user.id, body.token);
+      return { removed };
+    }, {
+      body: t.Object({ token: t.String({ minLength: 20, maxLength: 4096 }) }),
     })
     .patch("/v1/me", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -1230,6 +1762,53 @@ export function createApp() {
       if (deleted) await removeProfileImage(deleted);
       return { deleted: Boolean(deleted) };
     })
+    .get("/v1/users/blocked", async ({ headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const blocked = await db<{
+        id: string;
+        username: string;
+        display_name: string;
+        profile_image_storage_key: string | null;
+      }[]>`
+        select u.id, u.username, u.display_name, u.profile_image_storage_key
+        from user_blocks b join users u on u.id = b.blocked_user_id
+        where b.blocker_user_id = ${user.id}
+        order by u.username
+      `;
+      return { users: blocked.map((blockedUser) => ({
+        id: blockedUser.id,
+        username: blockedUser.username,
+        displayName: blockedUser.display_name,
+        avatarUrl: profileImageUrl(blockedUser.id, blockedUser.profile_image_storage_key),
+      })) };
+    })
+    .post("/v1/users/:userId/block", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      if (params.userId === user.id) return respondError(set, 400, "cannot_block_self");
+      const [target] = await db<{ id: string }[]>`select id from users where id = ${params.userId}`;
+      if (!target) return respondError(set, 404, "user_not_found");
+      await db`
+        insert into user_blocks (blocker_user_id, blocked_user_id)
+        values (${user.id}, ${params.userId}) on conflict do nothing
+      `;
+      return { blocked: true };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+    })
+    .delete("/v1/users/:userId/block", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const [deleted] = await db<{ blocker_user_id: string }[]>`
+        delete from user_blocks where blocker_user_id = ${user.id} and blocked_user_id = ${params.userId}
+        returning blocker_user_id
+      `;
+      return { unblocked: Boolean(deleted) };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+    })
     .get("/v1/users/:userId", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
@@ -1240,9 +1819,107 @@ export function createApp() {
         where id = ${params.userId}
       `;
       if (!profile) return respondError(set, 404, "user_not_found");
-      return { user: toPublicUser(profile) };
+      const [block] = await db<{ blocked: boolean }[]>`
+        select exists(select 1 from user_blocks where blocker_user_id = ${user.id} and blocked_user_id = ${params.userId}) as blocked
+      `;
+      return { user: toPublicUser(profile), blockedByMe: block?.blocked === true };
     }, {
       params: t.Object({ userId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/reports", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      if (body.targetUserId === user.id) return respondError(set, 400, "cannot_report_self");
+
+      const [target] = await db<{ id: string }[]>`select id from users where id = ${body.targetUserId}`;
+      if (!target) return respondError(set, 404, "user_not_found");
+      const [recentCount] = await db<{ count: number }[]>`
+        select count(*)::int as count from instance_reports
+        where reporter_user_id = ${user.id} and created_at > now() - interval '1 hour'
+      `;
+      if (recentCount.count >= 10) return respondError(set, 429, "report_rate_limited");
+
+      if (body.messageId) {
+        if (!body.conversationId) return respondError(set, 400, "invalid_report_reference");
+        const [reportedMessage] = await db<{ sender_user_id: string }[]>`
+          select d.user_id as sender_user_id
+          from messages m join devices d on d.id = m.sender_device_id
+          where m.id = ${body.messageId} and m.conversation_id = ${body.conversationId}
+            and exists (
+              select 1 from conversation_members cm
+              where cm.conversation_id = m.conversation_id and cm.user_id = ${user.id} and cm.left_at is null
+            )
+        `;
+        if (!reportedMessage || reportedMessage.sender_user_id !== body.targetUserId) {
+          return respondError(set, 400, "invalid_report_reference");
+        }
+      } else {
+        if (body.conversationId) return respondError(set, 400, "invalid_report_reference");
+        const [sharedServer] = await db<{ shared: boolean }[]>`
+          select exists (
+            select 1 from server_members mine
+            join server_members target on target.server_id = mine.server_id and target.left_at is null
+            where mine.user_id = ${user.id} and mine.left_at is null and target.user_id = ${body.targetUserId}
+          ) as shared
+        `;
+        if (!sharedServer?.shared) return respondError(set, 403, "report_target_not_shared");
+      }
+
+      let evidenceCiphertext: Buffer | null = null;
+      let evidenceWrappedKey: Buffer | null = null;
+      let evidenceIv: Buffer | null = null;
+      let evidenceKeyId: string | null = null;
+      if (body.encryptedEvidence) {
+        try {
+          evidenceCiphertext = decodeBase64(body.encryptedEvidence.ciphertext, "ciphertext", 128 * 1024);
+          evidenceWrappedKey = decodeBase64(body.encryptedEvidence.wrappedKey, "wrappedKey", 2048);
+          evidenceIv = decodeBase64(body.encryptedEvidence.iv, "iv", 32);
+        } catch (error) {
+          if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_report_evidence");
+          throw error;
+        }
+        if (evidenceIv.byteLength !== 12 || evidenceWrappedKey.byteLength < 384) {
+          return respondError(set, 400, "invalid_report_evidence");
+        }
+        const [key] = await db<{ id: string }[]>`
+          select id from instance_report_keys where id = ${body.encryptedEvidence.keyId}
+        `;
+        if (!key) return respondError(set, 400, "invalid_report_evidence_key");
+        evidenceKeyId = key.id;
+      }
+
+      try {
+        const [report] = await db<{ id: string }[]>`
+          insert into instance_reports (
+            reporter_user_id, target_user_id, conversation_id, message_id, reason,
+            evidence_key_id, evidence_ciphertext, evidence_wrapped_key, evidence_iv
+          ) values (
+            ${user.id}, ${body.targetUserId}, ${body.conversationId ?? null}, ${body.messageId ?? null}, ${body.reason},
+            ${evidenceKeyId}, ${evidenceCiphertext}, ${evidenceWrappedKey}, ${evidenceIv}
+          ) returning id
+        `;
+        set.status = 201;
+        return { report: { id: report.id, submitted: true } };
+      } catch (error) {
+        if (isUniqueViolation(error)) return respondError(set, 409, "report_already_submitted");
+        throw error;
+      }
+    }, {
+      body: t.Object({
+        targetUserId: t.String({ format: "uuid" }),
+        reason: t.Union([
+          t.Literal("spam"), t.Literal("harassment"), t.Literal("threats"), t.Literal("sexual_content"),
+          t.Literal("illegal_content"), t.Literal("impersonation"), t.Literal("other"),
+        ]),
+        conversationId: t.Optional(t.String({ format: "uuid" })),
+        messageId: t.Optional(t.String({ format: "uuid" })),
+        encryptedEvidence: t.Optional(t.Object({
+          keyId: t.String({ format: "uuid" }),
+          ciphertext: t.String({ minLength: 24, maxLength: 180_000 }),
+          wrappedKey: t.String({ minLength: 300, maxLength: 4_096 }),
+          iv: t.String({ minLength: 16, maxLength: 64 }),
+        })),
+      }),
     })
     .post("/v1/servers", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -1263,17 +1940,17 @@ export function createApp() {
           returning id, owner_id, created_at
         `;
         const systemRoles = [
-          { systemKey: "owner", color: "#f0b232", position: 100_000, permissions: defaultRolePermissions("owner") },
-          { systemKey: "admin", color: "#92aaa5", position: 90_000, permissions: defaultRolePermissions("admin") },
-          { systemKey: "everyone", color: "#99aab5", position: 0, permissions: defaultRolePermissions("everyone") },
+          { systemKey: "owner", color: "#f0b232", position: 100_000, separateMembers: true, permissions: defaultRolePermissions("owner") },
+          { systemKey: "admin", color: "#92aaa5", position: 90_000, separateMembers: true, permissions: defaultRolePermissions("admin") },
+          { systemKey: "everyone", color: "#99aab5", position: 0, separateMembers: false, permissions: defaultRolePermissions("everyone") },
         ] as const;
         for (const systemRole of systemRoles) {
           await transaction`
             insert into server_roles (
-              server_id, color, position, permissions, mentionable, view_all_channels, is_system, system_key
+              server_id, color, position, permissions, mentionable, separate_members, view_all_channels, is_system, system_key
             ) values (
               ${server.id}, ${systemRole.color}, ${systemRole.position}, ${systemRole.permissions}::jsonb,
-              false, true, true, ${systemRole.systemKey}
+              false, ${systemRole.separateMembers}, true, true, ${systemRole.systemKey}
             )
           `;
         }
@@ -2395,7 +3072,7 @@ export function createApp() {
 
       const roles = await db<ServerRoleRow[]>`
         select id, server_id, encrypted_metadata, color, position, permissions,
-          mentionable, view_all_channels, is_system, system_key, created_at, updated_at
+          mentionable, separate_members, view_all_channels, is_system, system_key, created_at, updated_at
         from server_roles
         where server_id = ${params.serverId}
         order by position desc, created_at asc
@@ -2468,13 +3145,13 @@ export function createApp() {
       }
       const [role] = await db<ServerRoleRow[]>`
         insert into server_roles (
-          server_id, encrypted_metadata, color, position, permissions, mentionable, view_all_channels
+          server_id, encrypted_metadata, color, position, permissions, mentionable, separate_members, view_all_channels
         ) values (
           ${params.serverId}, ${metadata}, ${body.color ?? "#92aaa5"}, ${rolePosition},
-          ${permissions}::jsonb, ${body.mentionable ?? false}, ${body.viewAllChannels ?? true}
+          ${permissions}::jsonb, ${body.mentionable ?? false}, ${body.separateMembers ?? false}, ${body.viewAllChannels ?? true}
         )
         returning id, server_id, encrypted_metadata, color, position, permissions,
-          mentionable, view_all_channels, is_system, system_key, created_at, updated_at
+          mentionable, separate_members, view_all_channels, is_system, system_key, created_at, updated_at
       `;
       set.status = 201;
       await recordServerAudit(params.serverId, user.id, "role.created", role.id);
@@ -2487,6 +3164,7 @@ export function createApp() {
         position: t.Optional(t.Integer({ minimum: 1, maximum: 1_000_000 })),
         permissions: t.Optional(t.Any()),
         mentionable: t.Optional(t.Boolean()),
+        separateMembers: t.Optional(t.Boolean()),
         viewAllChannels: t.Optional(t.Boolean()),
       }),
     })
@@ -2497,7 +3175,7 @@ export function createApp() {
       if (!authorization) return respondError(set, 403, "not_a_server_member");
       const [existing] = await db<ServerRoleRow[]>`
         select id, server_id, encrypted_metadata, color, position, permissions,
-          mentionable, view_all_channels, is_system, system_key, created_at, updated_at
+          mentionable, separate_members, view_all_channels, is_system, system_key, created_at, updated_at
         from server_roles where id = ${params.roleId} and server_id = ${params.serverId}
       `;
       if (!existing) return respondError(set, 404, "role_not_found");
@@ -2510,6 +3188,7 @@ export function createApp() {
         || body.position !== undefined
         || body.permissions !== undefined
         || body.mentionable !== undefined
+        || body.separateMembers !== undefined
         || body.viewAllChannels !== undefined
       )) {
         return respondError(set, 400, "owner_role_is_not_customizable");
@@ -2519,6 +3198,7 @@ export function createApp() {
         || body.color !== undefined
         || body.position !== undefined
         || body.mentionable !== undefined
+        || body.separateMembers !== undefined
       )) {
         return respondError(set, 400, "everyone_role_identity_is_not_customizable");
       }
@@ -2535,6 +3215,9 @@ export function createApp() {
         return respondError(set, 403, "insufficient_server_permissions");
       }
       if (body.mentionable !== undefined && !hasAnyServerPermission(authorization, "manage_roles", "manage_role_appearance")) {
+        return respondError(set, 403, "insufficient_server_permissions");
+      }
+      if (body.separateMembers !== undefined && !hasAnyServerPermission(authorization, "manage_roles", "manage_role_appearance")) {
         return respondError(set, 403, "insufficient_server_permissions");
       }
       if (body.viewAllChannels !== undefined && !hasAnyServerPermission(authorization, "manage_roles", "manage_channel_access")) {
@@ -2560,11 +3243,12 @@ export function createApp() {
             position = coalesce(${body.position ?? null}, position),
             permissions = coalesce(${permissions ?? null}::jsonb, permissions),
             mentionable = coalesce(${body.mentionable ?? null}, mentionable),
+            separate_members = coalesce(${body.separateMembers ?? null}, separate_members),
             view_all_channels = coalesce(${body.viewAllChannels ?? null}, view_all_channels),
             updated_at = now()
         where id = ${existing.id}
         returning id, server_id, encrypted_metadata, color, position, permissions,
-          mentionable, view_all_channels, is_system, system_key, created_at, updated_at
+          mentionable, separate_members, view_all_channels, is_system, system_key, created_at, updated_at
       `;
       await syncServerChannelMemberships(params.serverId);
       await recordServerAudit(params.serverId, user.id, "role.updated", role.id);
@@ -2577,6 +3261,7 @@ export function createApp() {
         position: t.Optional(t.Integer({ minimum: 0, maximum: 1_000_000 })),
         permissions: t.Optional(t.Any()),
         mentionable: t.Optional(t.Boolean()),
+        separateMembers: t.Optional(t.Boolean()),
         viewAllChannels: t.Optional(t.Boolean()),
       }),
     })
@@ -3811,6 +4496,14 @@ export function createApp() {
             select id from users where id in ${db(memberIds)}
           `;
       if (existingUsers.length !== memberIds.length) return respondError(set, 400, "unknown_member");
+      if (body.kind === "dm" && memberIds.length > 0) {
+        const blocked = await db<{ blocked_user_id: string }[]>`
+          select distinct blocked_user_id from user_blocks
+          where (blocker_user_id = ${user.id} and blocked_user_id in ${db(memberIds)})
+             or (blocked_user_id = ${user.id} and blocker_user_id in ${db(memberIds)})
+        `;
+        if (blocked.length > 0) return respondError(set, 403, "blocked_user");
+      }
 
       // Private conversations are addressable only through an existing trust
       // boundary. A caller cannot use a guessed user id to create a room with
@@ -3927,6 +4620,15 @@ export function createApp() {
           )
           and not (
             c.kind = 'dm' and exists (
+              select 1 from conversation_members blocked_member
+              join user_blocks b on (b.blocker_user_id = ${user.id} and b.blocked_user_id = blocked_member.user_id)
+                or (b.blocked_user_id = ${user.id} and b.blocker_user_id = blocked_member.user_id)
+              where blocked_member.conversation_id = c.id
+                and blocked_member.user_id <> ${user.id} and blocked_member.left_at is null
+            )
+          )
+          and not (
+            c.kind = 'dm' and exists (
               select 1
               from conversations older
               join conversation_members older_mine
@@ -3956,6 +4658,7 @@ export function createApp() {
     .get("/v1/conversations/:conversationId/members", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (await directConversationIsBlocked(params.conversationId, user.id)) return respondError(set, 403, "blocked_user");
       const channelContext = await conversationChannelAuthorization(params.conversationId, user.id);
       if (channelContext && !channelContext.access?.canView && !await isMetadataChannel(channelContext.channel.server_id, channelContext.channel.id)) {
         return respondError(set, 403, "channel_not_visible");
@@ -4026,6 +4729,7 @@ export function createApp() {
     .post("/v1/conversations/:conversationId/attachments", async ({ body, headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (await directConversationIsBlocked(params.conversationId, user.id)) return respondError(set, 403, "blocked_user");
       const channelContext = await conversationChannelAuthorization(params.conversationId, user.id);
       if (channelContext) {
         if (!channelContext.access?.canView) return respondError(set, 403, "channel_not_visible");
@@ -4101,6 +4805,7 @@ export function createApp() {
         where a.id = ${params.attachmentId} and m.user_id = ${user.id} and m.left_at is null
       `;
       if (!attachment) return respondError(set, 404, "attachment_not_found");
+      if (await directConversationIsBlocked(attachment.conversation_id, user.id)) return respondError(set, 403, "blocked_user");
       const channelContext = await conversationChannelAuthorization(attachment.conversation_id, user.id);
       if (channelContext) {
         if (!channelContext.access?.canView) return respondError(set, 403, "channel_not_visible");
@@ -4181,6 +4886,7 @@ export function createApp() {
       if (!attachment || attachment.status !== "uploaded") {
         return respondError(set, 404, "attachment_not_found");
       }
+      if (await directConversationIsBlocked(attachment.conversation_id, user.id)) return respondError(set, 403, "blocked_user");
       const channelContext = await conversationChannelAuthorization(attachment.conversation_id, user.id);
       if (channelContext && !channelContext.access?.canView) return respondError(set, 403, "channel_not_visible");
       if (!(await encryptedAttachmentExists(attachment.storage_key))) {
@@ -4200,6 +4906,7 @@ export function createApp() {
     .post("/v1/conversations/:conversationId/messages", async ({ body, headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (await directConversationIsBlocked(params.conversationId, user.id)) return respondError(set, 403, "blocked_user");
       const attachmentIds = [...new Set([
         ...(body.attachmentIds ?? []),
         ...(body.attachmentId ? [body.attachmentId] : []),
@@ -4309,6 +5016,7 @@ export function createApp() {
           conversationId: storedMessage.conversation_id,
           serverSequence: String(storedMessage.server_sequence),
         }, recipients.map((recipient) => recipient.user_id));
+        void sendGenericFcmPush(recipients.map((recipient) => recipient.user_id));
       }
 
       set.status = deduplicated ? 200 : 201;
@@ -4328,6 +5036,7 @@ export function createApp() {
     .get("/v1/conversations/:conversationId/messages", async ({ headers, params, query, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (await directConversationIsBlocked(params.conversationId, user.id)) return respondError(set, 403, "blocked_user");
       const channelContext = await conversationChannelAuthorization(params.conversationId, user.id);
       if (channelContext && !channelContext.access?.canView) return respondError(set, 403, "channel_not_visible");
 
@@ -4441,18 +5150,23 @@ export function createApp() {
 
         try {
           const connection = await createRealtimeConnection(ws, user.id);
-          realtimeConnections.set(ws.raw, connection);
+          realtimeConnections.set(ws.raw, {
+            userId: user.id,
+            connection,
+            close: () => ws.close(4003, "account_suspended"),
+          });
           ws.send(JSON.stringify({ type: "ready" }));
         } catch {
           ws.close(1013, "realtime_unavailable");
         }
       },
       message: async (ws, command) => {
-        const connection = realtimeConnections.get(ws.raw);
-        if (!connection) {
+        const active = realtimeConnections.get(ws.raw);
+        if (!active) {
           ws.close(4001, "unauthorized");
           return;
         }
+        const connection = active.connection;
 
         if (command.type === "subscribe") {
           const subscribed = await connection.subscribe(command.conversationId);
@@ -4490,9 +5204,9 @@ export function createApp() {
         ws.close(1003, "unsupported_realtime_command");
       },
       close: async (ws) => {
-        const connection = realtimeConnections.get(ws.raw);
+        const active = realtimeConnections.get(ws.raw);
         realtimeConnections.delete(ws.raw);
-        if (connection) await connection.close();
+        if (active) await active.connection.close();
       },
     });
 }

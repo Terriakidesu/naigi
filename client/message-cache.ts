@@ -84,3 +84,49 @@ export async function deleteCachedMessages(userId: string, conversationId: strin
     // Cache cleanup is best effort.
   }
 }
+
+export async function cachedMessageCacheStats(userId: string) {
+  const database = await openCache();
+  if (!database) return undefined;
+  try {
+    const transaction = database.transaction(storeName, "readonly");
+    const records = await requestResult<CacheRecord[]>(transaction.objectStore(storeName).getAll());
+    const messages = records
+      .flatMap((record) => typeof record?.key === "string" && record.key.startsWith(`${userId}:`) && Array.isArray(record.messages)
+        ? record.messages
+        : []);
+    const bytes = new TextEncoder().encode(JSON.stringify(messages)).byteLength;
+    return { messages: messages.length, bytes };
+  } finally {
+    database.close();
+  }
+}
+
+export async function clearCachedMessages(userId: string) {
+  const database = await openCache();
+  if (!database) return 0;
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      const transaction = database.transaction(storeName, "readwrite");
+      const store = transaction.objectStore(storeName);
+      const cursorRequest = store.openCursor();
+      let deletedMessages = 0;
+      cursorRequest.addEventListener("success", () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) return;
+        const record = cursor.value as Partial<CacheRecord> | null;
+        if (typeof record?.key === "string" && record.key.startsWith(`${userId}:`)) {
+          if (Array.isArray(record.messages)) deletedMessages += record.messages.length;
+          cursor.delete();
+        }
+        cursor.continue();
+      });
+      cursorRequest.addEventListener("error", () => reject(cursorRequest.error ?? new Error("message_cache_failed")));
+      transaction.addEventListener("complete", () => resolve(deletedMessages));
+      transaction.addEventListener("error", () => reject(transaction.error ?? new Error("message_cache_failed")));
+      transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("message_cache_failed")));
+    });
+  } finally {
+    database.close();
+  }
+}

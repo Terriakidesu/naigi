@@ -36,6 +36,17 @@ validated numeric status ID to the explicitly configured preview-provider chain;
 persist or log the URL or returned preview. The browser encrypts any returned card data inside
 the message before sending it.
 
+## Optional web push
+
+When Firebase Cloud Messaging is configured, `GET /v1/push/config` returns the public Firebase
+web-app configuration and VAPID key. Authenticated clients may register or remove a browser's
+FCM registration token with `POST /v1/push/subscriptions` and
+`POST /v1/push/subscriptions/remove`, respectively. The server stores tokens per account and sends
+best-effort data-only events after new messages. Those event payloads contain only a generic event
+type; they never include message content, room IDs, sender identity, or mentions. Browser-local
+preferences decide whether to display a background notification. Because room IDs are omitted,
+background push cannot honor per-room mute settings.
+
 `GET /v1/gifs/providers` returns the explicitly configured Klipy and/or GIPHY browser integration
 keys plus the encrypted attachment size limit to an authenticated client. Those are public,
 origin-restricted browser keys: the browser contacts the provider directly for GIF searches and
@@ -43,6 +54,64 @@ downloads, then encrypts a selected GIF through the normal attachment flow. The 
 receive, persist, proxy, or log search terms, provider URLs, GIF bytes, or media keys. Tenor's
 retired API is not used; provider-page preview information remains inside encrypted message
 content.
+
+## Reports, account blocking, and instance administration
+
+Reports are installation-wide and are reviewed by host operators provisioned in the separate admin
+database. `POST /v1/instance-admin/auth/login` sets the `HttpOnly` cookie
+`priv_chat_admin_session`; `GET /v1/instance-admin/auth/me` checks it and
+`POST /v1/instance-admin/auth/logout` revokes it. This cookie and identity store are independent
+from chat authentication and `priv_chat_session`. Host operators are not chat accounts and cannot
+appear in chat profiles, member lists, or recipient discovery. Space ownership or a space-admin role
+does not grant access to the instance moderation console or endpoints.
+
+`GET /v1/reports/public-key` returns the active host evidence key (if configured). An authenticated
+client submits a report with `POST /v1/reports`, including a target UUID and one of `spam`,
+`harassment`, `threats`, `sexual_content`, `illegal_content`, `impersonation`, or `other`. Message
+reports may also include `conversationId` and `messageId`; the server verifies that the reporter is
+an active conversation member and that the message sender matches the target account. Reports
+without a message reference are limited to accounts with whom the reporter shares an active server.
+Open reports against one message may be submitted only once by a reporter, and each account has a
+rate limit of ten reports per hour.
+
+Message text and report details are never sent to the server in plaintext. The client leaves
+`encryptedEvidence` out of the request unless the reporter explicitly opts in. When included, the
+client encrypts the reporter-supplied evidence with an ephemeral AES-256-GCM key and wraps that key
+to the host's RSA-OAEP-3072/SHA-256 public key. The server stores only the encrypted envelope and
+key ID. A shared excerpt is supplied by the reporter and is not proof that the excerpt matches the
+original encrypted message. Operators unlock an encrypted private-key backup locally in the
+browser; private report keys are never uploaded or stored by the server. Retired public keys remain
+available for existing evidence, so operators must keep their old private-key backups.
+
+The host-only web console is at `/instance-admin`. Its APIs are:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/instance-admin/auth/login` | Sign in with a host-operator identity |
+| `GET` | `/v1/instance-admin/auth/me` | Get the authenticated host operator |
+| `POST` | `/v1/instance-admin/auth/logout` | Revoke the host-operator session |
+| `GET` | `/v1/instance-admin/reports?status=open` | List report metadata (no message body or evidence ciphertext) |
+| `GET` | `/v1/instance-admin/reports/:reportId` | Read one report and its optional encrypted evidence envelope |
+| `PATCH` | `/v1/instance-admin/reports/:reportId` | Set report status to `open`, `reviewing`, `resolved`, or `dismissed` |
+| `POST` | `/v1/instance-admin/reports/:reportId/evidence-access` | Record that an operator decrypted evidence locally |
+| `POST` | `/v1/instance-admin/reports/:reportId/remove-message` | Remove the referenced encrypted message from server history |
+| `POST` | `/v1/instance-admin/users/:userId/suspend` | Revoke sessions and suspend an account, optionally resolving a matching report |
+| `DELETE` | `/v1/instance-admin/users/:userId/suspension` | Restore a suspended account |
+| `GET` | `/v1/instance-admin/report-keys` | List active and retired public-key IDs |
+| `POST` | `/v1/instance-admin/report-keys` | Register and activate an RSA public key |
+| `GET` | `/v1/instance-admin/audit` | Read the instance-wide admin audit log |
+
+Report detail views, evidence-access actions, report status changes, message removal, account
+suspension/restoration, and key creation are recorded with actor, action, report/user references,
+and timestamps. Audit rows do not contain message plaintext or report evidence. The host operator
+is responsible for evidence-key backup and access policy; these tools do not establish legal
+compliance for a particular jurisdiction.
+
+`GET /v1/users/blocked` lists the caller's blocks. Authenticated clients can block and unblock with
+`POST /v1/users/:userId/block` and `DELETE /v1/users/:userId/block`. A block is enforced both ways
+for direct conversations: direct-message creation, message history, attachments, and realtime
+delivery are denied while a block exists. Shared-space membership and shared-space messages are
+unchanged.
 
 ## Servers and channels
 

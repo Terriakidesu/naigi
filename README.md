@@ -23,10 +23,13 @@ accept plaintext message content or implement cryptography.
 
 ## Self-hosting
 
-Copy `.env.example` to `.env` and set credentials for the PostgreSQL and Redis instances
-running on your machine. PostgreSQL and Redis are used as follows:
+Copy `.env.example` to `.env` and set credentials for PostgreSQL and Redis. `ADMIN_DATABASE_URL`
+must point to a PostgreSQL database distinct from `DATABASE_URL` (the default is the app database
+name with `_admin` appended); make sure both databases exist before migrating. The example uses
+`priv_chat` and `priv_chat_admin`. PostgreSQL and Redis are used as follows:
 
 - PostgreSQL stores accounts, devices, memberships, and encrypted messages.
+- The separate admin PostgreSQL database stores only host-operator identities and sessions.
 - Redis is used for readiness checks, cross-instance pub/sub, and best-effort realtime notifications.
 - Local development stores encrypted attachments under `ATTACHMENTS_DIR`; production should replace this with object storage.
 
@@ -36,6 +39,36 @@ Run the initial schema migration before starting the server:
 bun run db:migrate
 bun run dev
 ```
+
+### Instance reports and host moderation
+
+Instance-wide reports and account suspensions are controlled by host operators, separately from
+space owners and moderators. After running `bun run db:migrate`, create a host-only identity with
+`bun run admin-users -- create <username>`. The command prompts for a password without echoing it;
+use `disable` or `enable` in place of `create` to revoke or restore an operator account. Operators
+are stored only in the separate admin database: they cannot sign in to chat, have chat profiles, or
+appear in member lists or recipient discovery. Use `password` to rotate an operator password and
+revoke their active sessions. For non-interactive shells, add `--password-stdin` and pipe two
+newline-separated password entries to the command; do not put passwords in command arguments.
+The host-only console is at `/instance-admin`.
+
+Reports contain the selected reason and account/message references. Reporters may separately
+opt in to send details or a selected message excerpt encrypted in their browser to a host report
+key. The server stores only the encrypted evidence envelope; it does not retrieve or decrypt the
+reported conversation. The excerpt is supplied by the reporter and is not independently verified
+as an authentic copy of the original message.
+
+Generate the report key from the host console and store its passphrase-encrypted backup offline.
+Keep the backup and passphrase separate, and share either only with trusted host operators. The
+private key is unlocked in memory in an operator's browser and is not uploaded or saved in browser
+storage. Keep retired-key backups to decrypt evidence encrypted before key rotation. If every copy
+of a private-key backup is lost, its evidence cannot be recovered.
+
+Account blocking prevents direct conversations in both directions and suppresses their realtime
+events. It does not hide activity in shared spaces or remove either account from those spaces.
+Instance moderation actions (report review, evidence access, message removal, suspension, and key
+creation) are recorded in an instance-wide audit log. These controls provide moderation tools but
+do not by themselves guarantee compliance with any particular jurisdiction's legal requirements.
 
 To clear all local application data while preserving the schema and migrations:
 
@@ -103,8 +136,26 @@ through Naigi. Selected GIF bytes enter the normal browser-encrypted attachment 
 retired API is not used; pasted Tenor page links remain external previews when previews are
 enabled.
 
-The liveness endpoint does not require either dependency. Readiness is available at
-`/health/ready`.
+### Optional Firebase Cloud Messaging
+
+Web push is opt-in and requires HTTPS (localhost is suitable for development). Configure a
+Firebase web app with Cloud Messaging and a Web Push certificate, then set
+`FCM_SERVICE_ACCOUNT_JSON`, `FCM_WEB_CONFIG_JSON`, and `FCM_VAPID_KEY` in the server environment.
+The service account needs permission to send Firebase Cloud Messaging messages; keep its private
+key secret and restrict the Firebase web API key to your Naigi origin. Apply database migrations
+after enabling FCM with `bun run db:migrate`.
+
+Users must grant browser notification permission and choose **All new messages** for background
+push. **Mentions only** remains client-side and alerts only while Naigi is open. Quiet hours are
+stored in that browser and applied by the service worker. Pushes are data-only generic events: the
+payload sent to Firebase contains no message content, room ID, sender identity, or mention data.
+As a result, closed-app alerts cannot apply per-room mutes.
+Firebase does receive the device registration token and delivery timing, so enabling FCM adds that
+third-party dependency to the notification path.
+
+GIF search and Firebase Cloud Messaging are optional and are not required to run Naigi.
+Liveness is available at `/health/live`; readiness, which checks PostgreSQL and Redis, is
+available at `/health/ready`.
 
 ## Realtime
 

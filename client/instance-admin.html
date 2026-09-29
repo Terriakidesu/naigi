@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Instance moderation · Naigi</title>
+    <link rel="stylesheet" href="/app.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  </head>
+  <body class="settings-page instance-admin-page">
+    <header class="topbar">
+      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">N</span><div><strong>Naigi</strong><span class="tag">host operator console</span></div></div>
+      <div class="topbar-links"><a class="text-link" href="/">Chat sign in</a><button id="admin-logout" class="secondary" type="button">Sign out operator</button></div>
+    </header>
+    <main class="instance-admin-main">
+      <header class="instance-admin-heading">
+        <div><p class="eyebrow">INSTANCE ADMINISTRATION</p><h1>Reports &amp; moderation</h1><p class="muted">Host-only access. Space owners cannot see this queue. Encrypted report evidence is decrypted only in this browser.</p></div>
+        <label for="report-status-filter">Queue<select id="report-status-filter"><option value="open">Open</option><option value="reviewing">Reviewing</option><option value="all">All reports</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option></select></label>
+      </header>
+
+      <div id="instance-admin-status" class="form-status instance-admin-status" role="status" aria-live="polite"></div>
+      <div class="instance-admin-grid">
+        <section class="instance-admin-panel report-queue-panel">
+          <div class="settings-section-heading"><div><p class="eyebrow">CASE QUEUE</p><h2>Reports</h2></div><button id="refresh-reports" class="secondary" type="button">Refresh</button></div>
+          <div id="instance-report-list" class="instance-report-list"><p class="muted">Loading reports…</p></div>
+        </section>
+        <section class="instance-admin-panel report-detail-panel" aria-live="polite">
+          <div id="instance-report-empty" class="instance-admin-empty"><i data-lucide="inbox"></i><h2>Select a report</h2><p class="muted">Report metadata is visible to designated host operators. Message contents are not.</p></div>
+          <div id="instance-report-detail" hidden>
+            <div class="settings-section-heading"><div><p class="eyebrow">REPORT DETAILS</p><h2 id="report-detail-title">Report</h2></div><span id="report-detail-status" class="instance-report-status"></span></div>
+            <dl id="report-detail-metadata" class="instance-report-metadata"></dl>
+            <section id="report-evidence-section" class="instance-report-evidence" hidden>
+              <p class="eyebrow">OPTIONAL ENCRYPTED EVIDENCE</p>
+              <p class="muted small">This is reporter-submitted content, not independently verified proof. It is encrypted to a host operator key and never decrypted by the server.</p>
+              <button id="decrypt-report-evidence" class="secondary" type="button">Decrypt in this browser</button>
+              <pre id="report-evidence-plaintext" hidden></pre>
+            </section>
+            <div class="instance-report-actions">
+              <button id="mark-report-reviewing" class="secondary" type="button">Mark reviewing</button>
+              <button id="remove-reported-message" class="danger-button" type="button" hidden>Remove reported message</button>
+              <button id="suspend-reported-user" class="danger-button" type="button">Suspend account</button>
+              <button id="restore-reported-user" class="secondary" type="button" hidden>Restore account</button>
+              <button id="resolve-report" type="button">Resolve</button>
+              <button id="dismiss-report" class="secondary" type="button">Dismiss</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="instance-admin-panel instance-report-key-panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">REPORT PRIVACY</p><h2>Evidence encryption keys</h2></div><span class="muted small">Private keys never leave this browser</span></div>
+        <p class="muted">Generate a host evidence key and download its passphrase-encrypted backup. Keep backups offline and share them only with trusted host operators. If a key backup is lost, its evidence cannot be recovered.</p>
+        <div class="instance-key-grid">
+          <div class="settings-form">
+            <label for="new-report-key-passphrase">Backup passphrase<input id="new-report-key-passphrase" type="password" autocomplete="new-password" minlength="12"></label>
+            <label for="confirm-report-key-passphrase">Confirm passphrase<input id="confirm-report-key-passphrase" type="password" autocomplete="new-password" minlength="12"></label>
+            <button id="create-report-key" type="button">Generate and download key backup</button>
+          </div>
+          <div class="settings-form">
+            <label for="report-key-backup-file">Encrypted key backup<input id="report-key-backup-file" type="file" accept=".naigi-report-key,application/json"></label>
+            <label for="import-report-key-passphrase">Backup passphrase<input id="import-report-key-passphrase" type="password" autocomplete="off"></label>
+            <button id="import-report-key" class="secondary" type="button">Unlock key in this browser</button>
+          </div>
+        </div>
+        <div id="report-key-list" class="instance-report-key-list"></div>
+      </section>
+
+      <section class="instance-admin-panel">
+        <div class="settings-section-heading"><div><p class="eyebrow">ACCOUNTABILITY</p><h2>Admin audit log</h2></div><button id="refresh-admin-audit" class="secondary" type="button">Refresh log</button></div>
+        <div id="instance-admin-audit" class="instance-admin-audit"><p class="muted">Loading audit log…</p></div>
+      </section>
+    </main>
+    <script type="module" src="/instance-admin.js"></script>
+  </body>
+</html>

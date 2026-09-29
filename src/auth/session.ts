@@ -81,6 +81,9 @@ export async function authenticate(
     from sessions s
     join users u on u.id = s.user_id
     where s.token_hash = ${tokenHash} and s.expires_at > now()
+      and not exists (
+        select 1 from instance_user_suspensions suspension where suspension.user_id = u.id
+      )
   `;
 
   if (!user) return null;

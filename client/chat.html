@@ -36,7 +36,7 @@
             <button id="mobile-join-server" class="secondary" type="button">Join space</button>
           </div>
           <label class="sidebar-search" for="conversation-search"><i data-lucide="search"></i><input id="conversation-search" type="search" aria-label="Find a conversation" placeholder="Find a conversation" autocomplete="off"><kbd>Ctrl K</kbd></label>
-          <div id="channel-section-heading" class="section-heading" hidden><span>ENCRYPTED ROOMS</span><span class="section-count">private</span></div>
+          <div id="channel-section-heading" class="section-heading rooms-section-heading" hidden><span class="section-heading-title"><i data-lucide="hash" aria-hidden="true"></i>Rooms</span><span id="channel-section-count" class="section-count">0 rooms</span></div>
           <div id="channel-list" class="channel-list" hidden></div>
           <div id="direct-messages-heading" class="section-heading"><span>PRIVATE THREADS</span><span class="section-count">inbox</span></div>
           <div id="conversation-list" class="conversation-list"></div>
@@ -146,16 +146,30 @@
       </div>
       <div id="media-viewer-stage" class="media-viewer-stage"></div>
     </div>
-    <div id="profile-modal" class="profile-modal" hidden role="dialog" aria-modal="true" aria-labelledby="profile-modal-name">
-      <div class="profile-modal-card">
-         <button id="profile-modal-close" class="icon-button profile-modal-close" type="button" title="Close profile" aria-label="Close profile"><i data-lucide="x"></i></button>
-         <div id="profile-modal-banner" class="profile-modal-banner" aria-hidden="true"></div>
-         <div id="profile-modal-avatar" class="profile-modal-avatar" aria-hidden="true">?</div>
-        <h2 id="profile-modal-name">Profile</h2>
-        <p id="profile-modal-username" class="muted"></p>
-        <p id="profile-modal-created" class="muted small"></p>
-        <a id="profile-modal-edit" class="text-link" href="/settings" hidden>Edit your profile</a>
-      </div>
+    <div id="profile-modal" class="profile-modal" hidden role="dialog" aria-modal="true" aria-labelledby="profile-modal-name" aria-describedby="profile-modal-username profile-modal-created">
+      <section class="profile-modal-card">
+        <div class="profile-modal-cover">
+          <div id="profile-modal-banner" class="profile-modal-banner" data-empty="true" aria-hidden="true"></div>
+          <button id="profile-modal-close" class="icon-button profile-modal-close" type="button" title="Close profile" aria-label="Close profile"><i data-lucide="x"></i></button>
+          <div id="profile-modal-avatar" class="profile-modal-avatar" aria-hidden="true">?</div>
+        </div>
+        <div class="profile-modal-content">
+          <div class="profile-modal-heading">
+            <p class="eyebrow">NAIGI PROFILE</p>
+            <h2 id="profile-modal-name">Profile</h2>
+            <p id="profile-modal-username" class="profile-modal-username"></p>
+          </div>
+          <div class="profile-modal-meta">
+            <i data-lucide="calendar-days" aria-hidden="true"></i>
+            <div><span>Member since</span><time id="profile-modal-created"></time></div>
+          </div>
+          <div id="profile-modal-safety-actions" class="profile-modal-safety-actions" hidden>
+            <button id="profile-modal-report" class="secondary" type="button">Report user</button>
+            <button id="profile-modal-block" class="secondary" type="button">Block user</button>
+          </div>
+          <a id="profile-modal-edit" class="profile-modal-edit" href="/settings" hidden><i data-lucide="pencil" aria-hidden="true"></i><span>Edit profile</span></a>
+        </div>
+      </section>
     </div>
     <div id="message-context-menu" class="message-context-menu" hidden role="menu" aria-label="Message actions"></div>
     <div id="navigation-context-menu" class="message-context-menu navigation-context-menu" hidden role="menu" aria-label="Room and category actions"></div>

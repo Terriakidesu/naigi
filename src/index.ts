@@ -1,5 +1,6 @@
 import { createApp } from "./app";
 import { config } from "./config";
+import { closeAdminDatabase } from "./admin-db/client";
 import { closeDatabase } from "./db/client";
 import { closeRedis } from "./redis/client";
 
@@ -10,8 +11,7 @@ console.log(`Naigi is running at http://${app.server?.hostname}:${app.server?.po
 
 const shutdown = async () => {
   app.stop();
-  closeRedis();
-  await closeDatabase();
+  await Promise.all([closeRedis(), closeDatabase(), closeAdminDatabase()]);
 };
 
 process.once("SIGINT", shutdown);

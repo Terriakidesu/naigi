@@ -8,6 +8,7 @@ export function avatarColor(seed: string) {
 
 export function setAvatarStyle(element: HTMLElement, seed: string) {
   element.style.setProperty("--avatar-color", avatarColor(seed));
+  element.style.setProperty("--avatar-ink", "#10181c");
 }
 
 export function renderAvatar(element: HTMLElement, displayName: string, seed: string, avatarUrl: string | null | undefined, alt = "") {

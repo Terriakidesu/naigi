@@ -10,6 +10,8 @@ type ProfileSettingsElements = {
   username: HTMLElement;
   profileForm: HTMLFormElement;
   displayNameInput: HTMLInputElement;
+  profileFormState: HTMLElement;
+  discardProfileChanges: HTMLButtonElement;
   profileImageInput: HTMLInputElement;
   removeProfileImage: HTMLButtonElement;
   profileBannerInput: HTMLInputElement;
@@ -33,7 +35,16 @@ export function setupProfileSettings(
 ) {
   let currentProfile: User | undefined;
 
-  function renderProfile(user: User) {
+  function syncProfileFormState() {
+    const dirty = Boolean(currentProfile && elements.displayNameInput.value.trim() !== currentProfile.displayName);
+    const saveButton = elements.profileForm.querySelector<HTMLButtonElement>("button[type=submit]");
+    elements.profileFormState.textContent = dirty ? "Unsaved changes" : "No unsaved changes";
+    elements.profileFormState.dataset.state = dirty ? "dirty" : "saved";
+    elements.discardProfileChanges.hidden = !dirty;
+    if (saveButton) saveButton.disabled = !dirty;
+  }
+
+  function renderProfile(user: User, preserveDisplayNameDraft = false) {
     currentProfile = user;
     elements.name.textContent = user.displayName;
     renderAvatar(elements.avatar, user.displayName, user.id, user.avatarUrl);
@@ -48,9 +59,10 @@ export function setupProfileSettings(
       elements.banner.dataset.empty = "true";
     }
     elements.username.textContent = `@${user.username}`;
-    elements.displayNameInput.value = user.displayName;
+    if (!preserveDisplayNameDraft) elements.displayNameInput.value = user.displayName;
     elements.removeProfileImage.hidden = !user.avatarUrl;
     elements.removeProfileBanner.hidden = !user.bannerUrl;
+    syncProfileFormState();
   }
 
   elements.profileForm.addEventListener("submit", async (event) => {
@@ -66,8 +78,16 @@ export function setupProfileSettings(
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to save profile.", true);
     } finally {
-      if (button) button.disabled = false;
+      syncProfileFormState();
     }
+  });
+
+  elements.displayNameInput.addEventListener("input", syncProfileFormState);
+  elements.discardProfileChanges.addEventListener("click", () => {
+    if (!currentProfile) return;
+    elements.displayNameInput.value = currentProfile.displayName;
+    syncProfileFormState();
+    elements.displayNameInput.focus();
   });
 
   elements.profileImageInput.addEventListener("change", async () => {
@@ -86,7 +106,7 @@ export function setupProfileSettings(
       if (!editedFile) return;
       setStatus("Uploading profile image…");
       const result = await api.uploadProfileImage(editedFile);
-      renderProfile(result.user);
+      renderProfile(result.user, true);
       setStatus("Profile image updated.");
     } catch (error) {
       setStatus(uploadErrorMessage(error), true);
@@ -102,7 +122,7 @@ export function setupProfileSettings(
     elements.profileImageInput.disabled = true;
     try {
       await api.removeProfileImage();
-      renderProfile({ ...currentProfile, avatarUrl: null });
+      renderProfile({ ...currentProfile, avatarUrl: null }, true);
       setStatus("Profile image removed.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to remove profile image.", true);
@@ -125,7 +145,7 @@ export function setupProfileSettings(
     try {
       setStatus("Uploading profile banner…");
       const result = await api.uploadProfileBanner(file);
-      renderProfile(result.user);
+      renderProfile(result.user, true);
       setStatus("Profile banner updated.");
     } catch (error) {
       setStatus(uploadErrorMessage(error), true);
@@ -141,7 +161,7 @@ export function setupProfileSettings(
     elements.profileBannerInput.disabled = true;
     try {
       await api.removeProfileBanner();
-      renderProfile({ ...currentProfile, bannerUrl: null });
+      renderProfile({ ...currentProfile, bannerUrl: null }, true);
       setStatus("Profile banner removed.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to remove profile banner.", true);

@@ -1,36 +1,56 @@
 import assert from "node:assert/strict";
-import { SQL } from "bun";
+import { password, SQL } from "bun";
 import { applyPalette, GIFEncoder, quantize } from "gifenc";
 import { chromium, type Dialog, type Page } from "playwright";
 
 // I have nothing but my burger and I want nothing more
 // Use the real HTTP, PostgreSQL, Redis, WASM and IndexedDB paths. A mock key
 // directory cannot catch JSONB serialization breaking signed Matrix keys.
-const admin = new SQL(Bun.env.DATABASE_URL ?? "postgres://localhost:5432/priv_chat");
+const appDatabaseBaseUrl = Bun.env.DATABASE_URL ?? "postgres://localhost:5432/priv_chat";
+const adminDatabaseBaseUrl = Bun.env.ADMIN_DATABASE_URL ?? appDatabaseBaseUrl;
+const appDatabaseAdmin = new SQL(appDatabaseBaseUrl);
+const adminDatabaseAdmin = new SQL(adminDatabaseBaseUrl);
 const schema = `e2ee_test_${crypto.randomUUID().replaceAll("-", "")}`;
-await admin.unsafe(`create schema ${schema}`);
-const databaseUrl = new URL(Bun.env.DATABASE_URL ?? "postgres://localhost:5432/priv_chat");
+const adminSchema = `e2ee_admin_test_${crypto.randomUUID().replaceAll("-", "")}`;
+await appDatabaseAdmin.unsafe(`create schema ${schema}`);
+await adminDatabaseAdmin.unsafe(`create schema ${adminSchema}`);
+const databaseUrl = new URL(appDatabaseBaseUrl);
 databaseUrl.searchParams.set("options", `-c search_path=${schema}`);
 Bun.env.DATABASE_URL = databaseUrl.toString();
+const isolatedAdminDatabaseUrl = new URL(adminDatabaseBaseUrl);
+isolatedAdminDatabaseUrl.searchParams.set("options", `-c search_path=${adminSchema}`);
+Bun.env.ADMIN_DATABASE_URL = isolatedAdminDatabaseUrl.toString();
 Bun.env.NODE_ENV = "test";
 Bun.env.KLIPY_API_KEY = "e2ee-klipy-public-key";
 
 const { closeDatabase } = await import("../src/db/client");
+const { adminDb, closeAdminDatabase } = await import("../src/admin-db/client");
 const { closeRedis } = await import("../src/redis/client");
 const { migrate } = await import("../src/db/migrate");
+const { migrateAdminDatabase } = await import("../src/admin-db/migrate");
 const { createApp } = await import("../src/app");
-const browser = await chromium.launch({ headless: true });
-const app = createApp();
-const errors: string[] = [];
+  const browser = await chromium.launch({ headless: true });
+  const app = createApp();
+  const errors: string[] = [];
 
 try {
   await migrate();
+  await migrateAdminDatabase();
+  const adminPassword = "Host-operator-password-for-e2ee-test!";
+  await adminDb`
+    insert into admin_users (username, password_hash)
+    values ('e2ee_operator', ${await password.hash(adminPassword)})
+  `;
   app.listen({ hostname: "127.0.0.1", port: 0 });
   const origin = `http://127.0.0.1:${app.server!.port}`;
   const alice = await browser.newContext();
   const bob = await browser.newContext();
+  const operatorContext = await browser.newContext();
+  const outsiderContext = await browser.newContext();
   const a = await alice.newPage();
   const b = await bob.newPage();
+  const operator = await operatorContext.newPage();
+  const outsider = await outsiderContext.newPage();
   async function request(page: Page, path: string, data?: object, method = data ? "POST" : "GET") {
     return page.evaluate(async ({ path, data }) => {
       const response = await fetch(path, {
@@ -62,6 +82,27 @@ try {
     assert.equal(response.status, 201, JSON.stringify(response.body));
     users.push(response.body.user);
   }
+  await outsider.goto(origin);
+  const outsiderRegistration = await request(outsider, "/v1/auth/register", {
+    username: "e2ee_outsider", password: "Account-password-for-e2ee-test!", displayName: "outsider",
+  });
+  assert.equal(outsiderRegistration.status, 201, JSON.stringify(outsiderRegistration.body));
+  await operator.goto(`${origin}/instance-admin`);
+  assert.equal(await operator.locator("#admin-auth-form").count(), 1, "unauthenticated operators receive the admin-only login page");
+  const operatorLogin = await request(operator, "/v1/instance-admin/auth/login", {
+    username: "e2ee_operator", password: adminPassword,
+  });
+  assert.equal(operatorLogin.status, 200, JSON.stringify(operatorLogin.body));
+  assert.equal((await request(operator, "/v1/me")).status, 401, "admin sessions cannot authenticate chat accounts");
+  assert.equal((await request(a, `/v1/users/${operatorLogin.body.operator.id}`)).status, 404, "host operators have no chat profiles");
+  assert.equal((await request(operator, "/v1/auth/login", {
+    username: "e2ee_operator", password: adminPassword,
+  })).status, 401, "admin identities are not chat accounts");
+  assert.equal((await request(a, "/v1/instance-admin/auth/me")).status, 401, "chat sessions cannot authenticate host operators");
+  const anonymousAdminResponse = await fetch(`${origin}/v1/instance-admin/reports`);
+  assert.equal(anonymousAdminResponse.status, 401, "instance administration requires authentication");
+  const spaceOwnerAdminResponse = await request(a, "/v1/instance-admin/reports");
+  assert.equal(spaceOwnerAdminResponse.status, 401, "chat identity cookies do not grant instance administration");
 
   const rejectedTwitterPreview = await request(a, "/v1/previews/twitter", { url: "https://example.com/status/1234567890" });
   assert.equal(rejectedTwitterPreview.status, 400, JSON.stringify(rejectedTwitterPreview.body));
@@ -150,6 +191,12 @@ try {
   }
 
   await a.goto(`${origin}/settings`);
+  assert.equal(await a.locator("[data-settings-view].panel").count(), 0, "account settings sections use the open layout rather than stacked cards");
+  await a.setViewportSize({ width: 390, height: 844 });
+  await a.locator("#settings-mobile-sidebar-close").click();
+  const mobileSettingsOverflow = await a.locator(".settings-main-content").evaluate((element) => element.scrollWidth - element.clientWidth);
+  assert.ok(mobileSettingsOverflow <= 1, `settings content should fit a mobile viewport, overflow: ${mobileSettingsOverflow}px`);
+  await a.setViewportSize({ width: 1280, height: 720 });
   await a.locator("#profile-image-input").setInputFiles({ name: "avatar.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) });
   const editor = a.locator(".profile-image-editor");
   await editor.waitFor({ state: "visible", timeout: 20_000 });
@@ -169,6 +216,20 @@ try {
     return { status: response.status, contentType: response.headers.get("content-type") };
   }, avatarUpload.body.user.avatarUrl);
   assert.deepEqual(avatarFetch, { status: 200, contentType: "image/png" });
+  assert.equal(await a.locator("#settings-page-title").textContent(), "Profile", "settings header identifies the current section");
+  assert.deepEqual(await a.locator(".settings-nav-group-title").allTextContents(), ["ACCOUNT", "PRIVACY & DATA", "PREFERENCES"]);
+  const displayNameField = a.locator("#settings-display-name");
+  const savedDisplayName = await displayNameField.inputValue();
+  await displayNameField.fill(`${savedDisplayName} draft`);
+  assert.equal(await a.locator("#save-profile-button").isDisabled(), false, "profile save enables only when the name changes");
+  assert.equal(await a.locator("#discard-profile-changes").isVisible(), true, "profile discard appears for unsaved changes");
+  await a.locator("#discard-profile-changes").click();
+  assert.equal(await displayNameField.inputValue(), savedDisplayName, "discard restores the saved profile name");
+  assert.equal(await a.locator("#save-profile-button").isDisabled(), true, "profile save disables after discarding changes");
+  await a.locator('.settings-nav-item[href="#devices"]').click();
+  await a.waitForFunction(() => document.getElementById("settings-page-title")?.textContent === "Devices");
+  await a.locator('.settings-nav-item[href="#profile"]').click();
+  await a.waitForFunction(() => document.getElementById("settings-page-title")?.textContent === "Profile");
   await a.locator("#profile-image-input").setInputFiles({ name: "animated.gif", mimeType: "image/gif", buffer: Buffer.from(animatedGif()) });
   await editor.waitFor({ state: "visible", timeout: 20_000 });
   const gifUpload = a.waitForResponse((response) => response.url().endsWith("/v1/me/avatar") && response.request().method() === "PUT" && response.status() === 200);
@@ -286,6 +347,15 @@ try {
   await recoveryDownload.delete();
   await a.goto(`${origin}/app`);
   await a.locator("#status-line").filter({ hasText: "Connected" }).waitFor({ timeout: 20_000 });
+  await a.locator("#self-profile-button").click();
+  await a.locator("#profile-modal").waitFor({ state: "visible", timeout: 20_000 });
+  await a.waitForFunction(() => document.getElementById("profile-modal-name")?.textContent === "alice", undefined, { timeout: 20_000 });
+  assert.equal((await a.locator("#profile-modal-name").textContent())?.trim(), "alice", "profile popup shows the display name");
+  assert.equal((await a.locator("#profile-modal-username").textContent())?.trim(), "@e2ee_alice", "profile popup shows the account handle");
+  assert.equal(await a.locator("#profile-modal-created").getAttribute("datetime") !== null, true, "profile popup exposes the join date semantically");
+  assert.equal(await a.locator("#profile-modal-edit").isVisible(), true, "own profile popup provides an edit action");
+  await a.locator("#profile-modal-close").click();
+  await a.locator("#profile-modal").waitFor({ state: "hidden" });
   await recoverAfterDeviceIdLoss(a, users[0].id);
   await b.locator("#home-rail-button").click();
 
@@ -299,6 +369,57 @@ try {
   });
   assert.equal(duplicate.status, 200, JSON.stringify(duplicate.body));
   assert.equal(duplicate.body.conversation.id, room);
+
+  const invalidReportReference = await request(a, "/v1/reports", {
+    targetUserId: users[1].id,
+    reason: "harassment",
+    conversationId: room,
+    messageId: crypto.randomUUID(),
+  });
+  assert.equal(invalidReportReference.status, 400, "report message references must identify a message authored by the reported user");
+  const unsupportedProfileReport = await request(a, "/v1/reports", {
+    targetUserId: outsiderRegistration.body.user.id,
+    reason: "other",
+  });
+  assert.equal(unsupportedProfileReport.status, 403, "profile reports must stay within the shared-server trust boundary");
+
+  const blocked = await request(a, `/v1/users/${users[1].id}/block`, {});
+  assert.equal(blocked.status, 200, JSON.stringify(blocked.body));
+  const blockedHistoryFromAlice = await request(a, `/v1/conversations/${room}/messages`);
+  const blockedHistoryFromBob = await request(b, `/v1/conversations/${room}/messages`);
+  const blockedMembers = await request(a, `/v1/conversations/${room}/members`);
+  const blockedDirectSend = await request(a, `/v1/conversations/${room}/messages`, {
+    senderDeviceId: crypto.randomUUID(),
+    clientMessageId: crypto.randomUUID(),
+    protocol: "m.room.encrypted",
+    ciphertext: "AQ",
+  });
+  const sharedSpaceHistory = await request(b, `/v1/conversations/${createdServer.body.channel.conversationId}/messages`);
+  assert.equal(blockedHistoryFromAlice.status, 403);
+  assert.equal(blockedHistoryFromBob.status, 403, "a block is enforced in both directions");
+  assert.equal(blockedMembers.status, 403);
+  assert.equal(blockedDirectSend.status, 403, "blocked direct messages cannot be sent");
+  assert.equal(sharedSpaceHistory.status, 200, "blocking does not remove shared-space access");
+  const blockedConversationList = await request(a, "/v1/conversations");
+  assert.equal(blockedConversationList.body.conversations.some((conversation: { id: string }) => conversation.id === room), false);
+  const unblocked = await request(a, `/v1/users/${users[1].id}/block`, undefined, "DELETE");
+  assert.equal(unblocked.status, 200, JSON.stringify(unblocked.body));
+  assert.equal((await request(a, `/v1/conversations/${room}/messages`)).status, 200);
+
+  await operator.goto(`${origin}/instance-admin`);
+  await operator.locator("#instance-report-list").waitFor({ timeout: 20_000 });
+  await operator.locator("#new-report-key-passphrase").fill("Report-key-backup-passphrase-for-e2ee!");
+  await operator.locator("#confirm-report-key-passphrase").fill("Report-key-backup-passphrase-for-e2ee!");
+  const reportKeyDownloadPromise = operator.waitForEvent("download");
+  await operator.locator("#create-report-key").click();
+  const reportKeyDownload = await reportKeyDownloadPromise;
+  await operator.locator("#instance-admin-status").filter({ hasText: "Evidence key activated." }).waitFor({ timeout: 20_000 });
+  const reportKeyBackupPath = await reportKeyDownload.path();
+  assert.ok(reportKeyBackupPath, "report-key backup should be downloadable");
+  await reportKeyDownload.delete();
+  const publicReportKey = await request(a, "/v1/reports/public-key");
+  assert.equal(publicReportKey.status, 200);
+  assert.ok(publicReportKey.body.configured);
   await a.goto(`${origin}/channels/@me/${room}`);
   await a.locator("#status-line").filter({ hasText: "Connected" }).waitFor({ timeout: 20_000 });
 
@@ -452,6 +573,12 @@ try {
   const queuedAttachmentBox = await a.locator("#attachment-preview").boundingBox();
   const composerBox = await a.locator(".composer-box").boundingBox();
   assert.ok(queuedAttachmentBox && composerBox && queuedAttachmentBox.y + queuedAttachmentBox.height <= composerBox.y, "queued attachments render above the message composer");
+  assert.ok(queuedAttachmentBox && composerBox && Math.abs(queuedAttachmentBox.width - composerBox.width) <= 1, "queued attachment tray spans the composer width");
+  const queuedImagePreview = a.locator(".attachment-item-media .attachment-item-visual").last();
+  await queuedImagePreview.click();
+  await a.locator("#media-viewer .media-viewer-image").waitFor({ timeout: 20_000 });
+  assert.equal(await a.locator("#media-viewer .media-viewer-image").getAttribute("alt"), "clipboard-image.png", "queued images open in the fitted media viewer");
+  await a.locator("#media-viewer-close").click();
   await a.locator("#send-button").click();
   const pastedImage = b.locator('.encrypted-media-card[data-media-filename="clipboard-image.png"]').last();
   await pastedImage.locator(".media-preview").waitFor({ timeout: 20_000 });
@@ -526,14 +653,83 @@ try {
   assert.equal(await fullTextViewer.locator(".code-token-keyword").first().textContent(), "const");
   assert.equal(await fullTextViewer.evaluate((text) => getComputedStyle(text).whiteSpace), "pre-wrap");
   await b.locator("#media-viewer-close").click();
-  await a.locator("#photo-input").setInputFiles({ name: "spoiler.png", mimeType: "image/png", buffer: Buffer.from(onePixelPng) });
+  const bobChatUrl = b.url();
+  await b.goto(`${origin}/settings#app`);
+  assert.equal(await b.locator("#settings-page-title").textContent(), "App preferences");
+  assert.equal(await b.locator("#save-app-preferences-button").isDisabled(), true, "app preference save is disabled without edits");
+  assert.deepEqual(await b.locator(".app-scale-range-interface .app-scale-ticks span").allTextContents(), ["85%", "100%", "125%", "150%", "175%", "200%"]);
+  assert.deepEqual(await b.locator(".app-scale-range-message .app-scale-ticks span").allTextContents(), ["12px", "14px", "16px", "18px", "20px", "22px", "24px"]);
+  const savedTextSize = await b.locator("#app-message-text-size").inputValue();
+  await b.locator("#app-message-text-size").evaluate((element) => {
+    const slider = element as HTMLInputElement;
+    slider.value = "18";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  assert.equal(await b.locator("#app-message-text-size-value").textContent(), "18px");
+  assert.equal(await b.locator("#app-preferences-status").textContent(), "Unsaved changes");
+  await b.locator("#discard-app-preferences-button").click();
+  assert.equal(await b.locator("#app-message-text-size").inputValue(), savedTextSize, "discard restores saved app preferences");
+  await b.locator("#app-message-text-size").evaluate((element) => {
+    const slider = element as HTMLInputElement;
+    slider.value = "18";
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  assert.equal(await b.locator("#app-message-text-size-value").textContent(), "18px");
+  await b.locator("#app-auto-load-media").uncheck();
+  await b.locator("#app-notification-mode").selectOption("off");
+  await b.locator("#app-quiet-hours-enabled").check();
+  await b.locator("#app-quiet-hours-start").fill("23:00");
+  await b.locator("#app-quiet-hours-end").fill("07:00");
+  await b.locator("#app-preferences-form button[type=submit]").click();
+  await b.locator("#settings-status").filter({ hasText: "App settings saved on this browser." }).waitFor({ timeout: 20_000 });
+  assert.equal(await b.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--message-text-size").trim()), "18px");
+  await b.goto(bobChatUrl);
+  const spoilerImageBytes = await a.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 180;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("canvas_context_unavailable");
+    context.fillStyle = "#557788";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("canvas_encode_failed")), "image/png"));
+    return [...new Uint8Array(await blob.arrayBuffer())];
+  });
+  await a.locator("#photo-input").setInputFiles({ name: "manual.png", mimeType: "image/png", buffer: Buffer.from(spoilerImageBytes) });
+  await a.locator("#send-button").click();
+  const manualMediaMessage = b.locator('.message:has([data-media-filename="manual.png"])').last();
+  await manualMediaMessage.waitFor({ timeout: 20_000 });
+  const manualMediaPreview = manualMediaMessage.locator(".media-preview");
+  assert.equal(await manualMediaPreview.count(), 0, "manual media preference defers encrypted image downloads");
+  await manualMediaMessage.getByRole("button", { name: "Load image", exact: true }).click();
+  await manualMediaPreview.waitFor({ timeout: 20_000 });
+  await a.locator("#photo-input").setInputFiles({ name: "spoiler.png", mimeType: "image/png", buffer: Buffer.from(spoilerImageBytes) });
   await a.locator(".attachment-item input[type=checkbox]").check();
   await a.locator("#send-button").click();
-  const spoilerMessage = b.locator(".message:has(.media-spoiler-cover)").last();
+  const spoilerMessage = b.locator('.message:has([data-media-filename="spoiler.png"])').last();
   await spoilerMessage.waitFor({ timeout: 20_000 });
-  assert.equal(await spoilerMessage.locator(".media-preview").count(), 0);
+  await spoilerMessage.locator(".media-spoiler-cover").waitFor({ timeout: 20_000 });
+  await spoilerMessage.scrollIntoViewIfNeeded();
+  const blurredSpoilerPreview = spoilerMessage.locator(".media-preview");
+  try {
+    await blurredSpoilerPreview.waitFor({ timeout: 5_000 });
+  } catch {
+    const spoilerState = await spoilerMessage.innerText();
+    throw new Error(`Blurred spoiler preview did not load: ${spoilerState}`);
+  }
+  await blurredSpoilerPreview.evaluate(async (image) => { await (image as HTMLImageElement).decode(); });
+  const spoilerPreviewAppearance = await blurredSpoilerPreview.evaluate((image) => {
+    const { width, height } = image.getBoundingClientRect();
+    return { filter: getComputedStyle(image).filter, naturalWidth: (image as HTMLImageElement).naturalWidth, naturalHeight: (image as HTMLImageElement).naturalHeight, width, height };
+  });
+  assert.match(spoilerPreviewAppearance.filter, /blur\(/, "spoiler media is blurred rather than hidden behind an opaque cover");
+  assert.ok(Math.abs(spoilerPreviewAppearance.width / spoilerPreviewAppearance.height - spoilerPreviewAppearance.naturalWidth / spoilerPreviewAppearance.naturalHeight) < 0.01, "spoiler preview retains the media's intrinsic aspect ratio");
+  assert.ok(Math.abs(spoilerPreviewAppearance.width - spoilerPreviewAppearance.naturalWidth) <= 1
+    && Math.abs(spoilerPreviewAppearance.height - spoilerPreviewAppearance.naturalHeight) <= 1,
+  "spoiler preview keeps the original display dimensions when it fits the chat column");
   await spoilerMessage.locator(".media-spoiler-cover").click();
-  await b.locator(".message .media-preview").last().waitFor({ timeout: 20_000 });
+  await blurredSpoilerPreview.waitFor({ timeout: 20_000 });
+  assert.equal(await blurredSpoilerPreview.evaluate((image) => getComputedStyle(image).filter), "none", "revealing spoiler media removes the blur");
   await b.locator("#messages").evaluate((element) => { element.scrollTop = element.scrollHeight; });
   const jumpLatestVisibility = await b.locator("#messages").evaluate((messages) => {
     const button = document.querySelector<HTMLButtonElement>("#jump-latest-button");
@@ -600,6 +796,65 @@ try {
   assert.equal(await b.locator(".message-mention").filter({ hasText: "mention styling" }).count(), 1);
   assert.equal(await b.locator(".conversation-item .unread-badge").count(), 0);
   await send(b, a, "Bob to Alice: independent device keys work");
+  const reportHistory = await request(a, `/v1/conversations/${room}/messages?limit=100`);
+  assert.equal(reportHistory.status, 200, JSON.stringify(reportHistory.body));
+  const bobAuthoredMessage = reportHistory.body.messages
+    .filter((message: { senderUserId: string | null }) => message.senderUserId === users[1].id)
+    .at(-1);
+  assert.ok(bobAuthoredMessage, "the reported message is authored by the named target");
+  const reporterEvidenceText = "report evidence plaintext sentinel";
+  const bobMessageForReport = a.locator(".message").filter({ hasText: "Bob to Alice: independent device keys work" });
+  await bobMessageForReport.hover();
+  await bobMessageForReport.getByRole("button", { name: "Add reaction to message from bob" }).click();
+  await a.locator("#message-context-menu").getByText("Report message", { exact: true }).click();
+  const reportDialog = a.locator(".report-dialog");
+  await reportDialog.waitFor({ state: "visible", timeout: 20_000 });
+  await a.waitForFunction(() => {
+    const checkbox = document.querySelector<HTMLInputElement>(".report-dialog input[type='checkbox']");
+    return checkbox !== null && !checkbox.disabled;
+  }, undefined, { timeout: 20_000 });
+  await reportDialog.locator("select").selectOption("harassment");
+  await reportDialog.locator("input[type='checkbox']").check();
+  await reportDialog.locator("textarea").fill(reporterEvidenceText);
+  await reportDialog.getByRole("button", { name: "Submit report" }).click();
+  await reportDialog.waitFor({ state: "detached", timeout: 20_000 });
+  const queuedReportList = await request(operator, "/v1/instance-admin/reports?status=open");
+  const submittedReportId = queuedReportList.body.reports.find(
+    (report: { messageId: string | null }) => report.messageId === bobAuthoredMessage.id,
+  )?.id;
+  assert.ok(submittedReportId, "the message-report UI submits a report to the host queue");
+  const duplicateMessageReport = await request(a, "/v1/reports", {
+    targetUserId: users[1].id,
+    reason: "harassment",
+    conversationId: room,
+    messageId: bobAuthoredMessage.id,
+  });
+  assert.equal(duplicateMessageReport.status, 409, "duplicate open reports by one reporter are rejected");
+  const nonAdminReportDetail = await request(a, `/v1/instance-admin/reports/${submittedReportId}`);
+  assert.equal(nonAdminReportDetail.status, 401, "chat sessions cannot open instance-wide report details");
+  const reportDetail = await request(operator, `/v1/instance-admin/reports/${submittedReportId}`);
+  assert.equal(reportDetail.status, 200, JSON.stringify(reportDetail.body));
+  assert.equal(reportDetail.body.report.evidence.keyId, publicReportKey.body.keyId);
+  assert.equal(JSON.stringify(reportDetail.body).includes(reporterEvidenceText), false, "the API returns ciphertext, never report plaintext");
+  const reportList = await request(operator, "/v1/instance-admin/reports?status=open");
+  assert.equal(reportList.status, 200);
+  assert.equal(reportList.body.reports.find((report: { id: string }) => report.id === submittedReportId)?.hasEvidence, true);
+  assert.equal("ciphertext" in reportList.body.reports.find((report: { id: string }) => report.id === submittedReportId), false);
+
+  await operator.locator("#refresh-reports").click();
+  const reportQueueItem = operator.locator(".instance-report-item").filter({ hasText: "e2ee_bob" });
+  await reportQueueItem.waitFor({ timeout: 20_000 });
+  await reportQueueItem.click();
+  await operator.locator("#report-detail-title").filter({ hasText: submittedReportId.slice(0, 8) }).waitFor({ timeout: 20_000 });
+  await operator.locator("#decrypt-report-evidence").click();
+  await operator.locator("#report-evidence-plaintext").filter({ hasText: reporterEvidenceText }).waitFor({ timeout: 20_000 });
+  const reportAudit = await request(operator, "/v1/instance-admin/audit?limit=200");
+  assert.ok(reportAudit.body.logs.some((log: { action: string; adminUsername: string }) =>
+    log.action === "report.evidence_accessed" && log.adminUsername === "e2ee_operator"),
+  "admin audit attribution uses the separate operator identity");
+  await operator.locator("#mark-report-reviewing").click();
+  await operator.locator("#instance-admin-status").filter({ hasText: "Report marked reviewing." }).waitFor({ timeout: 20_000 });
+
   assert.equal(await b.locator(".conversation-item .unread-badge").count(), 0);
   assert.equal(await b.locator(".message-mention").filter({ hasText: "mention styling" }).count(), 0);
   assert.equal(await a.locator(".message").filter({ hasText: "Bob to Alice: independent device keys work" }).getByRole("button", { name: "Edit", exact: true }).count(), 0);
@@ -641,6 +896,9 @@ try {
   assert.equal(initialRoles.body.roles.some((role: { systemKey: string; mentionable: boolean }) => role.systemKey === "owner" && role.mentionable), false);
   const everyoneRole = initialRoles.body.roles.find((role: { id: string; systemKey: string; permissions: Record<string, boolean> }) => role.systemKey === "everyone");
   assert.ok(everyoneRole, "new servers include the Everyone role");
+  const ownerRole = initialRoles.body.roles.find((role: { id: string; systemKey: string; separateMembers: boolean }) => role.systemKey === "owner");
+  assert.equal(ownerRole?.separateMembers, true, "the owner keeps a separate group by default");
+  assert.equal(everyoneRole.separateMembers, false, "All members is the unseparated fallback group");
   assert.ok(initialRoles.body.assignments.find((assignment: { userId: string; roleIds: string[] }) => assignment.userId === users[0].id)?.roleIds.includes(everyoneRole.id));
   assert.ok(initialRoles.body.assignments.find((assignment: { userId: string; roleIds: string[] }) => assignment.userId === users[1].id)?.roleIds.includes(everyoneRole.id));
   const hiddenMemberPermission = await request(a, `/v1/servers/${serverId}/roles/${everyoneRole.id}`, {
@@ -653,6 +911,8 @@ try {
     permissions: everyoneRole.permissions,
   }, "PATCH");
   assert.equal(restoredMemberPermission.status, 200, JSON.stringify(restoredMemberPermission.body));
+  const rejectedEveryoneSeparation = await request(a, `/v1/servers/${serverId}/roles/${everyoneRole.id}`, { separateMembers: true }, "PATCH");
+  assert.equal(rejectedEveryoneSeparation.status, 400, JSON.stringify(rejectedEveryoneSeparation.body));
   const restrictedRole = await request(a, `/v1/servers/${serverId}/roles`, {
     encryptedMetadata: "",
     color: "#e05a7a",
@@ -661,6 +921,10 @@ try {
     viewAllChannels: false,
   });
   assert.equal(restrictedRole.status, 201, JSON.stringify(restrictedRole.body));
+  assert.equal(restrictedRole.body.role.separateMembers, false, "new roles join members normally unless separation is enabled");
+  const separatedRestrictedRole = await request(a, `/v1/servers/${serverId}/roles/${restrictedRole.body.role.id}`, { separateMembers: true }, "PATCH");
+  assert.equal(separatedRestrictedRole.status, 200, JSON.stringify(separatedRestrictedRole.body));
+  assert.equal(separatedRestrictedRole.body.role.separateMembers, true);
   const extraChannel = await request(a, `/v1/servers/${serverId}/channels`, { encryptedMetadata: "" });
   assert.equal(extraChannel.status, 201, JSON.stringify(extraChannel.body));
   const assignedRole = await request(a, `/v1/servers/${serverId}/members/${users[1].id}/roles`, {
@@ -687,6 +951,48 @@ try {
   assert.equal(restoredChannel?.canSend, true);
   assert.equal(restoredChannel?.canUpload, true);
 
+  await b.goto(`${origin}/settings#local-data`);
+  const encryptedCacheStatus = b.locator("#message-cache-status");
+  await encryptedCacheStatus.waitFor({ timeout: 20_000 });
+  await b.waitForFunction(() => !document.querySelector("#message-cache-status")?.textContent?.includes("Checking"), undefined, { timeout: 20_000 });
+  const cacheStatusText = await encryptedCacheStatus.innerText();
+  const cachedMessageCount = Number(cacheStatusText.match(/([\d,]+) cached encrypted messages?/)?.[1]?.replaceAll(",", "") ?? 0);
+  assert.ok(cachedMessageCount > 0, `browser reports encrypted message cache usage: ${cacheStatusText}`);
+  b.once("dialog", (dialog) => { void dialog.accept(); });
+  await b.locator("#clear-message-cache-button").click();
+  await b.locator("#settings-status").filter({ hasText: "Cleared " }).waitFor({ timeout: 20_000 });
+  await b.waitForFunction(() => document.querySelector("#message-cache-status")?.textContent?.startsWith("0 cached encrypted messages"), undefined, { timeout: 20_000 });
+  await b.goto(bobChatUrl);
+  await b.locator("#message-input:enabled").waitFor({ timeout: 20_000 });
+  await send(a, b, "Cache-only cleanup kept local room keys working");
+  await b.locator(".message").filter({ hasText: "Cache-only cleanup kept local room keys working" }).waitFor({ timeout: 20_000 });
+
+  const removeReportedMessage = await request(operator, `/v1/instance-admin/reports/${submittedReportId}/remove-message`, {});
+  assert.equal(removeReportedMessage.status, 200, JSON.stringify(removeReportedMessage.body));
+  const historyAfterModeration = await request(a, `/v1/conversations/${room}/messages?limit=100`);
+  assert.equal(historyAfterModeration.body.messages.some((message: { id: string }) => message.id === bobAuthoredMessage.id), false);
+  const unauthorizedSuspension = await request(a, `/v1/instance-admin/users/${users[1].id}/suspend`, {});
+  assert.equal(unauthorizedSuspension.status, 401, "space owners cannot suspend accounts instance-wide");
+  const suspendedBob = await request(operator, `/v1/instance-admin/users/${users[1].id}/suspend`, {
+    reportId: submittedReportId,
+  });
+  assert.equal(suspendedBob.status, 200, JSON.stringify(suspendedBob.body));
+  const suspendedSession = await request(b, "/v1/me");
+  assert.equal(suspendedSession.status, 401, "account suspension revokes existing sessions");
+  const suspendedLogin = await request(b, "/v1/auth/login", {
+    username: "e2ee_bob", password: "Account-password-for-e2ee-test!",
+  });
+  assert.equal(suspendedLogin.status, 403);
+  assert.equal(suspendedLogin.body.error, "account_suspended");
+  const restoredBob = await request(operator, `/v1/instance-admin/users/${users[1].id}/suspension`, undefined, "DELETE");
+  assert.equal(restoredBob.status, 200, JSON.stringify(restoredBob.body));
+  const restoredLogin = await request(b, "/v1/auth/login", {
+    username: "e2ee_bob", password: "Account-password-for-e2ee-test!",
+  });
+  assert.equal(restoredLogin.status, 200, JSON.stringify(restoredLogin.body));
+  assert.equal((await request(operator, "/v1/instance-admin/auth/logout", {})).status, 200);
+  assert.equal((await request(operator, "/v1/instance-admin/auth/me")).status, 401, "operator logout revokes the separate admin session");
+
   const deletedConversation = await request(a, `/v1/conversations/${room}`, undefined, "DELETE");
   assert.equal(deletedConversation.status, 200, JSON.stringify(deletedConversation.body));
   const deletedServer = await request(a, `/v1/servers/${createdServer.body.server.id}`, undefined, "DELETE");
@@ -697,6 +1003,9 @@ try {
   await app.stop(true);
   closeRedis();
   await closeDatabase();
-  await admin.unsafe(`drop schema ${schema} cascade`);
-  await admin.close();
+  await closeAdminDatabase();
+  await appDatabaseAdmin.unsafe(`drop schema ${schema} cascade`);
+  await adminDatabaseAdmin.unsafe(`drop schema ${adminSchema} cascade`);
+  await appDatabaseAdmin.close();
+  await adminDatabaseAdmin.close();
 }

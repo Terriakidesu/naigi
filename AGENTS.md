@@ -2,9 +2,9 @@
 
 ## Commands
 
-- Copy `.env.example` to `.env`; local development needs PostgreSQL and Redis/Valkey. Run `bun run db:migrate` before `bun run dev`.
+- Copy `.env.example` to `.env`; local development needs the app and admin PostgreSQL databases plus Redis/Valkey. Run `bun run db:migrate` before `bun run dev`.
 - `bun run build:client` bundles `client/*.ts` and copies the HTML/CSS/WASM assets into ignored `public/`; edit `client/`, never generated `public/` files.
-- Verification commands are `bun run typecheck`, `bun test`, and `bun run test:e2ee`. The E2EE test builds the browser client, needs PostgreSQL/Redis and Playwright Chromium, and uses a temporary PostgreSQL schema.
+- Verification commands are `bun run typecheck`, `bun test`, and `bun run test:e2ee`. The E2EE test builds the browser client, needs PostgreSQL/Redis and Playwright Chromium, and uses temporary app/admin PostgreSQL schemas.
 - Run one unit-test file with `bun test path/to/file.test.ts`; `bun run db:purge -- --yes` is destructive local cleanup and must not be used against production.
 - When a change is ready and the user requests it, stage all intended source and documentation changes, run the verification commands, and create one descriptive git commit; do not commit generated ignored `public/` files.
 

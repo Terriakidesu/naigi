@@ -1,6 +1,6 @@
 import { forgetRememberedPassphrase } from "./unlock-vault";
 
-const databaseNames = ["naigi-message-cache", "priv-chat-message-outbox", "priv-chat-unlock-vault"];
+const databaseNames = ["naigi-message-cache", "priv-chat-message-outbox", "priv-chat-unlock-vault", "priv-chat-fcm-preferences"];
 
 function deleteDatabase(name: string) {
   if (!globalThis.indexedDB) return Promise.resolve(true);

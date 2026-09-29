@@ -31,9 +31,12 @@
   .settings-nav .eyebrow { grid-column: 1 / -1; margin-bottom: 0; }
   .server-settings-nav { grid-template-columns: repeat(4, 1fr); }
   .settings-nav-item { flex-direction: column; justify-content: center; padding: 0.55rem 0.2rem; text-align: center; }
-  .settings-sidebar .settings-nav { grid-template-columns: 1fr; }
+  .settings-sidebar .settings-nav { display: flex; flex-direction: column; }
+  .settings-sidebar .settings-nav-group { display: grid; grid-template-columns: 1fr; }
   .settings-sidebar .settings-nav-item { flex-direction: row; justify-content: flex-start; padding: 0.65rem 0.6rem; text-align: left; }
   .settings-section { scroll-margin-top: 7rem; }
+  .account-settings-page .settings-main-content { padding-right: 1.5rem; padding-left: 1.5rem; }
+  .settings-preference-row { grid-template-columns: minmax(130px, 0.8fr) minmax(170px, 1fr); gap: 1rem; }
   .server-branding-card { align-items: flex-start; flex-wrap: wrap; }
   .server-branding-copy { flex: 1 1 180px; }
 }
@@ -53,8 +56,17 @@
   .channel-settings-row .position-input { flex: 0 0 62px !important; }
   .compact-connection-status .status { display: none; }
   .compact-connection-status { margin-right: 0; }
-  .profile-card { align-items: flex-start; flex-wrap: wrap; }
-  .profile-image-actions { width: 100%; justify-content: flex-start; margin-left: 3.4rem; }
+  .profile-card { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; gap: 0.75rem; padding: 0 0.6rem; }
+  .large-avatar { width: 80px; height: 80px; border-radius: 21px; }
+  .profile-card-copy { padding: 0; }
+  .profile-image-actions { grid-column: 2; justify-content: flex-start; padding: 0; }
+  .settings-form-actions { align-items: flex-start; flex-direction: column; }
+  .settings-form-actions > div { justify-content: flex-end; width: 100%; }
+  .settings-preference-row { grid-template-columns: 1fr; gap: 0.55rem; }
+  .settings-preference-row select { justify-self: stretch; width: 100%; }
+  .settings-preference-row input[type="color"] { justify-self: start; }
+  .settings-preference-row > .app-scale-control { width: 100%; }
+  .app-quiet-hours { margin-left: 0; }
 }
 
 @media (max-width: 480px) {
@@ -62,6 +74,7 @@
   .connection-status { display: none; }
   .chat-actions .connection-status { display: flex; }
   .auth-panel { padding: 1.5rem; }
+  .account-settings-page .settings-main-content { padding-right: 1rem; padding-left: 1rem; }
   .settings-section { padding: 1rem; }
   .topbar-links { gap: 0.65rem; }
 }

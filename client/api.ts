@@ -138,6 +138,7 @@ export type CustomServerRole = {
   position: number;
   permissions: ServerPermissionMap;
   mentionable: boolean;
+  separateMembers: boolean;
   viewAllChannels: boolean;
   isSystem: boolean;
   systemKey: "owner" | "admin" | "everyone" | "member" | null;
@@ -168,6 +169,36 @@ export type ServerModeration = {
     expiresAt: string;
     createdAt: string;
   }>;
+};
+
+export type UserReportReason = "spam" | "harassment" | "threats" | "sexual_content" | "illegal_content" | "impersonation" | "other";
+
+export type InstanceReportSummary = {
+  id: string;
+  reporterUserId: string | null;
+  reporterUsername: string | null;
+  reporterDisplayName: string | null;
+  targetUserId: string | null;
+  targetUsername: string | null;
+  targetDisplayName: string | null;
+  conversationId: string | null;
+  messageId: string | null;
+  reason: UserReportReason;
+  status: "open" | "reviewing" | "resolved" | "dismissed";
+  hasEvidence: boolean;
+  createdAt: string;
+  reviewedAt: string | null;
+  suspended: boolean;
+};
+
+export type InstanceReport = Omit<InstanceReportSummary, "hasEvidence" | "suspended"> & {
+  reviewedBy: string | null;
+  evidence: {
+    keyId: string;
+    ciphertext: string;
+    wrappedKey: string;
+    iv: string;
+  } | null;
 };
 
 export type ServerCustomEmoji = {
@@ -479,8 +510,120 @@ export class ApiClient {
     return this.get<{ devices: Device[] }>("/v1/devices");
   }
 
+  firebaseMessagingConfig() {
+    return this.get<{
+      configured: boolean;
+      firebaseConfig?: {
+        apiKey: string;
+        appId: string;
+        messagingSenderId: string;
+        projectId: string;
+        authDomain?: string;
+      };
+      vapidKey?: string;
+    }>("/v1/push/config");
+  }
+
+  registerPushToken(token: string) {
+    return this.post<{ registered: boolean }>("/v1/push/subscriptions", { token });
+  }
+
+  removePushToken(token: string) {
+    return this.post<{ removed: boolean }>("/v1/push/subscriptions/remove", { token });
+  }
+
   user(userId: string) {
-    return this.get<{ user: User }>(`/v1/users/${encodeURIComponent(userId)}`);
+    return this.get<{ user: User; blockedByMe: boolean }>(`/v1/users/${encodeURIComponent(userId)}`);
+  }
+
+  blockedUsers() {
+    return this.get<{ users: Array<Pick<User, "id" | "username" | "displayName" | "avatarUrl">> }>("/v1/users/blocked");
+  }
+
+  blockUser(userId: string) {
+    return this.post<{ blocked: boolean }>(`/v1/users/${encodeURIComponent(userId)}/block`, {});
+  }
+
+  unblockUser(userId: string) {
+    return this.delete<{ unblocked: boolean }>(`/v1/users/${encodeURIComponent(userId)}/block`);
+  }
+
+  reportUser(body: {
+    targetUserId: string;
+    reason: UserReportReason;
+    conversationId?: string;
+    messageId?: string;
+    encryptedEvidence?: { keyId: string; ciphertext: string; wrappedKey: string; iv: string };
+  }) {
+    return this.post<{ report: { id: string; submitted: boolean } }>("/v1/reports", body);
+  }
+
+  reportPublicKey() {
+    return this.get<{ configured: false } | { configured: true; keyId: string; publicKey: string }>("/v1/reports/public-key");
+  }
+
+  instanceReports(status: "all" | "open" | "reviewing" | "resolved" | "dismissed" = "open") {
+    return this.get<{ reports: InstanceReportSummary[] }>(`/v1/instance-admin/reports?status=${status}`);
+  }
+
+  adminLogin(username: string, password: string) {
+    return this.post<{ operator: { id: string; username: string } }>("/v1/instance-admin/auth/login", {
+      username,
+      password,
+    });
+  }
+
+  adminMe() {
+    return this.get<{ operator: { id: string; username: string } }>("/v1/instance-admin/auth/me");
+  }
+
+  adminLogout() {
+    return this.post<{ loggedOut: boolean }>("/v1/instance-admin/auth/logout", {});
+  }
+
+  instanceReport(reportId: string) {
+    return this.get<{ report: InstanceReport }>(`/v1/instance-admin/reports/${encodeURIComponent(reportId)}`);
+  }
+
+  updateInstanceReport(reportId: string, status: InstanceReport["status"]) {
+    return this.patch<{ updated: boolean }>(`/v1/instance-admin/reports/${encodeURIComponent(reportId)}`, { status });
+  }
+
+  removeReportedMessage(reportId: string) {
+    return this.post<{ removed: boolean }>(`/v1/instance-admin/reports/${encodeURIComponent(reportId)}/remove-message`, {});
+  }
+
+  auditReportEvidence(reportId: string) {
+    return this.post<{ audited: boolean }>(`/v1/instance-admin/reports/${encodeURIComponent(reportId)}/evidence-access`, {});
+  }
+
+  suspendInstanceUser(userId: string, reportId?: string) {
+    return this.post<{ suspended: boolean }>(`/v1/instance-admin/users/${encodeURIComponent(userId)}/suspend`, { ...(reportId ? { reportId } : {}) });
+  }
+
+  restoreInstanceUser(userId: string) {
+    return this.delete<{ restored: boolean }>(`/v1/instance-admin/users/${encodeURIComponent(userId)}/suspension`);
+  }
+
+  instanceReportKeys() {
+    return this.get<{ keys: Array<{ id: string; active: boolean; createdAt: string }> }>("/v1/instance-admin/report-keys");
+  }
+
+  createInstanceReportKey(keyId: string, publicKey: string) {
+    return this.post<{ key: { id: string; createdAt: string } }>("/v1/instance-admin/report-keys", { keyId, publicKey });
+  }
+
+  instanceAdminAudit() {
+    return this.get<{ logs: Array<{
+      id: string;
+      adminUserId: string;
+      adminUsername: string;
+      adminDisplayName: string;
+      action: string;
+      reportId: string | null;
+      targetUserId: string | null;
+      createdAt: string;
+    }> }>("/v1/instance-admin/audit?limit=200");
   }
 
   revokeDevice(deviceId: string) {
@@ -526,6 +669,7 @@ export class ApiClient {
     position?: number;
     permissions?: Partial<ServerPermissionMap>;
     mentionable?: boolean;
+    separateMembers?: boolean;
     viewAllChannels?: boolean;
   }) {
     return this.post<{ role: CustomServerRole }>(`/v1/servers/${serverId}/roles`, body);
@@ -537,6 +681,7 @@ export class ApiClient {
     position?: number;
     permissions?: Partial<ServerPermissionMap>;
     mentionable?: boolean;
+    separateMembers?: boolean;
     viewAllChannels?: boolean;
   }) {
     return this.patch<{ role: CustomServerRole }>(`/v1/servers/${serverId}/roles/${roleId}`, body);

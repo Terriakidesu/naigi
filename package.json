@@ -9,12 +9,14 @@
     "build:client": "bun run scripts/build-client.ts",
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "db:migrate": "bun run src/db/migrate.ts",
+    "db:migrate": "bun run src/migrate.ts",
+    "admin-users": "bun run scripts/admin-users.ts",
     "db:purge": "bun run scripts/purge-db.ts"
   },
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-wasm": "^18.9.0",
     "elysia": "latest",
+    "firebase": "^12.19.0",
     "gifenc": "^1.0.3",
     "gifuct-js": "^2.1.2",
     "lucide": "^1.48.0"

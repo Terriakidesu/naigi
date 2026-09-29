@@ -6,19 +6,36 @@
 
 - The composer accepts pasted clipboard images and sends them through the existing encrypted attachment flow.
 - The GIF picker opens with trending Klipy or GIPHY results and supports search; selected GIFs are added as encrypted attachments, and pasted Tenor, Klipy, and GIPHY links can render safe provider previews.
+- Desktop notifications can be limited to verified direct or role mentions and suppressed during browser-local quiet hours; notification copy remains generic and never contains decrypted message content.
+- Optional Firebase Cloud Messaging can deliver generic background alerts for users who enable “All new messages”; mention filtering and quiet hours remain browser-local.
+- Encrypted images and videos can be set to load on request, message text size can be adjusted independently in pixels, and the encrypted message cache can be inspected and cleared without affecting keys or queued messages.
+- Roles can opt into separate member-list groups; members with multiple separated roles appear under the highest-priority one, while other members remain under All members.
+- Users can report accounts or messages to the installation host, optionally sharing reporter-supplied evidence encrypted to a host-managed public key.
+- Users can block and unblock accounts to prevent direct conversations in either direction; account settings include a blocked-users list.
+- Host operators have an instance-wide report queue with encrypted-evidence review, message removal, account suspension/restoration, and an audit log.
 
 ### Changed
 
+- Host moderation now uses host-only identities and sessions in a separate admin database instead of `INSTANCE_ADMIN_USER_IDS` and chat-account sessions. Configure `ADMIN_DATABASE_URL`, run migrations, and provision operators with `bun run admin-users`.
 - Message actions now use a compact Discord-style hover pill above the message edge instead of taking an in-flow divider row.
-- Account settings now use the workspace rail, sidebar, header, and mobile drawer visual shell used by chat.
+- Account settings use the shared sidebar, header, and mobile drawer shell without the redundant workspace rail.
 - External destinations now use a polished confirmation dialog with the full URL and explicit Cancel/Open actions.
 - Text attachments now show compact, scrollable inline previews with character counts and a single expand-to-view action.
 - Recognized plaintext code attachments now receive safe client-side syntax highlighting in both inline and expanded previews.
 - Files can be dragged into the chat area and are queued through the existing encrypted attachment flow.
 - The jump-to-latest control now uses responsive show/hide thresholds to avoid appearing on short scrolls or flickering near its boundary; unread and mention counts remain available when it appears.
+- Spoiler images and videos now show a heavily blurred preview that preserves their intrinsic aspect ratio and dimensions until revealed.
+- The conversation privacy shield is vertically centered beside its explanatory text.
+- The interface scale slider now has labeled ticks; message text size uses a pixel-based slider with labeled ticks.
+- Account settings now use an open, card-free layout with grouped navigation, clear section hierarchy, a redesigned profile preview, and preference rows; Profile and App show save or discard actions only when there are unsaved changes.
+- Profile popups now present the cover, avatar, account name, handle, join date, and an in-context edit action in a more complete profile layout.
+- The rooms sidebar now uses clearer room and category icons, category counts, visible unread states, and browser-local mute indicators.
+- App preferences now include a live chat preview that reflects the selected interface scale and message text size.
+- Leaving App preferences with unsaved changes now offers Save, Discard, or Stay choices.
 
 ### Fixed
 
+- Muted text, role-colored labels, message text, and avatar initials now remain readable across themes and custom accent colors.
 - Encrypted media download controls now stay positioned over the displayed image or video instead of the wider attachment card.
 - Tenor short `.gif` links now load as images instead of being placed in iframes that Tenor blocks; unavailable links leave a clear open-on-Tenor fallback.
 - Direct image URLs are hidden when rendered as embeds; images align with message text and open in a screen-fitted viewer without external-link confirmation.
@@ -27,6 +44,10 @@
 ### Security
 
 - GIF search terms and GIF downloads go directly between the browser and configured providers, while Naigi stores only the resulting encrypted attachment and encrypted preview metadata. The retired Tenor API is not called.
+- FCM receives only a data-only generic event; message content, room IDs, sender identity, and mention data are not sent to Firebase.
+- Reports never include decrypted message content unless the reporter explicitly opts in; the browser encrypts shared evidence to a host public key, and the server cannot decrypt it.
+- Host operators now use identities and sessions stored in a separate admin database; chat accounts and space roles cannot grant instance-wide moderation access.
+- Blocking suppresses direct-message history and realtime access without changing shared-space access.
 
 ## [0.16.0] - 2026-09-28
 

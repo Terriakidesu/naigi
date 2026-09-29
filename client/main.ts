@@ -16,9 +16,11 @@ import {
 } from "./api";
 import { CryptoClient, LocalCryptoStoreError, MAX_MESSAGE_TEXT_LENGTH, type DecryptedMessage, type ReplyReference } from "./crypto";
 import { roomKeyUnavailable } from "./decryption";
+import { synchronizeFcmPush } from "./push-notifications";
+import { encryptReportEvidence } from "./report-evidence";
 import { appendSafeEmbed, extractEmbeds, normalizeStoredEmbeds, prepareEmbeds, type SafeEmbed } from "./embeds";
 import { gifProviderLabel, loadGifProviderConfiguration, searchGifs, trendingGifs, type GifSearchResult } from "./gifs";
-import { applyAppPreferences, defaultAppPreferences, loadAppPreferences, type AppPreferences } from "./app-preferences";
+import { applyAppPreferences, defaultAppPreferences, loadAppPreferences, readableAccentText, saveAppPreferences, shouldNotifyAppMessage, type AppPreferences } from "./app-preferences";
 import {
   emojiEntryAt,
   emojiShortcodeMatches,
@@ -34,6 +36,7 @@ import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from ".
 import { isEmojiOnlyMessage } from "./message-format";
 import { renderHighlightedCode } from "./code-highlight";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
+import { highestSeparatedRole } from "./member-roles";
 import { canReconcileLatestMessagePage } from "./message-window";
 import { roomReferenceSlug, roomReferenceToken } from "./room-reference";
 import { isPlaintextAttachment, readTextPreview, textLanguage, textPreviewExcerpt } from "./text-file";
@@ -44,6 +47,11 @@ import { askText, showOneTimeToken } from "./ui-dialog";
 const api = new ApiClient();
 let currentUser: User | undefined;
 let appPreferences: AppPreferences = { ...defaultAppPreferences };
+
+function setRoleTextColor(element: HTMLElement, color: string) {
+  element.style.setProperty("--role-color", color);
+  element.style.setProperty("--role-text-color", readableAccentText(color, appPreferences.theme));
+}
 let cryptoClient: CryptoClient | undefined;
 let selectedConversationId: string | undefined;
 let selectedMembers: ConversationMember[] = [];
@@ -277,6 +285,7 @@ const messagesPanel = byId<HTMLElement>("messages");
 const memberList = byId<HTMLElement>("member-list");
 const serverList = byId<HTMLElement>("server-list");
 const channelSectionHeading = byId<HTMLElement>("channel-section-heading");
+const channelSectionCount = byId<HTMLElement>("channel-section-count");
 const channelList = byId<HTMLElement>("channel-list");
 const directMessagesHeading = byId<HTMLElement>("direct-messages-heading");
 const createConversationButton = byId<HTMLAnchorElement>("create-conversation-button");
@@ -363,11 +372,16 @@ const profileModalBanner = byId<HTMLElement>("profile-modal-banner");
 const profileModalAvatar = byId<HTMLElement>("profile-modal-avatar");
 const profileModalName = byId<HTMLElement>("profile-modal-name");
 const profileModalUsername = byId<HTMLElement>("profile-modal-username");
-const profileModalCreated = byId<HTMLElement>("profile-modal-created");
+const profileModalCreated = byId<HTMLTimeElement>("profile-modal-created");
 const profileModalEdit = byId<HTMLAnchorElement>("profile-modal-edit");
+const profileModalSafetyActions = byId<HTMLElement>("profile-modal-safety-actions");
+const profileModalReport = byId<HTMLButtonElement>("profile-modal-report");
+const profileModalBlock = byId<HTMLButtonElement>("profile-modal-block");
 const messageContextMenu = byId<HTMLElement>("message-context-menu");
 const navigationContextMenu = byId<HTMLElement>("navigation-context-menu");
 let profileRequest = 0;
+let profileModalUserId: string | undefined;
+let profileModalUserBlocked = false;
 let modalReturnFocus: HTMLElement | null = null;
 let activeSuggestionIndex = -1;
 let composerAttachments: ComposerAttachment[] = [];
@@ -392,25 +406,12 @@ function notificationsSupported() {
   return typeof Notification !== "undefined";
 }
 
-function notificationStorageKey() {
-  return currentUser ? `priv-chat.notifications.${currentUser.id}` : "priv-chat.notifications";
-}
-
 function externalPreviewsEnabled() {
   return appPreferences.externalPreviews;
 }
 
 function prepareAppEmbeds(text: string) {
   return externalPreviewsEnabled() ? prepareEmbeds(text) : Promise.resolve<SafeEmbed[]>([]);
-}
-
-function saveNotificationPreference() {
-  try {
-    if (notificationsEnabled) localStorage.setItem(notificationStorageKey(), "enabled");
-    else localStorage.removeItem(notificationStorageKey());
-  } catch {
-    // Notification preference is optional and never blocks chat startup.
-  }
 }
 
 function updateNotificationToggle() {
@@ -427,13 +428,9 @@ function updateNotificationToggle() {
 }
 
 function loadNotificationPreference() {
-  let enabled = false;
-  try {
-    enabled = localStorage.getItem(notificationStorageKey()) === "enabled";
-  } catch {
-    // Continue with notifications disabled.
-  }
-  notificationsEnabled = enabled && notificationsSupported() && Notification.permission === "granted";
+  notificationsEnabled = appPreferences.notificationMode !== "off"
+    && notificationsSupported()
+    && Notification.permission === "granted";
   updateNotificationToggle();
 }
 
@@ -443,8 +440,9 @@ async function toggleNotifications() {
     return;
   }
   if (notificationsEnabled) {
+    appPreferences = saveAppPreferences(currentUser?.id, { ...appPreferences, notificationMode: "off" });
     notificationsEnabled = false;
-    saveNotificationPreference();
+    if (currentUser) void synchronizeFcmPush(api, currentUser.id, appPreferences);
     updateNotificationToggle();
     setStatus("Desktop notifications disabled.");
     return;
@@ -456,13 +454,53 @@ async function toggleNotifications() {
   try {
     const permission = await Notification.requestPermission();
     notificationsEnabled = permission === "granted";
-    saveNotificationPreference();
+    if (notificationsEnabled) {
+      const notificationMode = appPreferences.notificationMode === "off" ? "all" : appPreferences.notificationMode;
+      appPreferences = saveAppPreferences(currentUser?.id, { ...appPreferences, notificationMode });
+      if (currentUser) void synchronizeFcmPush(api, currentUser.id, appPreferences);
+    }
     updateNotificationToggle();
     setStatus(notificationsEnabled ? "Desktop notifications enabled." : "Desktop notifications were not enabled.", !notificationsEnabled);
   } catch {
     notificationsEnabled = false;
     updateNotificationToggle();
     setStatus("Unable to request desktop notification permission.", true);
+  }
+}
+
+async function notifyIfEncryptedMessageMentionsCurrentUser(conversationId: string, messageId: string, serverSequence: string) {
+  const activeCryptoClient = cryptoClient;
+  const user = currentUser;
+  if (!activeCryptoClient || !user || appPreferences.notificationMode !== "mentions" || !notificationsEnabled) return;
+  try {
+    const sequence = BigInt(serverSequence);
+    if (sequence < 1n) return;
+    const page = await api.messages(conversationId, { after: String(sequence - 1n), limit: 1 });
+    if (activeCryptoClient !== cryptoClient || !page.messages.some((message) => message.id === messageId)) return;
+    const message = page.messages.find((candidate) => candidate.id === messageId)!;
+    const [result] = await activeCryptoClient.decryptMessages(conversationId, [message]);
+    if (!result || !("decrypted" in result) || activeCryptoClient !== cryptoClient) return;
+    const content = result.decrypted.content;
+    const mentions = Array.isArray(content.mentions) ? content.mentions.filter((value): value is string => typeof value === "string") : [];
+    const roleMentions = Array.isArray(content.roleMentions) ? content.roleMentions.filter((value): value is string => typeof value === "string") : [];
+    let isMention = mentions.includes(user.id);
+    if (!isMention && roleMentions.length > 0) {
+      const serverEntry = [...channelsByServer.entries()].find(([, serverChannels]) => serverChannels.some((channel) => channel.conversationId === conversationId));
+      if (serverEntry) {
+        const [serverId] = serverEntry;
+        const [membersResult, rolesResult] = await Promise.all([
+          api.conversationMembers(conversationId),
+          api.serverRoles(serverId),
+        ]);
+        if (activeCryptoClient !== cryptoClient) return;
+        const ownRoleIds = normalizeRoleIds(membersResult.members.find((member) => member.userId === user.id)?.roleIds);
+        isMention = roleMentions.some((roleId) => ownRoleIds.includes(roleId)
+          && rolesResult.roles.find((role) => role.id === roleId)?.systemKey !== "owner");
+      }
+    }
+    if (isMention) notifyNewMessage(conversationId, messageId, true, true);
+  } catch {
+    // Mention checks are best effort; ciphertext and plaintext remain client-only.
   }
 }
 
@@ -477,8 +515,9 @@ function rememberBounded(set: Set<string>, value: string, limit = 2_000) {
   return true;
 }
 
-function notifyNewMessage(conversationId: string, messageId?: string, force = false) {
+function notifyNewMessage(conversationId: string, messageId?: string, force = false, isMention = false) {
   if (!notificationsSupported() || !notificationsEnabled || Notification.permission !== "granted") return;
+  if (!shouldNotifyAppMessage(appPreferences, isMention)) return;
   const muted = [...channelsByServer.values()].some((serverChannels) => serverChannels.some((channel) => channel.conversationId === conversationId && mutedChannelIds.has(channel.id)));
   if (muted) return;
   if (messageId && notifiedRealtimeMessageIds.has(messageId)) return;
@@ -1076,6 +1115,14 @@ function openMessageContextMenu(target: ContextMessage, x: number, y: number) {
       setStatus("Unable to copy the message link.", true);
     }
   }, { icon: "link" });
+  if (target.message.senderUserId && target.message.senderUserId !== currentUser?.id) {
+    contextMenuAction("Report message", () => openReportDialog({
+      targetUserId: target.message.senderUserId!,
+      conversationId: target.message.conversationId,
+      messageId: target.message.id,
+      defaultEvidenceText: target.body,
+    }), { danger: true, icon: "gavel" });
+  }
   contextMenuAction("Mark unread from here", () => markUnreadFromMessage(target.message), { icon: "clock" });
   if (!selectedServerId || hasActiveServerPermission("pin_messages")) {
     contextMenuAction(pinnedMessageIds.has(target.message.id) ? "Unpin message" : "Pin message", () => togglePin(target.message.id), { icon: "pin" });
@@ -1326,11 +1373,171 @@ function closeProfileModal() {
   hideDialog(profileModal);
 }
 
+type ReportDialogTarget = {
+  targetUserId: string;
+  conversationId?: string;
+  messageId?: string;
+  defaultEvidenceText?: string;
+};
+
+function openReportDialog(target: ReportDialogTarget) {
+  const dialog = document.createElement("dialog");
+  dialog.className = "app-dialog report-dialog";
+  dialog.setAttribute("aria-labelledby", "report-dialog-title");
+  const title = document.createElement("h2");
+  title.id = "report-dialog-title";
+  title.textContent = target.messageId ? "Report message" : "Report user";
+  const explanation = document.createElement("p");
+  explanation.className = "muted";
+  explanation.textContent = "Reports are reviewed by the host operator. Message content is never included unless you choose to share an encrypted copy.";
+
+  const reasonLabel = document.createElement("label");
+  reasonLabel.textContent = "Reason";
+  const reason = document.createElement("select");
+  for (const [value, label] of [
+    ["spam", "Spam or scams"],
+    ["harassment", "Harassment or bullying"],
+    ["threats", "Threats or violence"],
+    ["sexual_content", "Sexual content"],
+    ["illegal_content", "Illegal content"],
+    ["impersonation", "Impersonation"],
+    ["other", "Other concern"],
+  ]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    reason.append(option);
+  }
+  reasonLabel.append(reason);
+
+  const evidenceLabel = document.createElement("label");
+  evidenceLabel.textContent = target.messageId ? "Evidence text (optional)" : "Details for the host (optional)";
+  const evidenceText = document.createElement("textarea");
+  evidenceText.rows = 5;
+  evidenceText.maxLength = 20_000;
+  evidenceText.value = target.defaultEvidenceText ?? "";
+  evidenceText.placeholder = "Add only details you want the instance operator to see.";
+  evidenceLabel.append(evidenceText);
+
+  const shareRow = document.createElement("label");
+  shareRow.className = "checkbox-label report-evidence-choice";
+  const shareEvidence = document.createElement("input");
+  shareEvidence.type = "checkbox";
+  shareEvidence.checked = false;
+  shareEvidence.disabled = true;
+  const shareText = document.createElement("span");
+  shareText.textContent = "Share this evidence encrypted to the host operator";
+  shareRow.append(shareEvidence, shareText);
+
+  const keyInfo = document.createElement("p");
+  keyInfo.className = "muted small";
+  keyInfo.textContent = "Checking whether this installation has an evidence encryption key…";
+  const status = document.createElement("p");
+  status.className = "form-status";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  const actions = document.createElement("div");
+  actions.className = "app-dialog-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary";
+  cancel.textContent = "Cancel";
+  const submit = document.createElement("button");
+  submit.type = "button";
+  submit.textContent = "Submit report";
+  actions.append(cancel, submit);
+  dialog.append(title, explanation, reasonLabel, evidenceLabel, shareRow, keyInfo, status, actions);
+  document.body.append(dialog);
+
+  let reportKey: { keyId: string; publicKey: string } | undefined;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    dialog.close();
+    dialog.remove();
+  };
+  cancel.addEventListener("click", close);
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    close();
+  });
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  shareEvidence.addEventListener("change", () => {
+    evidenceText.disabled = !reportKey || !shareEvidence.checked;
+  });
+  evidenceText.disabled = true;
+
+  void api.reportPublicKey().then((result) => {
+    if (closed) return;
+    if (result.configured) {
+      reportKey = { keyId: result.keyId, publicKey: result.publicKey };
+      keyInfo.textContent = "If selected, this reporter-submitted evidence is encrypted in your browser. Only an instance operator holding the matching private key can decrypt it; its accuracy is not independently verified.";
+      shareEvidence.disabled = false;
+      evidenceText.disabled = !shareEvidence.checked;
+    } else {
+      keyInfo.textContent = "The host has not configured an evidence key. You can still submit this report without sharing text.";
+      shareEvidence.disabled = true;
+      evidenceText.disabled = true;
+    }
+  }).catch(() => {
+    if (closed) return;
+    keyInfo.textContent = "Unable to load the host evidence key. Submit without sharing text or try again later.";
+    shareEvidence.disabled = true;
+  });
+
+  submit.addEventListener("click", async () => {
+    submit.disabled = true;
+    cancel.disabled = true;
+    status.textContent = "Submitting report…";
+    try {
+      let encryptedEvidence: { keyId: string; ciphertext: string; wrappedKey: string; iv: string } | undefined;
+      if (shareEvidence.checked) {
+        if (!reportKey) throw new Error("Report evidence encryption is not configured.");
+        encryptedEvidence = await encryptReportEvidence(reportKey.publicKey, reportKey.keyId, {
+          source: "reporter-submitted-text",
+          text: evidenceText.value,
+        });
+      }
+      await api.reportUser({
+        targetUserId: target.targetUserId,
+        reason: reason.value as import("./api").UserReportReason,
+        ...(target.conversationId ? { conversationId: target.conversationId } : {}),
+        ...(target.messageId ? { messageId: target.messageId } : {}),
+        ...(encryptedEvidence ? { encryptedEvidence } : {}),
+      });
+      close();
+      setStatus("Report submitted to the host operator.");
+    } catch (error) {
+      status.textContent = error instanceof ApiError && error.code === "report_already_submitted"
+        ? "You already have an open report for this message."
+        : error instanceof ApiError && error.code === "report_rate_limited"
+          ? "You’ve submitted several reports recently. Please try again later."
+          : error instanceof Error ? error.message : "Unable to submit this report.";
+      submit.disabled = false;
+      cancel.disabled = false;
+    }
+  });
+
+  dialog.showModal();
+  reason.focus();
+}
+
+function updateProfileSafetyButtons() {
+  const visible = Boolean(profileModalUserId && profileModalUserId !== currentUser?.id);
+  profileModalSafetyActions.hidden = !visible;
+  profileModalBlock.textContent = profileModalUserBlocked ? "Unblock user" : "Block user";
+}
+
 async function openUserProfile(userId: string) {
   const request = ++profileRequest;
+  profileModalUserId = userId;
+  profileModalUserBlocked = false;
+  updateProfileSafetyButtons();
   profileModalName.textContent = "Loading profile…";
   profileModalUsername.textContent = "";
   profileModalCreated.textContent = "";
+  profileModalCreated.dateTime = "";
   profileModalBanner.replaceChildren();
   profileModalBanner.dataset.empty = "true";
   renderAvatar(profileModalAvatar, "?", userId, null);
@@ -1340,6 +1547,8 @@ async function openUserProfile(userId: string) {
     const result = await api.user(userId);
     if (request !== profileRequest || profileModal.hidden) return;
     const user = result.user;
+    profileModalUserBlocked = result.blockedByMe;
+    updateProfileSafetyButtons();
     profileModalBanner.replaceChildren();
     if (user.bannerUrl) {
       const banner = document.createElement("img");
@@ -1353,7 +1562,14 @@ async function openUserProfile(userId: string) {
     renderAvatar(profileModalAvatar, user.displayName, user.id, user.avatarUrl, user.displayName);
     profileModalName.textContent = user.displayName;
     profileModalUsername.textContent = `@${user.username}`;
-    profileModalCreated.textContent = `Joined ${new Date(user.createdAt).toLocaleDateString()}`;
+    const createdAt = new Date(user.createdAt);
+    if (Number.isNaN(createdAt.getTime())) {
+      profileModalCreated.textContent = "Date unavailable";
+      profileModalCreated.dateTime = "";
+    } else {
+      profileModalCreated.dateTime = createdAt.toISOString();
+      profileModalCreated.textContent = createdAt.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+    }
     profileModalEdit.hidden = user.id !== currentUser?.id;
   } catch (error) {
     if (request !== profileRequest || profileModal.hidden) return;
@@ -1361,6 +1577,35 @@ async function openUserProfile(userId: string) {
     profileModalUsername.textContent = readableError(error);
   }
 }
+
+profileModalReport.addEventListener("click", () => {
+  if (profileModalUserId && profileModalUserId !== currentUser?.id) {
+    openReportDialog({ targetUserId: profileModalUserId });
+  }
+});
+
+profileModalBlock.addEventListener("click", async () => {
+  const userId = profileModalUserId;
+  if (!userId || userId === currentUser?.id) return;
+  const wasBlocked = profileModalUserBlocked;
+  if (!wasBlocked && !window.confirm("Block this user from direct conversations? Shared-space access and messages will not change.")) return;
+  profileModalBlock.disabled = true;
+  try {
+    if (wasBlocked) await api.unblockUser(userId);
+    else await api.blockUser(userId);
+    profileModalUserBlocked = !wasBlocked;
+    updateProfileSafetyButtons();
+    if (!wasBlocked && !selectedServerId && selectedMembers.some((member) => member.userId === userId)) {
+      window.location.assign("/app");
+      return;
+    }
+    setStatus(wasBlocked ? "User unblocked." : "User blocked from direct conversations.");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Unable to update this block.", true);
+  } finally {
+    profileModalBlock.disabled = false;
+  }
+});
 
 mediaViewerZoom.addEventListener("input", () => {
   setMediaZoom(Number(mediaViewerZoom.value));
@@ -2492,6 +2737,7 @@ async function startCrypto() {
   loadUnreadMarkers();
   loadMutedChannels();
   loadNotificationPreference();
+  void synchronizeFcmPush(api, currentUser.id, appPreferences);
   optimisticDecryptedMessages.clear();
   decryptedMessageCache.clear();
   await cryptoClient?.close();
@@ -2608,6 +2854,9 @@ function connectRealtime() {
           void refreshMessages().catch((error) => setStatus(readableError(error), true));
         } else {
           markConversationUnread(payload.conversationId, payload.serverSequence);
+          if (payload.messageId && payload.serverSequence && appPreferences.notificationMode === "mentions") {
+            void notifyIfEncryptedMessageMentionsCurrentUser(payload.conversationId, payload.messageId, payload.serverSequence);
+          }
         }
         notifyNewMessage(payload.conversationId, payload.messageId);
       }
@@ -2835,6 +3084,9 @@ function renderChannels() {
   channelList.hidden = !selectedServerId;
   channelList.replaceChildren();
   if (!selectedServerId) return;
+  channelSectionCount.textContent = conversationSearchQuery.trim()
+    ? `${visible.length} of ${channels.length}`
+    : `${channels.length} ${channels.length === 1 ? "room" : "rooms"}`;
 
   if (visible.length === 0) {
     const empty = document.createElement("span");
@@ -2856,20 +3108,33 @@ function renderChannels() {
     button.className = "channel-item";
     button.type = "button";
     button.dataset.channelId = channel.id;
-    button.dataset.muted = String(mutedChannelIds.has(channel.id));
+    const unread = unreadMarkers.get(channel.conversationId)?.count ?? 0;
+    button.dataset.unread = String(unread > 0);
     button.classList.toggle("selected", channel.id === selectedChannelId);
     button.setAttribute("aria-pressed", String(channel.id === selectedChannelId));
+    if (channel.id === selectedChannelId) button.setAttribute("aria-current", "page");
+    const channelName = channelDisplayName(channel);
+    const muted = mutedChannelIds.has(channel.id);
+    button.title = [channelName, muted ? "Muted on this browser" : "", unread > 0 ? `${unread} unread` : ""].filter(Boolean).join(" · ");
+    button.setAttribute("aria-label", [channelName, muted ? "muted on this browser" : "", unread > 0 ? `${unread} unread messages` : ""].filter(Boolean).join(", "));
     const icon = document.createElement("span");
     icon.className = "channel-item-icon";
-    icon.append(iconElement("message-square"));
+    icon.append(iconElement("hash"));
     const name = document.createElement("span");
     name.className = "channel-item-name";
-    name.textContent = channelDisplayName(channel);
+    name.textContent = channelName;
     button.append(icon, name);
-    const unread = unreadMarkers.get(channel.conversationId)?.count ?? 0;
+    if (muted) {
+      const muteIndicator = document.createElement("span");
+      muteIndicator.className = "channel-muted-indicator";
+      muteIndicator.title = "Muted on this browser";
+      muteIndicator.setAttribute("aria-label", "Muted on this browser");
+      muteIndicator.append(iconElement("bell-off"));
+      button.append(muteIndicator);
+    }
     if (unread > 0) {
       const badge = document.createElement("span");
-      badge.className = "unread-badge";
+      badge.className = "unread-badge channel-unread-count";
       badge.textContent = unread > 99 ? "99+" : String(unread);
       badge.setAttribute("aria-label", `${unread} unread message${unread === 1 ? "" : "s"}`);
       button.append(badge);
@@ -2890,36 +3155,62 @@ function renderChannels() {
   };
 
   const appendCategory = (category: ServerCategory | null, categoryChannels: ServerChannel[]) => {
-    const heading = document.createElement("button");
+    if (categoryChannels.length === 0) return;
+    const unread = categoryChannels.reduce((count, channel) => count + (unreadMarkers.get(channel.conversationId)?.count ?? 0), 0);
+    const heading = document.createElement(category ? "button" : "div");
     heading.className = "category-heading";
-    heading.type = "button";
-    heading.setAttribute("aria-expanded", String(!category || !collapsedCategories.has(category.id)));
-    const name = document.createElement("span");
-    name.textContent = category ? categoryDisplayName(category) : "ENCRYPTED ROOMS";
+    if (category) {
+      const categoryButton = heading as HTMLButtonElement;
+      categoryButton.type = "button";
+      heading.setAttribute("aria-expanded", String(!collapsedCategories.has(category.id)));
+      heading.setAttribute("aria-label", `${categoryDisplayName(category)}, ${categoryChannels.length} room${categoryChannels.length === 1 ? "" : "s"}${unread > 0 ? `, ${unread} unread messages` : ""}`);
+    } else {
+      heading.classList.add("category-heading-uncategorized");
+      heading.setAttribute("role", "heading");
+      heading.setAttribute("aria-level", "3");
+    }
     const indicator = document.createElement("span");
     indicator.className = "category-heading-indicator";
-    indicator.append(iconElement(category && collapsedCategories.has(category.id) ? "chevron-right" : "chevron-down"));
-    heading.append(name, indicator);
+    if (category) indicator.append(iconElement(collapsedCategories.has(category.id) ? "chevron-right" : "chevron-down"));
+    const categoryIcon = document.createElement("span");
+    categoryIcon.className = "category-heading-icon";
+    categoryIcon.append(iconElement(category && !collapsedCategories.has(category.id) ? "folder-open" : "folder"));
+    const name = document.createElement("span");
+    name.className = "category-heading-name";
+    name.textContent = category ? categoryDisplayName(category) : "Uncategorized";
+    const meta = document.createElement("span");
+    meta.className = "category-heading-meta";
+    const roomCount = document.createElement("span");
+    roomCount.className = "category-room-count";
+    roomCount.textContent = String(categoryChannels.length);
+    roomCount.setAttribute("aria-hidden", "true");
+    meta.append(roomCount);
+    if (unread > 0) {
+      const unreadCount = document.createElement("span");
+      unreadCount.className = "category-unread-count";
+      unreadCount.textContent = unread > 99 ? "99+" : String(unread);
+      unreadCount.setAttribute("aria-label", `${unread} unread messages`);
+      meta.append(unreadCount);
+    }
+    heading.append(indicator, categoryIcon, name, meta);
     if (category) {
-      heading.addEventListener("click", () => {
+      const categoryButton = heading as HTMLButtonElement;
+      categoryButton.addEventListener("click", () => {
         if (collapsedCategories.has(category.id)) collapsedCategories.delete(category.id);
         else collapsedCategories.add(category.id);
         renderChannels();
       });
-      heading.addEventListener("contextmenu", (event) => {
+      categoryButton.addEventListener("contextmenu", (event: MouseEvent) => {
         event.preventDefault();
         event.stopPropagation();
         openNavigationContextMenu({ kind: "category", category }, event.clientX, event.clientY);
       });
-      heading.addEventListener("keydown", (event) => {
+      categoryButton.addEventListener("keydown", (event: KeyboardEvent) => {
         if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
         event.preventDefault();
         const rect = heading.getBoundingClientRect();
         openNavigationContextMenu({ kind: "category", category }, rect.right, rect.bottom);
       });
-    } else {
-      heading.disabled = true;
-      heading.classList.add("category-heading-uncategorized");
     }
     channelList.append(heading);
     if (!category || !collapsedCategories.has(category.id)) {
@@ -2930,7 +3221,11 @@ function renderChannels() {
   const categoryIds = new Set(categories.map((category) => category.id));
   for (const category of categories) appendCategory(category, byCategory.get(category.id) ?? []);
   const uncategorized = visible.filter((channel) => !channel.categoryId || !categoryIds.has(channel.categoryId));
-  if (uncategorized.length > 0 || categories.length === 0) appendCategory(null, uncategorized);
+  if (categories.length > 0) {
+    appendCategory(null, uncategorized);
+  } else {
+    for (const channel of uncategorized) appendChannel(channel);
+  }
   renderIcons(channelList);
 }
 
@@ -3366,15 +3661,19 @@ function renderMembers(members: ConversationMember[]) {
     memberList.append(empty);
     return;
   }
-  type MemberGroup = { label: string; color?: string; position: number; members: ConversationMember[] };
+  type MemberGroup = { roleId?: string; label: string; color?: string; position: number; members: ConversationMember[] };
   const groups = new Map<string, MemberGroup>();
+  const allMembersRole = selectedServerId ? serverRoles.find((role) => role.systemKey === "everyone") : undefined;
   for (const member of members) {
-    const role = highestServerRole(member.roleIds);
-    const key = role?.id ?? "participants";
+    const separatedRole = selectedServerId
+      ? highestSeparatedRole(normalizeRoleIds(member.roleIds), serverRoles)
+      : undefined;
+    const key = separatedRole?.id ?? allMembersRole?.id ?? "participants";
     const group = groups.get(key) ?? {
-      label: role ? serverRoleName(role) : "Participants",
-      color: role?.color,
-      position: role?.position ?? -1,
+      roleId: separatedRole?.id ?? allMembersRole?.id,
+      label: separatedRole ? serverRoleName(separatedRole) : allMembersRole ? serverRoleName(allMembersRole) : "Participants",
+      color: separatedRole?.color ?? allMembersRole?.color,
+      position: separatedRole?.position ?? -1,
       members: [],
     };
     group.members.push(member);
@@ -3384,7 +3683,8 @@ function renderMembers(members: ConversationMember[]) {
   for (const group of [...groups.values()].sort((left, right) => right.position - left.position || left.label.localeCompare(right.label))) {
     const heading = document.createElement("div");
     heading.className = "member-group-heading";
-    if (group.color) heading.style.setProperty("--role-color", group.color);
+    if (group.roleId) heading.dataset.roleId = group.roleId;
+    if (group.color) setRoleTextColor(heading, group.color);
     heading.textContent = group.label;
     memberList.append(heading);
     for (const member of group.members.sort((left, right) => left.displayName.localeCompare(right.displayName))) {
@@ -3393,6 +3693,7 @@ function renderMembers(members: ConversationMember[]) {
       const memberName = member.userId === currentUser?.id ? currentUser?.displayName ?? "You" : member.displayName || `@${member.username}`;
       row.className = "member-row compact-member-row profile-trigger";
       row.type = "button";
+      row.dataset.roleGroupId = group.roleId ?? "participants";
       row.title = `View ${memberName}'s profile`;
       row.addEventListener("click", () => void openUserProfile(member.userId));
       const state = member.userId === currentUser?.id ? "online" : presenceByUser.get(member.userId) ?? "offline";
@@ -3406,7 +3707,7 @@ function renderMembers(members: ConversationMember[]) {
       avatar.setAttribute("aria-hidden", "true");
       const name = document.createElement("span");
       name.className = "compact-member-name";
-      if (memberRole?.color) name.style.setProperty("--role-color", memberRole.color);
+      if (memberRole?.color) setRoleTextColor(name, memberRole.color);
       name.textContent = member.userId === currentUser?.id ? `${memberName} · you` : memberName;
       row.append(avatar, presence, name);
       memberList.append(row);
@@ -3567,6 +3868,20 @@ function fileSizeLabel(size: number) {
   return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+function openComposerAttachmentViewer(attachment: ComposerAttachment, video: boolean) {
+  let revealed = !attachment.spoiler;
+  const item: MediaViewerItem = {
+    filename: attachment.file.name,
+    video,
+    spoiler: attachment.spoiler,
+    blob: attachment.file,
+    isRevealed: () => revealed,
+    reveal: () => { revealed = true; },
+    load: async () => attachment.file,
+  };
+  openMediaViewer(attachment.file, attachment.file.name, video, [item]);
+}
+
 function composerAttachmentKind(file: File): "image" | "video" | "text" | "file" {
   if (isPlaintextAttachment(file.name, file.type)) return "text";
   if (file.type.toLowerCase().startsWith("video/")) return "video";
@@ -3606,8 +3921,14 @@ function renderComposerAttachments() {
     row.dataset.attachmentId = attachment.id;
     attachment.row = row;
 
-    const visual = document.createElement("div");
+    const isMedia = kind === "image" || kind === "video";
+    const visual = document.createElement(isMedia ? "button" : "div");
     visual.className = `attachment-item-visual attachment-item-${kind}${attachment.spoiler ? " attachment-item-spoiler" : ""}`;
+    if (visual instanceof HTMLButtonElement) {
+      visual.type = "button";
+      visual.setAttribute("aria-label", `Open larger preview of ${attachment.file.name || "attachment"}`);
+      visual.addEventListener("click", () => openComposerAttachmentViewer(attachment, kind === "video"));
+    }
     if (kind === "image" || kind === "video") {
       attachment.previewUrl ??= URL.createObjectURL(attachment.file);
       const preview = document.createElement(kind === "video" ? "video" : "img");
@@ -4362,12 +4683,15 @@ function appendEncryptedMedia(
   const isImage = !isText && !isVideo && (content.msgtype === "m.image" || mimeType.toLowerCase().startsWith("image/"));
   const isVisual = isImage || isVideo;
   const isSpoiler = content.spoiler === true;
+  const mediaWidth = typeof info.w === "number" && Number.isFinite(info.w) && info.w > 0 ? info.w : undefined;
+  const mediaHeight = typeof info.h === "number" && Number.isFinite(info.h) && info.h > 0 ? info.h : undefined;
   const kindLabel = isText ? "text file" : fileMessage ? "file" : isVideo ? "video" : "image";
   const attachmentSize = typeof info.size === "number" && Number.isFinite(info.size) ? info.size : undefined;
   const size = attachmentSize === undefined ? "" : ` · ${fileSizeLabel(attachmentSize)}`;
   const card = document.createElement("div");
   card.className = `encrypted-media-card ${isVisual ? "media-attachment-card" : "file-attachment-card"}${isText ? " text-attachment-card" : ""}`;
   card.dataset.mediaFilename = filename;
+  if (isVisual && mediaWidth && mediaHeight) card.style.aspectRatio = `${mediaWidth} / ${mediaHeight}`;
   if (album) {
     card.dataset.mediaAlbumId = album.id;
     card.dataset.mediaAlbumIndex = String(album.index);
@@ -4382,25 +4706,27 @@ function appendEncryptedMedia(
   const renderPending = (failure?: string) => {
     card.replaceChildren();
     card.classList.remove("media-loaded");
-    card.classList.toggle("encrypted-media-spoiler", !revealed);
+    card.classList.toggle("encrypted-media-spoiler", isSpoiler && !revealed);
     mediaProgress = undefined;
     mediaStatus = undefined;
 
     if (isVisual) {
       if (!revealed) {
-        const reveal = document.createElement("button");
-        reveal.type = "button";
-        reveal.className = "media-spoiler-cover";
-        reveal.setAttribute("aria-label", `Reveal ${kindLabel} spoiler`);
-        const label = document.createElement("span");
-        label.textContent = "Spoiler";
-        reveal.append(label);
-        reveal.addEventListener("click", () => {
-          revealed = true;
-          renderPending();
-          void loadMedia();
-        });
-        card.append(reveal);
+        const placeholder = document.createElement("div");
+        placeholder.className = "media-placeholder media-spoiler-placeholder";
+        const mark = document.createElement("span");
+        mark.textContent = isVideo ? "VIDEO" : "IMAGE";
+        mediaStatus = document.createElement("span");
+        mediaStatus.className = "media-loading-label";
+        mediaStatus.textContent = failure ? `Blurred preview unavailable · ${failure}` : "Preparing blurred preview…";
+        placeholder.append(mark, mediaStatus);
+        card.append(placeholder, createMediaSpoilerCover());
+        mediaProgress = document.createElement("progress");
+        mediaProgress.className = "media-load-progress";
+        mediaProgress.max = 100;
+        mediaProgress.removeAttribute("value");
+        mediaProgress.hidden = true;
+        card.append(mediaProgress);
         return;
       }
       const placeholder = document.createElement("div");
@@ -4410,9 +4736,20 @@ function appendEncryptedMedia(
       placeholder.append(mark);
       mediaStatus = document.createElement("span");
       mediaStatus.className = "media-loading-label";
-      mediaStatus.textContent = failure ? `Unavailable · ${failure}` : "Loading…";
+      const clickToLoad = !appPreferences.autoLoadMedia && !isSpoiler;
+      mediaStatus.textContent = failure
+        ? `Unavailable · ${failure}`
+        : clickToLoad ? "Encrypted preview not loaded" : "Loading…";
       placeholder.append(mediaStatus);
       card.append(placeholder);
+      if (clickToLoad && !failure) {
+        const load = document.createElement("button");
+        load.type = "button";
+        load.className = "media-load-button secondary";
+        load.textContent = `Load ${isVideo ? "video" : "image"}`;
+        load.addEventListener("click", () => void loadMedia());
+        placeholder.append(load);
+      }
       if (failure) {
         const retry = document.createElement("button");
         retry.type = "button";
@@ -4485,6 +4822,32 @@ function appendEncryptedMedia(
     }
   };
 
+  const revealSpoiler = () => {
+    if (revealed) return;
+    revealed = true;
+    if (loadedBlob) {
+      card.classList.remove("encrypted-media-spoiler");
+      card.querySelector(".media-spoiler-cover")?.remove();
+      const image = card.querySelector<HTMLImageElement>("img.media-preview");
+      if (image) image.alt = filename || "Encrypted image";
+      return;
+    }
+    renderPending();
+    void loadMedia();
+  };
+
+  const createMediaSpoilerCover = () => {
+    const cover = document.createElement("button");
+    cover.type = "button";
+    cover.className = "media-spoiler-cover";
+    cover.setAttribute("aria-label", `Reveal ${kindLabel} spoiler`);
+    const label = document.createElement("span");
+    label.textContent = "Reveal";
+    cover.append(label);
+    cover.addEventListener("click", revealSpoiler);
+    return cover;
+  };
+
   const loadMedia = (): Promise<Blob | undefined> => {
     if (loadPromise) return loadPromise;
     if (!card.isConnected) return Promise.resolve(undefined);
@@ -4517,8 +4880,9 @@ function appendEncryptedMedia(
         const url = URL.createObjectURL(blob);
         card.dataset.mediaUrl = url;
         card.classList.add("media-loaded");
+        const concealedSpoiler = isSpoiler && !revealed;
         card.replaceChildren();
-        card.classList.remove("encrypted-media-spoiler");
+        card.classList.toggle("encrypted-media-spoiler", concealedSpoiler);
         if (isText || fileMessage && !isVisual) {
           const row = document.createElement("div");
           row.className = "file-attachment-row";
@@ -4591,14 +4955,14 @@ function appendEncryptedMedia(
             const player = preview as HTMLVideoElement;
             player.muted = true;
             player.playsInline = true;
-            player.preload = "metadata";
+            player.preload = concealedSpoiler ? "auto" : "metadata";
             const playMark = document.createElement("span");
             playMark.className = "media-play-mark";
             playMark.setAttribute("aria-hidden", "true");
             playMark.textContent = "▶";
             card.append(preview, playMark);
           } else {
-            (preview as HTMLImageElement).alt = filename || "Encrypted image";
+            (preview as HTMLImageElement).alt = concealedSpoiler ? "Blurred image spoiler" : filename || "Encrypted image";
             (preview as HTMLImageElement).loading = "eager";
             card.append(preview);
           }
@@ -4606,6 +4970,7 @@ function appendEncryptedMedia(
           actions.className = "media-card-actions";
           appendDownloadButton(actions, url, filename);
           card.append(actions);
+          if (concealedSpoiler) card.append(createMediaSpoilerCover());
         }
         if (preserveLatestPosition) scrollToLatest();
         return blob;
@@ -4627,10 +4992,7 @@ function appendEncryptedMedia(
     spoiler: isSpoiler,
     isRevealed: () => revealed,
     reveal: () => {
-      if (revealed) return;
-      revealed = true;
-      renderPending();
-      void loadMedia();
+      revealSpoiler();
     },
     load: () => loadMedia(),
     get blob() {
@@ -4643,7 +5005,22 @@ function appendEncryptedMedia(
   mediaCardControllers.set(card, controller);
   renderPending();
   parent.append(card);
-  if ((isVisual || shouldAutoPreviewText) && revealed) registerAutoMediaLoad(card, async () => { await loadMedia(); });
+  if (isVisual && (revealed || isSpoiler) && (appPreferences.autoLoadMedia || isSpoiler)
+    || shouldAutoPreviewText && revealed) {
+    const autoLoad = async () => { await loadMedia(); };
+    registerAutoMediaLoad(card, autoLoad);
+    if (isVisual && isSpoiler && typeof IntersectionObserver !== "undefined") {
+      window.requestAnimationFrame(() => {
+        if (!card.isConnected || autoMediaLoadTargets.get(card) !== autoLoad) return;
+        const cardBounds = card.getBoundingClientRect();
+        const panelBounds = messagesPanel.getBoundingClientRect();
+        if (cardBounds.bottom < panelBounds.top - 420 || cardBounds.top > panelBounds.bottom + 420) return;
+        autoMediaLoadTargets.delete(card);
+        autoMediaLoadObserver?.unobserve(card);
+        queueAutoMediaLoad(autoLoad);
+      });
+    }
+  }
   return card;
 }
 
@@ -4750,7 +5127,7 @@ function renderMessage(
   sender.type = "button";
   sender.textContent = senderIdentity;
   const senderRole = highestServerRole(senderMember?.roleIds);
-  if (senderRole?.color) sender.style.setProperty("--role-color", senderRole.color);
+  if (senderRole?.color) setRoleTextColor(sender, senderRole.color);
   if (message.senderUserId) sender.addEventListener("click", () => void openUserProfile(message.senderUserId as string));
   const time = document.createElement("time");
   const createdAt = new Date(message.createdAt);
@@ -4828,7 +5205,7 @@ function renderMessage(
       // may happen after the user has already reached the latest message, so
       // do not recreate a badge that was just cleared while the render was in
       // flight.
-      if (unreadMarkers.has(message.conversationId)) notifyNewMessage(message.conversationId, message.id, true);
+      if (unreadMarkers.has(message.conversationId)) notifyNewMessage(message.conversationId, message.id, true, true);
       renderUnreadButton();
     }
   }
