@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Host maintenance · Naigi</title>
+    <link rel="stylesheet" href="/app.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  </head>
+  <body class="settings-page instance-admin-page">
+    <header class="topbar">
+      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">N</span><div><strong>Naigi</strong><span class="tag">host operator console</span></div></div>
+      <div class="topbar-links">
+        <a class="text-link" href="/">Chat sign in</a>
+        <button id="admin-logout-maintenance" class="secondary" type="button">Sign out operator</button>
+      </div>
+    </header>
+    <main class="instance-admin-main">
+      <header class="instance-admin-heading">
+        <div><p class="eyebrow">HOST MAINTENANCE</p><h1>Storage maintenance</h1><p class="muted">Safely quarantine old unreferenced files. All actions are host-operator-only and audited.</p></div>
+      </header>
+      <nav class="instance-admin-console-nav" aria-label="Host console pages">
+        <a href="/instance-admin">Reports</a>
+        <a href="/instance-admin/users">Users</a>
+        <a href="/instance-admin/operations">Operations</a>
+        <span aria-current="page">Maintenance</span>
+      </nav>
+
+      <ol class="maintenance-steps" aria-label="Maintenance workflow">
+        <li id="maintenance-step-scan" data-state="current"><span>1</span><div><strong>Inspect</strong><small>Complete read-only scan</small></div></li>
+        <li id="maintenance-step-quarantine" data-state="upcoming"><span>2</span><div><strong>Quarantine</strong><small>Second check before move</small></div></li>
+        <li id="maintenance-step-recovery" data-state="upcoming"><span>3</span><div><strong>Recover</strong><small>30-day restore window</small></div></li>
+        <li id="maintenance-step-purge" data-state="upcoming"><span>4</span><div><strong>Purge</strong><small>Manual and irreversible</small></div></li>
+      </ol>
+
+      <section class="instance-admin-panel maintenance-panel">
+        <header class="instance-operations-heading">
+          <div><p class="eyebrow">STEP 1 · FRESH READ-ONLY SCAN</p><h2>Review orphan candidates</h2><p class="muted">Only files with no database reference and at least 24 hours of age qualify. Any incomplete scan blocks quarantine. Each candidate is checked again immediately before it is moved.</p></div>
+          <button id="inspect-maintenance-storage" class="secondary" type="button"><i data-lucide="scan-search"></i>Inspect storage</button>
+        </header>
+        <p id="maintenance-scan-status" class="instance-operations-status" role="status" aria-live="polite">Run an inspection to estimate eligible files. No files will be changed.</p>
+        <div id="maintenance-candidate-summary" class="instance-ops-metrics" hidden></div>
+        <button id="quarantine-orphaned-files" type="button" disabled hidden>Quarantine eligible files</button>
+      </section>
+
+      <section class="instance-admin-panel maintenance-panel">
+        <header class="settings-section-heading">
+          <div><p class="eyebrow">RECOVERY WINDOW · 30 DAYS</p><h2>Quarantined files</h2></div>
+          <button id="refresh-maintenance-summary" class="secondary" type="button">Refresh status</button>
+        </header>
+        <p class="muted maintenance-description">Quarantine is stored on the same filesystem, outside normal storage scans. Files can be restored while retained. Permanent purge is a separate manual action and is unavailable until the 30-day recovery window expires.</p>
+        <p id="maintenance-summary-status" class="instance-operations-status maintenance-summary-status" role="status" aria-live="polite">Loading quarantine and recovery status…</p>
+        <div id="maintenance-quarantine-summary" class="instance-ops-metrics"></div>
+        <div class="maintenance-actions">
+          <button id="restore-quarantined-files" class="secondary" type="button" disabled>Restore quarantined files</button>
+          <button id="purge-expired-files" class="danger-button" type="button" disabled>Permanently purge expired files</button>
+        </div>
+        <p id="maintenance-action-status" class="instance-operations-status" role="status" aria-live="polite"></p>
+        <p id="maintenance-recovery-warning" class="instance-ops-warning" role="status" hidden></p>
+      </section>
+    </main>
+
+    <dialog id="maintenance-confirmation" class="maintenance-dialog" aria-labelledby="maintenance-confirmation-title">
+      <form method="dialog">
+        <p class="eyebrow">CONFIRM HOST MAINTENANCE</p>
+        <h2 id="maintenance-confirmation-title"></h2>
+        <p id="maintenance-confirmation-message" class="muted"></p>
+        <label id="maintenance-confirmation-phrase-row" class="maintenance-confirmation-phrase" hidden>
+          Type <strong>PURGE</strong> to enable permanent deletion.
+          <input id="maintenance-confirmation-phrase" type="text" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="maintenance-dialog-actions">
+          <button id="cancel-maintenance-action" class="secondary" type="submit" value="cancel">Cancel</button>
+          <button id="confirm-maintenance-action" type="submit" value="confirm">Continue</button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module" src="/instance-maintenance.js"></script>
+  </body>
+</html>

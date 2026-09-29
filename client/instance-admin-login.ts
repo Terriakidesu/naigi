@@ -6,6 +6,9 @@ const username = document.getElementById("admin-auth-username") as HTMLInputElem
 const password = document.getElementById("admin-auth-password") as HTMLInputElement;
 const submit = document.getElementById("admin-auth-submit") as HTMLButtonElement;
 const status = document.getElementById("admin-auth-status") as HTMLElement;
+const returnTo = ["/instance-admin/operations", "/instance-admin/maintenance"].includes(window.location.pathname)
+  ? window.location.pathname
+  : "/instance-admin";
 
 function setStatus(message: string, error = false) {
   status.textContent = message;
@@ -18,7 +21,7 @@ form.addEventListener("submit", async (event) => {
   setStatus("Signing you in…");
   try {
     await api.adminLogin(username.value.trim(), password.value);
-    window.location.assign("/instance-admin");
+    window.location.assign(returnTo);
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       setStatus("The operator username or password is incorrect.", true);
@@ -32,7 +35,7 @@ form.addEventListener("submit", async (event) => {
 async function boot() {
   try {
     await api.adminMe();
-    window.location.assign("/instance-admin");
+    window.location.assign(returnTo);
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 401) {
       setStatus(error instanceof Error ? error.message : "Unable to check operator session.", true);

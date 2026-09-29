@@ -71,6 +71,14 @@ const rolePreviewContent = document.getElementById("role-preview-content") as HT
 const exitRolePreview = document.getElementById("exit-role-preview") as HTMLButtonElement;
 const memberList = document.getElementById("member-settings-list") as HTMLElement;
 const moderationList = document.getElementById("moderation-settings-list") as HTMLElement;
+const moderationActionDialog = document.getElementById("moderation-action-dialog") as HTMLDialogElement;
+const moderationActionForm = document.getElementById("moderation-action-form") as HTMLFormElement;
+const moderationActionTitle = document.getElementById("moderation-action-title") as HTMLElement;
+const moderationActionDescription = document.getElementById("moderation-action-description") as HTMLElement;
+const moderationActionReason = document.getElementById("moderation-action-reason") as HTMLTextAreaElement;
+const moderationActionDuration = document.getElementById("moderation-action-duration") as HTMLSelectElement;
+const moderationActionSubmit = document.getElementById("moderation-action-submit") as HTMLButtonElement;
+const moderationActionCancel = document.getElementById("moderation-action-cancel") as HTMLButtonElement;
 const createInvite = document.getElementById("create-invite-settings") as HTMLButtonElement;
 const inviteList = document.getElementById("invite-settings-list") as HTMLElement;
 const emojiForm = document.getElementById("emoji-form") as HTMLFormElement;
@@ -90,7 +98,8 @@ let categories: ServerCategory[] = [];
 let members: ServerMember[] = [];
 let roles: CustomServerRole[] = [];
 let roleAssignments = new Map<string, string[]>();
-let moderation: ServerModeration = { bans: [], timeouts: [] };
+let moderation: ServerModeration = { bans: [], timeouts: [], warnings: [] };
+let pendingModerationAction: { kind: "warn" | "ban" | "timeout"; member: ServerMember } | undefined;
 let customEmojis: ServerCustomEmoji[] = [];
 let auditLogs: ServerAuditLog[] = [];
 let cryptoClient: CryptoClient | undefined;
@@ -140,11 +149,13 @@ const permissionDefinitions: Array<{ id: ServerPermission; label: string; descri
   { id: "manage_role_appearance", label: "Manage role appearance", description: "Change role names and colors." },
   { id: "manage_members", label: "Manage all people", description: "Legacy shortcut for people and moderation actions." },
   { id: "kick_members", label: "Kick members", description: "Remove members without banning them." },
-  { id: "view_moderation_records", label: "View moderation records", description: "See active bans and timeouts." },
+  { id: "view_moderation_records", label: "View moderation records", description: "See active bans, timeouts, and warnings." },
   { id: "ban_members", label: "Ban members", description: "Ban members and block future invites." },
   { id: "unban_members", label: "Unban members", description: "Revoke active member bans." },
   { id: "timeout_members", label: "Timeout members", description: "Temporarily prevent messaging and uploads." },
   { id: "remove_timeouts", label: "Remove timeouts", description: "Restore members before their timeout expires." },
+  { id: "warn_members", label: "Warn members", description: "Issue a space-scoped warning with a reason and expiry." },
+  { id: "revoke_warnings", label: "Revoke warnings", description: "Revoke active warnings before they expire." },
   { id: "pin_messages", label: "Pin messages", description: "Pin and unpin encrypted messages." },
   { id: "delete_others_messages", label: "Delete others' messages", description: "Permanently remove encrypted messages for everyone." },
   { id: "delete_messages", label: "Delete messages (legacy)", description: "Legacy shortcut for moderator message deletion." },
@@ -156,7 +167,7 @@ const previewPermissionGroups: Array<{ label: string; permissions: ServerPermiss
   { label: "Rooms", permissions: ["manage_channels", "create_channels", "edit_channels", "reorder_channels", "archive_channels", "manage_categories", "manage_channel_access"] },
   { label: "Invites", permissions: ["manage_invites", "view_invites", "create_invites", "revoke_invites", "manage_invite_limits"] },
   { label: "Roles", permissions: ["manage_roles", "create_roles", "edit_roles", "delete_roles", "assign_roles", "reorder_roles", "manage_role_permissions", "manage_role_appearance"] },
-  { label: "Moderation", permissions: ["manage_server", "manage_members", "kick_members", "view_moderation_records", "ban_members", "unban_members", "timeout_members", "remove_timeouts", "manage_custom_emoji", "view_audit_logs"] },
+  { label: "Moderation", permissions: ["manage_server", "manage_members", "kick_members", "view_moderation_records", "ban_members", "unban_members", "timeout_members", "remove_timeouts", "warn_members", "revoke_warnings", "manage_custom_emoji", "view_audit_logs"] },
 ];
 
 function normalizeRoleIds(value: unknown) {
@@ -1229,6 +1240,72 @@ function renderRoles() {
   renderRolePreview();
 }
 
+type ModerationActionKind = "warn" | "ban" | "timeout";
+
+function openModerationAction(kind: ModerationActionKind, member: ServerMember) {
+  const options: Record<ModerationActionKind, Array<[string, string]>> = {
+    warn: [["2592000", "30 days"], ["7776000", "90 days"], ["never", "No expiry"]],
+    ban: [["never", "Permanent"], ["86400", "1 day"], ["604800", "7 days"], ["2592000", "30 days"]],
+    timeout: [["600", "10 minutes"], ["3600", "1 hour"], ["86400", "24 hours"], ["604800", "7 days"], ["2592000", "30 days"]],
+  };
+  pendingModerationAction = { kind, member };
+  moderationActionTitle.textContent = kind === "warn" ? `Warn ${member.displayName}` : kind === "ban" ? `Ban ${member.displayName}` : `Timeout ${member.displayName}`;
+  moderationActionDescription.textContent = kind === "warn"
+    ? "This space-scoped warning is visible to the member and authorized space moderators. It does not restrict access."
+    : kind === "ban"
+      ? "This ban applies only to this space and blocks future invites until it expires or is revoked."
+      : "This timeout applies only to this space and prevents sending messages and uploads until it expires or is removed.";
+  moderationActionDuration.replaceChildren();
+  for (const [value, label] of options[kind]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    moderationActionDuration.append(option);
+  }
+  moderationActionReason.value = "";
+  moderationActionSubmit.textContent = kind === "warn" ? "Issue warning" : kind === "ban" ? "Ban in this space" : "Apply timeout";
+  moderationActionDialog.showModal();
+  moderationActionReason.focus();
+}
+
+moderationActionCancel.addEventListener("click", () => moderationActionDialog.close());
+moderationActionDialog.addEventListener("close", () => { pendingModerationAction = undefined; });
+moderationActionForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const action = pendingModerationAction;
+  if (!action || !currentServer) return;
+  const reason = moderationActionReason.value.trim();
+  if (!reason) {
+    moderationActionReason.focus();
+    return;
+  }
+  const duration = moderationActionDuration.value === "never" ? undefined : Number(moderationActionDuration.value);
+  moderationActionSubmit.disabled = true;
+  moderationActionCancel.disabled = true;
+  try {
+    if (action.kind === "warn") {
+      await api.warnServerMember(currentServer.id, action.member.userId, reason, duration);
+    } else if (action.kind === "ban") {
+      await api.banServerMember(currentServer.id, action.member.userId, {
+        reason,
+        ...(duration ? { expiresInSeconds: duration } : {}),
+      });
+    } else if (duration) {
+      await api.timeoutServerMember(currentServer.id, action.member.userId, duration, reason);
+    }
+    moderationActionDialog.close();
+    await loadData();
+    setStatus(action.kind === "warn" ? "Space warning issued; the member will see it in chat."
+      : action.kind === "ban" ? "Member banned from this space."
+        : "Member timed out in this space.");
+  } catch (error) {
+    setStatus(readableError(error), true);
+  } finally {
+    moderationActionSubmit.disabled = false;
+    moderationActionCancel.disabled = false;
+  }
+});
+
 function renderMembers() {
   memberList.replaceChildren();
   for (const member of members) {
@@ -1308,36 +1385,23 @@ function renderMembers() {
       ban.className = "danger-button";
       ban.type = "button";
       ban.textContent = "Ban";
-      ban.addEventListener("click", async () => {
-        if (!window.confirm(`Ban ${member.displayName}? They will be blocked from future invites.`)) return;
-        ban.disabled = true;
-        try {
-          await api.banServerMember(currentServer!.id, member.userId);
-          await loadData();
-          setStatus("Member banned.");
-        } catch (error) {
-          setStatus(readableError(error), true);
-          ban.disabled = false;
-        }
-      });
+      ban.addEventListener("click", () => openModerationAction("ban", member));
       row.append(ban);
+    }
+    if (member.userId !== currentUserId && member.role !== "owner" && hasAnyPermission("manage_members", "warn_members")) {
+      const warn = document.createElement("button");
+      warn.type = "button";
+      warn.className = "secondary";
+      warn.textContent = "Warn";
+      warn.addEventListener("click", () => openModerationAction("warn", member));
+      row.append(warn);
     }
     if (member.userId !== currentUserId && member.role !== "owner" && hasAnyPermission("manage_members", "timeout_members")) {
       const timeout = document.createElement("button");
       timeout.type = "button";
       timeout.className = "secondary";
       timeout.textContent = "Timeout";
-      timeout.addEventListener("click", async () => {
-        timeout.disabled = true;
-        try {
-          await api.timeoutServerMember(currentServer!.id, member.userId, 10 * 60);
-          await loadData();
-          setStatus("Member timed out for 10 minutes.");
-        } catch (error) {
-          setStatus(readableError(error), true);
-          timeout.disabled = false;
-        }
-      });
+      timeout.addEventListener("click", () => openModerationAction("timeout", member));
       row.append(timeout);
     }
     memberList.append(row);
@@ -1348,10 +1412,11 @@ function renderModeration() {
   moderationList.replaceChildren();
   const canUnban = hasAnyPermission("manage_members", "unban_members");
   const canRemoveTimeout = hasAnyPermission("manage_members", "remove_timeouts");
-  if (moderation.bans.length === 0 && moderation.timeouts.length === 0) {
+  const canRevokeWarning = hasAnyPermission("manage_members", "revoke_warnings");
+  if (moderation.bans.length === 0 && moderation.timeouts.length === 0 && moderation.warnings.length === 0) {
     const empty = document.createElement("p");
     empty.className = "muted small";
-    empty.textContent = "No active bans or timeouts.";
+    empty.textContent = "No active bans, timeouts, or warnings.";
     moderationList.append(empty);
     return;
   }
@@ -1412,6 +1477,37 @@ function renderModeration() {
         }
       });
       row.append(restore);
+    }
+    moderationList.append(row);
+  }
+  for (const warning of moderation.warnings) {
+    const row = document.createElement("div");
+    row.className = "settings-list-row moderation-row";
+    const copy = document.createElement("div");
+    copy.className = "settings-row-copy";
+    const name = document.createElement("strong");
+    name.textContent = `${warning.active ? "Active warning" : warning.revokedAt ? "Revoked warning" : "Expired warning"} · ${warning.displayName}`;
+    const detail = document.createElement("span");
+    const acknowledged = warning.acknowledgedAt ? ` · acknowledged ${new Date(warning.acknowledgedAt).toLocaleString()}` : " · awaiting acknowledgement";
+    detail.textContent = `@${warning.username} · ${warning.reason} · issued by @${warning.createdByUsername} · ${new Date(warning.createdAt).toLocaleString()}${warning.expiresAt ? ` · expires ${new Date(warning.expiresAt).toLocaleString()}` : " · no expiry"}${acknowledged}`;
+    copy.append(name, detail);
+    row.append(copy);
+    if (canRevokeWarning && warning.active) {
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.textContent = "Revoke warning";
+      revoke.addEventListener("click", async () => {
+        revoke.disabled = true;
+        try {
+          await api.revokeServerWarning(currentServer!.id, warning.id);
+          await loadData();
+          setStatus("Space warning revoked.");
+        } catch (error) {
+          setStatus(readableError(error), true);
+          revoke.disabled = false;
+        }
+      });
+      row.append(revoke);
     }
     moderationList.append(row);
   }
@@ -1613,7 +1709,7 @@ async function loadData() {
     api.serverMembers(serverId),
     api.serverRoles(serverId),
     api.serverModeration(serverId).catch((error) => {
-      if (error instanceof ApiError && error.status === 403) return { bans: [], timeouts: [] } satisfies ServerModeration;
+      if (error instanceof ApiError && error.status === 403) return { bans: [], timeouts: [], warnings: [] } satisfies ServerModeration;
       throw error;
     }),
     api.serverInvites(serverId).catch((error) => {

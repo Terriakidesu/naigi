@@ -53,6 +53,8 @@ export type ServerPermission =
   | "unban_members"
   | "timeout_members"
   | "remove_timeouts"
+  | "warn_members"
+  | "revoke_warnings"
   | "pin_messages"
   | "delete_others_messages"
   | "delete_messages"
@@ -169,6 +171,64 @@ export type ServerModeration = {
     expiresAt: string;
     createdAt: string;
   }>;
+  warnings: Array<{
+    id: string;
+    userId: string;
+    username: string;
+    displayName: string;
+    createdByUsername: string;
+    reason: string;
+    expiresAt: string | null;
+    createdAt: string;
+    acknowledgedAt: string | null;
+    revokedAt: string | null;
+    active: boolean;
+  }>;
+};
+
+export type ModerationWarningNotice = {
+  id: string;
+  reason: string;
+  createdAt: string;
+  expiresAt: string | null;
+};
+
+export type SpaceWarningNotice = ModerationWarningNotice & { serverId: string };
+
+export type InstanceUserDirectoryEntry = {
+  id: string;
+  username: string;
+  displayName: string;
+  createdAt: string;
+  banned: boolean;
+  activeWarningCount: number;
+};
+
+export type InstanceUserModeration = {
+  user: {
+    id: string;
+    username: string;
+    displayName: string;
+    createdAt: string;
+    ban: { createdAt: string; reason: string | null } | null;
+  };
+  warnings: Array<{
+    id: string;
+    reason: string;
+    createdByUsername: string;
+    createdAt: string;
+    expiresAt: string | null;
+    acknowledgedAt: string | null;
+    revokedAt: string | null;
+    active: boolean;
+  }>;
+  actions: Array<{
+    id: string;
+    action: string;
+    operatorUsername: string;
+    details: Record<string, unknown>;
+    createdAt: string;
+  }>;
 };
 
 export type UserReportReason = "spam" | "harassment" | "threats" | "sexual_content" | "illegal_content" | "impersonation" | "other";
@@ -199,6 +259,157 @@ export type InstanceReport = Omit<InstanceReportSummary, "hasEvidence" | "suspen
     wrappedKey: string;
     iv: string;
   } | null;
+};
+
+export type InstanceOperationsStorageKind = "attachments" | "customEmoji" | "avatars" | "banners" | "serverBranding" | "shared";
+
+export type InstanceOperationsStorageScan = {
+  complete: boolean;
+  orphanDetectionAvailable: boolean;
+  scannedEntries: number;
+  fileCount: number;
+  fileBytes: number;
+  quarantinedFileCount: number;
+  quarantinedBytes: number;
+  referencedFileCount: number;
+  referencedBytes: number;
+  orphanedFileCount: number;
+  orphanedBytes: number;
+  recentUnreferencedFileCount: number;
+  recentUnreferencedBytes: number;
+  unverifiedFileCount: number;
+  unverifiedBytes: number;
+  missingFileCount: number | null;
+  temporaryFileCount: number;
+  temporaryBytes: number;
+  staleTemporaryFileCount: number;
+  staleTemporaryBytes: number;
+  categories: Record<InstanceOperationsStorageKind, { fileCount: number; bytes: number }>;
+  volume: { totalBytes: number; availableBytes: number } | null;
+  warnings: string[];
+};
+
+export type InstanceOperationsDatabase = {
+  status: "available" | "unavailable";
+  sizeBytes: number | null;
+  tables: Array<{ name: string; sizeBytes: number; estimatedRows: number }>;
+  estimatedRows: Record<string, number>;
+};
+
+export type InstanceOperationsOverview = {
+  generatedAt: string;
+  appDatabase: "available" | "unavailable";
+  accounts: {
+    totalUsers: number | null;
+    authenticatedUsers24h: number | null;
+    newUsers24h: number | null;
+    newUsers7d: number | null;
+    activeDevices: number | null;
+  };
+  realtime: {
+    status: "available" | "limited" | "unavailable";
+    connectedUsers: number | null;
+    websocketConnections: number | null;
+    leaseSeconds: number;
+  };
+  community: { spaces: number | null; activeRooms: number | null };
+  activity: {
+    messageEnvelopesEstimate: number | null;
+    attachmentRecordsEstimate: number | null;
+    customEmojiRecordsEstimate: number | null;
+    daily: {
+      status: "available" | "unavailable";
+      days: Array<{
+        day: string;
+        newUsers: number;
+        messageEnvelopes: number;
+        attachmentRecords: number;
+        customEmojiRecords: number;
+      }>;
+    };
+  };
+  moderation: {
+    status: "available" | "unavailable";
+    openReports: number | null;
+    reviewingReports: number | null;
+    suspendedAccounts: number | null;
+  };
+};
+
+export type InstanceOperationsSnapshot = {
+  generatedAt: string;
+  runtime: {
+    uptimeSeconds: number;
+    bunVersion: string;
+    memory: { residentBytes: number; heapUsedBytes: number; heapTotalBytes: number; externalBytes: number };
+    hostMemory: { totalBytes: number; availableBytes: number };
+    loadAverage: [number, number, number];
+  };
+  services: {
+    appDatabase: "available" | "unavailable";
+    adminDatabase: "available" | "unavailable";
+    redis: "available" | "unavailable";
+  };
+  databases: { app: InstanceOperationsDatabase; admin: InstanceOperationsDatabase };
+  storage: {
+    available: boolean;
+    attachmentFiles: InstanceOperationsStorageScan | null;
+    profileMediaFiles: InstanceOperationsStorageScan | null;
+    directoriesOverlap: boolean;
+  };
+};
+
+export type InstanceLiveResources = {
+  sampledAt: string;
+  intervalMs: number | null;
+  uptimeSeconds: number;
+  logicalCores: number;
+  appProcessPercent: number | null;
+  hostPercent: number | null;
+  memory: { residentBytes: number; heapUsedBytes: number; heapTotalBytes: number; externalBytes: number };
+  hostMemory: { totalBytes: number; availableBytes: number };
+  loadAverage: [number, number, number];
+};
+
+export type StorageMaintenancePreview = {
+  complete: boolean;
+  blockers: string[];
+  candidateFileCount: number;
+  candidateBytes: number;
+  actionLimit: number;
+  minimumFileAgeHours: number;
+  retentionDays: number;
+  scannedAt: string;
+};
+
+export type StorageMaintenanceSummary = {
+  quarantinedFileCount: number;
+  quarantinedBytes: number;
+  purgeableFileCount: number;
+  purgeableBytes: number;
+  transitioningFileCount: number;
+  recoveryRequiredFileCount: number;
+  nextPurgeAt: string | null;
+  retentionDays: number;
+  actionLimit: number;
+};
+
+export type StorageMaintenanceActionResult = {
+  quarantinedFileCount?: number;
+  quarantinedBytes?: number;
+  skippedReferencedCount?: number;
+  skippedChangedCount?: number;
+  skippedManagedCount?: number;
+  failedCount?: number;
+  remainingCandidateCount?: number;
+  restoredFileCount?: number;
+  restoredBytes?: number;
+  skippedCount?: number;
+  remainingCount?: number;
+  purgedFileCount?: number;
+  purgedBytes?: number;
+  remainingEligibleCount?: number;
+  retentionDays?: number;
 };
 
 export type ServerCustomEmoji = {
@@ -566,6 +777,15 @@ export class ApiClient {
     return this.get<{ reports: InstanceReportSummary[] }>(`/v1/instance-admin/reports?status=${status}`);
   }
 
+  instanceUsers(search: string, status: "all" | "active" | "banned", limit: number, offset: number) {
+    const query = new URLSearchParams({ search, status, limit: String(limit), offset: String(offset) });
+    return this.get<{ users: InstanceUserDirectoryEntry[]; total: number; limit: number; offset: number }>(`/v1/instance-admin/users?${query}`);
+  }
+
+  instanceUser(userId: string) {
+    return this.get<InstanceUserModeration>(`/v1/instance-admin/users/${encodeURIComponent(userId)}`);
+  }
+
   adminLogin(username: string, password: string) {
     return this.post<{ operator: { id: string; username: string } }>("/v1/instance-admin/auth/login", {
       username,
@@ -601,8 +821,23 @@ export class ApiClient {
     return this.post<{ suspended: boolean }>(`/v1/instance-admin/users/${encodeURIComponent(userId)}/suspend`, { ...(reportId ? { reportId } : {}) });
   }
 
+  banInstanceUser(userId: string, reason: string) {
+    return this.post<{ suspended: boolean }>(`/v1/instance-admin/users/${encodeURIComponent(userId)}/suspend`, { reason });
+  }
+
   restoreInstanceUser(userId: string) {
     return this.delete<{ restored: boolean }>(`/v1/instance-admin/users/${encodeURIComponent(userId)}/suspension`);
+  }
+
+  warnInstanceUser(userId: string, reason: string, expiresInSeconds?: number) {
+    return this.post<{ warning: { id: string; createdAt: string; expiresAt: string | null } }>(
+      `/v1/instance-admin/users/${encodeURIComponent(userId)}/warnings`,
+      { reason, ...(expiresInSeconds ? { expiresInSeconds } : {}) },
+    );
+  }
+
+  revokeInstanceWarning(warningId: string) {
+    return this.delete<{ revoked: boolean }>(`/v1/instance-admin/warnings/${encodeURIComponent(warningId)}`);
   }
 
   instanceReportKeys() {
@@ -620,10 +855,59 @@ export class ApiClient {
       adminUsername: string;
       adminDisplayName: string;
       action: string;
+      details: Record<string, unknown>;
       reportId: string | null;
       targetUserId: string | null;
       createdAt: string;
     }> }>("/v1/instance-admin/audit?limit=200");
+  }
+
+  myInstanceWarnings() {
+    return this.get<{ warnings: ModerationWarningNotice[] }>("/v1/me/instance-warnings");
+  }
+
+  mySpaceWarnings() {
+    return this.get<{ warnings: SpaceWarningNotice[] }>("/v1/me/server-warnings");
+  }
+
+  acknowledgeInstanceWarning(warningId: string) {
+    return this.patch<{ acknowledged: boolean }>(`/v1/me/instance-warnings/${encodeURIComponent(warningId)}/acknowledge`, {});
+  }
+
+  acknowledgeSpaceWarning(warningId: string) {
+    return this.patch<{ acknowledged: boolean }>(`/v1/me/server-warnings/${encodeURIComponent(warningId)}/acknowledge`, {});
+  }
+
+  instanceOperations() {
+    return this.get<InstanceOperationsSnapshot>("/v1/instance-admin/operations");
+  }
+
+  instanceOperationsOverview() {
+    return this.get<InstanceOperationsOverview>("/v1/instance-admin/operations/overview");
+  }
+
+  instanceLiveResources() {
+    return this.get<InstanceLiveResources>("/v1/instance-admin/operations/live");
+  }
+
+  storageMaintenanceSummary() {
+    return this.get<StorageMaintenanceSummary>("/v1/instance-admin/maintenance/summary");
+  }
+
+  inspectStorageMaintenance() {
+    return this.post<StorageMaintenancePreview>("/v1/instance-admin/maintenance/preview", {});
+  }
+
+  quarantineOrphanedStorage() {
+    return this.post<StorageMaintenanceActionResult>("/v1/instance-admin/maintenance/quarantine", {});
+  }
+
+  restoreQuarantinedStorage() {
+    return this.post<StorageMaintenanceActionResult>("/v1/instance-admin/maintenance/restore", {});
+  }
+
+  purgeExpiredQuarantinedStorage() {
+    return this.post<StorageMaintenanceActionResult>("/v1/instance-admin/maintenance/purge", {});
   }
 
   revokeDevice(deviceId: string) {
@@ -719,6 +1003,17 @@ export class ApiClient {
 
   serverModeration(serverId: string) {
     return this.get<ServerModeration>(`/v1/servers/${serverId}/moderation`);
+  }
+
+  warnServerMember(serverId: string, userId: string, reason: string, expiresInSeconds?: number) {
+    return this.post<{ warning: { id: string; createdAt: string; expiresAt: string | null } }>(
+      `/v1/servers/${encodeURIComponent(serverId)}/members/${encodeURIComponent(userId)}/warnings`,
+      { reason, ...(expiresInSeconds ? { expiresInSeconds } : {}) },
+    );
+  }
+
+  revokeServerWarning(serverId: string, warningId: string) {
+    return this.delete<{ revoked: boolean }>(`/v1/servers/${encodeURIComponent(serverId)}/warnings/${encodeURIComponent(warningId)}`);
   }
 
   banServerMember(serverId: string, userId: string, options: { reason?: string; expiresInSeconds?: number } = {}) {

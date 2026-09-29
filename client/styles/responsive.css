@@ -17,6 +17,9 @@
   .workspace-rail { display: none; }
   .chat-header { padding: 0 0.8rem; }
   .chat-actions .icon-button:nth-child(-n+2) { display: grid; }
+  .chat-moderation-notices { padding: 0.45rem 0.55rem; }
+  .chat-moderation-notice { align-items: flex-start; flex-direction: column; gap: 0.55rem; padding: 0.6rem; }
+  .chat-moderation-notice > button { align-self: flex-end; }
   .messages { padding: 0.8rem 0.55rem 1rem; }
   .composer { margin: 0 0.55rem 0.65rem; }
 }

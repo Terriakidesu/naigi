@@ -97,13 +97,83 @@ The host-only web console is at `/instance-admin`. Its APIs are:
 | `POST` | `/v1/instance-admin/reports/:reportId/remove-message` | Remove the referenced encrypted message from server history |
 | `POST` | `/v1/instance-admin/users/:userId/suspend` | Revoke sessions and suspend an account, optionally resolving a matching report |
 | `DELETE` | `/v1/instance-admin/users/:userId/suspension` | Restore a suspended account |
+| `GET` | `/v1/instance-admin/users` | Search and page through chat accounts as a host operator |
+| `GET` | `/v1/instance-admin/users/:userId` | Read an account's instance warning and action history |
+| `POST` | `/v1/instance-admin/users/:userId/warnings` | Issue an instance-wide warning |
+| `DELETE` | `/v1/instance-admin/warnings/:warningId` | Revoke an instance-wide warning |
 | `GET` | `/v1/instance-admin/report-keys` | List active and retired public-key IDs |
 | `POST` | `/v1/instance-admin/report-keys` | Register and activate an RSA public key |
 | `GET` | `/v1/instance-admin/audit` | Read the instance-wide admin audit log |
+| `GET` | `/v1/instance-admin/operations` | Read an on-demand, read-only service, database, and storage snapshot |
+| `GET` | `/v1/instance-admin/operations/overview` | Read aggregate account, community, activity, moderation, and live-connection counts |
+| `GET` | `/v1/instance-admin/operations/live` | Sample live process/host CPU and RAM metrics |
+| `GET` | `/v1/instance-admin/maintenance/summary` | Read aggregate quarantine and recovery status |
+| `POST` | `/v1/instance-admin/maintenance/preview` | Scan storage and report aggregate eligible-file estimates |
+| `POST` | `/v1/instance-admin/maintenance/quarantine` | Fresh-scan, recheck, and quarantine up to 500 eligible files |
+| `POST` | `/v1/instance-admin/maintenance/restore` | Restore up to 500 quarantined files without overwriting existing files |
+| `POST` | `/v1/instance-admin/maintenance/purge` | Permanently delete up to 500 files whose recovery period has expired |
+
+The operations endpoints require the host-operator cookie. The snapshot endpoint returns database
+sizes and approximate row counts, plus aggregate storage-integrity totals. The live endpoint returns
+CPU percentages (app-process CPU normalized against OS-reported logical cores and host-wide CPU),
+RAM, uptime, and load averages; the console samples it every three seconds while Operations is open.
+Operations APIs never return file paths, storage keys, file names, or stored message/attachment content.
+The overview reports an exact total chat-account count (host operators are excluded because their
+identities are stored separately), exact space/active-room and moderation totals, and PostgreSQL
+estimates for message and upload records. “Authenticated in last 24h” counts distinct chat accounts
+with an unexpired session used during that window; it is an activity proxy, not proof of human
+activity. Connected users are distinct chat accounts with active authenticated WebSockets across
+app processes; socket leases renew every 15 seconds and expire within 45 seconds after a process
+stops renewing. A user with multiple tabs counts once as connected and multiple times in the socket
+total. The dashboard refreshes aggregate counts every 30 seconds while visible. Only hashed account
+identifiers and opaque connection IDs are held in Redis for the short connection-lease window; no
+identifiers are returned by the API. The overview includes seven database-calendar-day counts for
+new accounts, message envelopes, attachments, and custom emoji records; these are record counts only
+(attachment records include pending uploads), are cached for up to one minute, and require the
+activity indexes from migration `023_operations_activity_indexes.sql`. The live CPU/memory chart is
+sampled by the page every three seconds and kept only in browser memory until the page is closed.
+Files newer than one hour are excluded from likely-orphan totals; incomplete scans report warnings
+instead of claiming a complete missing-file count. Operations is read-only and does not alter
+application content or files.
+
+Host user management is available only to host operators and searches chat-account usernames and
+display names; host operator identities remain separate. An instance ban blocks future sign-ins,
+deletes existing chat sessions and push subscriptions, and closes active chat sockets. Restoring a
+ban permits a later sign-in but does not restore deleted sessions. Instance warnings are separate
+from space moderation and do not restrict access. Both warning scopes store a moderator-supplied
+reason and optional expiry, preserve revoked/expired history, and expose unacknowledged notices only
+to the affected user. Space warning creation and revocation use the `warn_members` and
+`revoke_warnings` permissions (or legacy `manage_members`) and are included in the space audit log.
+Unacknowledged space warnings are also available across all of a user's spaces so they remain visible
+in chat even while the user is viewing a direct conversation or is no longer an active space member.
+Moderation reasons are administrative records, not chat messages; no encrypted message content or
+report evidence is returned by these routes.
+
+### User warning endpoints
+
+These endpoints use the affected chat user's session, not a host-operator session:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/me/instance-warnings` | Read unacknowledged instance warnings |
+| `PATCH` | `/v1/me/instance-warnings/:warningId/acknowledge` | Acknowledge an instance warning owned by the signed-in user |
+| `GET` | `/v1/me/server-warnings` | Read unacknowledged space warnings across spaces |
+| `PATCH` | `/v1/me/server-warnings/:warningId/acknowledge` | Acknowledge a space warning owned by the signed-in user |
+
+Storage maintenance is available separately to authenticated host operators. Only unreferenced files
+at least 24 hours old are eligible; quarantine is blocked unless database references and both
+filesystem scans are complete, and the quarantine action repeats the scan and rechecks each file's
+references and identity immediately before moving it. Each action handles at most 500 files. Files
+are moved into a reserved quarantine directory on the same filesystem, remain recoverable for 30
+days, and can only be permanently purged by a separate manual action after expiry. Restore and purge
+never overwrite or follow non-regular files. Maintenance API responses contain aggregate counts and
+bytes only—never storage paths, keys, or file names—and actions are recorded in the instance admin
+audit log.
 
 Report detail views, evidence-access actions, report status changes, message removal, account
-suspension/restoration, and key creation are recorded with actor, action, report/user references,
-and timestamps. Audit rows do not contain message plaintext or report evidence. The host operator
+suspension/restoration, key creation, and storage maintenance are recorded with actor, action,
+applicable references, and timestamps. Maintenance audit details contain aggregate counts and bytes
+only—not storage keys, paths, file names, message plaintext, or report evidence. The host operator
 is responsible for evidence-key backup and access policy; these tools do not establish legal
 compliance for a particular jurisdiction.
 
@@ -143,6 +213,13 @@ the backend does not depend on that representation.
 | `PATCH` | `/v1/servers/:serverId/roles/:roleId/categories/:categoryId` | Grant or replace inherited role access to a category |
 | `DELETE` | `/v1/servers/:serverId/roles/:roleId/categories/:categoryId` | Remove inherited role access from a category |
 | `GET` | `/v1/servers/:serverId/members` | List active members and roles |
+| `GET` | `/v1/servers/:serverId/moderation` | Read active bans/timeouts and warning history (view moderation records) |
+| `POST` | `/v1/servers/:serverId/members/:userId/warnings` | Issue a space warning (warn members) |
+| `DELETE` | `/v1/servers/:serverId/warnings/:warningId` | Revoke a space warning (revoke warnings) |
+| `POST` | `/v1/servers/:serverId/members/:userId/ban` | Ban a member from the space, optionally with an expiry |
+| `DELETE` | `/v1/servers/:serverId/bans/:userId` | Revoke a space ban (unban members) |
+| `POST` | `/v1/servers/:serverId/members/:userId/timeout` | Apply a space timeout with a duration and optional reason |
+| `DELETE` | `/v1/servers/:serverId/timeouts/:userId` | Remove a space timeout (remove timeouts) |
 | `GET` | `/v1/servers/:serverId/invites` | List invite metadata (owner/admin) |
 | `POST` | `/v1/servers/:serverId/invites` | Replace the current active invite with a hashed, expiring invite (owner/admin) |
 | `DELETE` | `/v1/servers/:serverId/invites/:inviteId` | Revoke an invite |

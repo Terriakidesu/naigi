@@ -1,6 +1,6 @@
 import { emojiAssetCodes } from "../client/emoji-data";
 
-for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "server-settings", "instance-admin", "instance-admin-login"]) {
+for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "server-settings", "instance-admin", "instance-users", "instance-operations", "instance-maintenance", "instance-admin-login"]) {
   const result = await Bun.build({
     entrypoints: [`client/${entry}.ts`],
     outdir: "public",
@@ -18,7 +18,7 @@ for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "s
   }
 }
 
-for (const page of ["index", "register", "unlock", "chat", "new", "settings", "server-settings", "instance-admin", "instance-admin-login"]) {
+for (const page of ["index", "register", "unlock", "chat", "new", "settings", "server-settings", "instance-admin", "instance-users", "instance-operations", "instance-maintenance", "instance-admin-login"]) {
   await Bun.write(`public/${page}.html`, Bun.file(`client/${page}.html`));
 }
 const styleSheets = [

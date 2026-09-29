@@ -121,7 +121,8 @@
         </div>
         <div id="moderation" class="settings-view" data-settings-view hidden>
           <section class="settings-section panel">
-            <div class="settings-section-heading"><div><p class="eyebrow">MODERATION</p><h2>Active actions</h2></div><span class="muted small">Bans block future invites; timeouts block sending</span></div>
+            <div class="settings-section-heading"><div><p class="eyebrow">MODERATION</p><h2>Active actions</h2></div><span class="muted small">Warnings are visible to users; bans and timeouts are space-scoped</span></div>
+            <p class="settings-section-description">Warn, ban, and timeout actions require a reason. Warnings do not restrict access and remain in the moderation history after acknowledgement or expiry.</p>
             <div id="moderation-settings-list" class="settings-list"></div>
           </section>
         </div>
@@ -153,6 +154,16 @@
         <p id="server-settings-status" class="form-status" role="status"></p>
       </section>
     </main>
+    <dialog id="moderation-action-dialog" class="moderation-action-dialog">
+      <form id="moderation-action-form">
+        <p class="eyebrow">SPACE MODERATION</p>
+        <h2 id="moderation-action-title">Moderate member</h2>
+        <p id="moderation-action-description" class="muted small"></p>
+        <label for="moderation-action-reason">Reason<textarea id="moderation-action-reason" maxlength="240" rows="3" required></textarea></label>
+        <label for="moderation-action-duration">Duration<select id="moderation-action-duration"></select></label>
+        <div class="moderation-action-buttons"><button id="moderation-action-cancel" class="secondary" type="button">Cancel</button><button id="moderation-action-submit" type="submit">Confirm</button></div>
+      </form>
+    </dialog>
     <script type="module" src="/server-settings.js"></script>
   </body>
 </html>

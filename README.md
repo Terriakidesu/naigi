@@ -50,7 +50,12 @@ are stored only in the separate admin database: they cannot sign in to chat, hav
 appear in member lists or recipient discovery. Use `password` to rotate an operator password and
 revoke their active sessions. For non-interactive shells, add `--password-stdin` and pipe two
 newline-separated password entries to the command; do not put passwords in command arguments.
-The host-only console is at `/instance-admin`.
+The host-only moderation console is at `/instance-admin`; account search and instance-wide bans and
+warnings are on `/instance-admin/users`. Live operations and on-demand database and storage
+measurements are on the separate `/instance-admin/operations` page. Storage cleanup is
+isolated on `/instance-admin/maintenance`: complete scans and a fresh reference check are required
+before files older than 24 hours can be quarantined. Quarantined files can be restored for 30 days;
+permanent purge is manual and only available after that window. Operations remains read-only.
 
 Reports contain the selected reason and account/message references. Reporters may separately
 opt in to send details or a selected message excerpt encrypted in their browser to a host report
@@ -67,8 +72,11 @@ of a private-key backup is lost, its evidence cannot be recovered.
 Account blocking prevents direct conversations in both directions and suppresses their realtime
 events. It does not hide activity in shared spaces or remove either account from those spaces.
 Instance moderation actions (report review, evidence access, message removal, suspension, and key
-creation) are recorded in an instance-wide audit log. These controls provide moderation tools but
-do not by themselves guarantee compliance with any particular jurisdiction's legal requirements.
+creation, bans/restores, and warning issue/revocation) are recorded in an instance-wide audit log.
+Space moderators can separately warn, ban, and timeout members from the space settings; warning
+reasons and expiry are shown to the affected user, and moderation actions are recorded in the space
+audit log. These controls provide moderation tools but do not by themselves guarantee compliance
+with any particular jurisdiction's legal requirements.
 
 To clear all local application data while preserving the schema and migrations:
 

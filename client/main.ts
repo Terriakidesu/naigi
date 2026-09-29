@@ -8,6 +8,8 @@ import {
   type GifProviderConfiguration,
   type MessageEnvelope,
   type MessagePage,
+  type ModerationWarningNotice,
+  type SpaceWarningNotice,
   type Server,
   type ServerCategory,
   type ServerChannel,
@@ -282,6 +284,7 @@ const mobileServerSelect = byId<HTMLSelectElement>("mobile-server-select");
 const conversationTitle = byId<HTMLElement>("conversation-title");
 const conversationSubtitle = byId<HTMLElement>("conversation-subtitle");
 const messagesPanel = byId<HTMLElement>("messages");
+const moderationNotices = byId<HTMLElement>("moderation-notices");
 const memberList = byId<HTMLElement>("member-list");
 const serverList = byId<HTMLElement>("server-list");
 const channelSectionHeading = byId<HTMLElement>("channel-section-heading");
@@ -400,6 +403,68 @@ function setChannelIcon(name: string) {
 
 function setStatus(message: string, error = false) {
   if (error) console.error(`[Naigi] ${message}`);
+}
+
+type ScopedWarningNotice = ModerationWarningNotice & { scope: "instance" | "space"; serverId?: string };
+let instanceWarningNotices: ModerationWarningNotice[] = [];
+let serverWarningNotices: SpaceWarningNotice[] = [];
+let warningNoticeRequest = 0;
+
+function renderModerationNotices() {
+  moderationNotices.replaceChildren();
+  const notices: ScopedWarningNotice[] = [
+    ...instanceWarningNotices.map((warning) => ({ ...warning, scope: "instance" as const })),
+    ...serverWarningNotices.map((warning) => ({ ...warning, scope: "space" as const })),
+  ];
+  moderationNotices.hidden = notices.length === 0;
+  for (const warning of notices) {
+    const item = document.createElement("article");
+    item.className = "chat-moderation-notice";
+    const copy = document.createElement("div");
+    copy.className = "chat-moderation-notice-copy";
+    const heading = document.createElement("strong");
+    heading.textContent = warning.scope === "instance"
+      ? "Instance-wide warning"
+      : `Space warning · ${warning.serverId ? serverNameForId(warning.serverId) : "space"}`;
+    const reason = document.createElement("p");
+    reason.textContent = warning.reason;
+    const issued = new Date(warning.createdAt);
+    const expires = warning.expiresAt ? new Date(warning.expiresAt) : null;
+    const details = document.createElement("small");
+    details.textContent = `Issued ${Number.isNaN(issued.getTime()) ? "recently" : issued.toLocaleString()}${expires ? ` · expires ${Number.isNaN(expires.getTime()) ? "later" : expires.toLocaleString()}` : " · no expiry"}`;
+    copy.append(heading, reason, details);
+    const acknowledge = document.createElement("button");
+    acknowledge.type = "button";
+    acknowledge.className = "secondary";
+    acknowledge.textContent = "Acknowledge";
+    acknowledge.addEventListener("click", async () => {
+      acknowledge.disabled = true;
+      try {
+        if (warning.scope === "instance") await api.acknowledgeInstanceWarning(warning.id);
+        else await api.acknowledgeSpaceWarning(warning.id);
+        if (warning.scope === "instance") instanceWarningNotices = instanceWarningNotices.filter((entry) => entry.id !== warning.id);
+        else serverWarningNotices = serverWarningNotices.filter((entry) => entry.id !== warning.id);
+        renderModerationNotices();
+      } catch {
+        acknowledge.disabled = false;
+        acknowledge.textContent = "Retry acknowledgement";
+      }
+    });
+    item.append(copy, acknowledge);
+    moderationNotices.append(item);
+  }
+}
+
+async function refreshModerationNotices(serverId = selectedServerId) {
+  const request = ++warningNoticeRequest;
+  const [instanceResult, serverResult] = await Promise.all([
+    api.myInstanceWarnings().catch(() => null),
+    api.mySpaceWarnings().catch(() => null),
+  ]);
+  if (request !== warningNoticeRequest || selectedServerId !== serverId) return;
+  if (instanceResult) instanceWarningNotices = instanceResult.warnings;
+  if (serverResult) serverWarningNotices = serverResult.warnings;
+  renderModerationNotices();
 }
 
 function notificationsSupported() {
@@ -3066,6 +3131,8 @@ function renderServers() {
     || activeServer.permissions.unban_members
     || activeServer.permissions.timeout_members
     || activeServer.permissions.remove_timeouts
+    || activeServer.permissions.warn_members
+    || activeServer.permissions.revoke_warnings
     || activeServer.permissions.manage_custom_emoji
     || activeServer.permissions.view_audit_logs
   ));
@@ -3456,6 +3523,7 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   hideMentionSuggestions();
   const token = ++serverSelectionToken;
   selectedServerId = serverId;
+  void refreshModerationNotices(serverId);
   selectedChannelId = undefined;
   activeServerWelcome = undefined;
   clearCustomEmojiAssets();
@@ -3580,6 +3648,7 @@ async function hydrateChannelLabels(serverId: string, snapshot: ServerChannel[],
 
 async function openDirectMessage(conversationId: string) {
   selectedServerId = undefined;
+  void refreshModerationNotices(undefined);
   selectedChannelId = undefined;
   channels = [];
   categories = [];
@@ -6312,6 +6381,7 @@ window.addEventListener("resize", () => setMobileSidebar(chatLayout.classList.co
 setMobileSidebar(chatLayout.classList.contains("mobile-sidebar-open"));
 document.addEventListener("visibilitychange", () => {
   publishPresence(document.visibilityState === "hidden" ? "idle" : "online");
+  if (document.visibilityState === "visible") void refreshModerationNotices(selectedServerId);
   if (document.visibilityState === "visible" && selectedConversationId && isAtLatestMessage()) {
     clearUnread();
     void refreshMessages().catch((error) => setStatus(readableError(error), true));
@@ -6334,6 +6404,10 @@ renderIcons();
 async function boot() {
   try {
     currentUser = (await api.me()).user;
+    void refreshModerationNotices(undefined);
+    window.setInterval(() => {
+      if (!document.hidden) void refreshModerationNotices(selectedServerId);
+    }, 60_000);
     await startCrypto();
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {

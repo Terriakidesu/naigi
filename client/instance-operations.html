@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Host operations · Naigi</title>
+    <link rel="stylesheet" href="/app.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  </head>
+  <body class="settings-page instance-admin-page">
+    <header class="topbar">
+      <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">N</span><div><strong>Naigi</strong><span class="tag">host operator console</span></div></div>
+      <div class="topbar-links">
+        <a class="text-link" href="/">Chat sign in</a>
+        <button id="admin-logout-operations" class="secondary" type="button">Sign out operator</button>
+      </div>
+    </header>
+    <main class="instance-admin-main">
+      <header class="instance-admin-heading">
+        <div><p class="eyebrow">HOST OPERATIONS</p><h1>Operations</h1><p class="muted">Live resource readings and on-demand database and storage diagnostics. This page is host-operator-only.</p></div>
+      </header>
+      <nav class="instance-admin-console-nav" aria-label="Host console pages">
+        <a href="/instance-admin">Reports</a>
+        <a href="/instance-admin/users">Users</a>
+        <span aria-current="page">Operations</span>
+        <a href="/instance-admin/maintenance">Maintenance</a>
+      </nav>
+
+      <section class="instance-admin-panel instance-ops-overview-section">
+        <header class="instance-ops-overview-heading">
+          <div><p class="eyebrow">INSTANCE OVERVIEW</p><h2>People, activity &amp; moderation</h2><p class="muted">Aggregate counts only. Chat accounts exclude host operators; message and upload totals are PostgreSQL estimates.</p></div>
+          <button id="refresh-instance-overview" class="secondary" type="button"><i data-lucide="users-round"></i>Refresh overview</button>
+        </header>
+        <p id="instance-overview-status" class="instance-operations-status" role="status" aria-live="polite" aria-busy="true">Loading aggregate instance counts…</p>
+        <div id="instance-overview-groups" class="instance-ops-overview-layout" hidden></div>
+      </section>
+
+      <section class="instance-admin-panel instance-ops-section instance-ops-live-section">
+        <header class="instance-ops-section-heading">
+          <div><p class="eyebrow">LIVE · 3 SECOND SAMPLES</p><h3>CPU &amp; memory</h3></div>
+          <span id="instance-live-resource-status">Connecting…</span>
+        </header>
+        <div id="instance-live-resource-metrics" class="instance-ops-metrics"></div>
+        <div id="instance-live-resource-chart" class="instance-ops-live-chart"><p class="instance-ops-chart-empty">Collecting resource samples; this short history stays in this page only.</p></div>
+      </section>
+
+      <section class="instance-operations-view">
+        <header class="instance-operations-heading">
+          <div><p class="eyebrow">ON-DEMAND SNAPSHOT</p><h2>Services, databases &amp; storage</h2><p class="muted">File integrity totals are approximate and read-only. File names, paths, and encrypted content are never shown. Cleanup is available only through the separate Maintenance workflow.</p></div>
+          <button id="refresh-instance-operations" class="secondary" type="button"><i data-lucide="database"></i>Run fresh scan</button>
+        </header>
+        <p id="instance-operations-status" class="instance-operations-status" role="status" aria-live="polite">Run a read-only scan to collect service, database, and filesystem measurements.</p>
+        <div id="instance-operations-alerts" class="instance-ops-alerts" aria-live="polite" hidden></div>
+        <div id="instance-operations-dashboard" class="instance-operations-dashboard" hidden></div>
+      </section>
+    </main>
+    <script type="module" src="/instance-operations.js"></script>
+  </body>
+</html>

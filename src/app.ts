@@ -28,6 +28,21 @@ import {
   type AuthenticatedAdmin,
 } from "./admin-auth/session";
 import { config } from "./config";
+import { getInstanceLiveResources, getInstanceOperationsOverview, getInstanceOperationsSnapshot } from "./admin-operations";
+import {
+  liveConnectionRefreshMs,
+  refreshLiveConnections,
+  registerLiveConnection,
+  removeLiveConnection,
+} from "./admin-operations/live-connections";
+import {
+  getStorageMaintenanceSummary,
+  inspectStorageMaintenance,
+  purgeExpiredQuarantinedStorage,
+  quarantineOrphanedStorage,
+  restoreQuarantinedStorage,
+  StorageMaintenanceError,
+} from "./admin-maintenance";
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "./encoding";
 import { db, pingDatabase } from "./db/client";
 import { pingAdminDatabase } from "./admin-db/client";
@@ -125,12 +140,13 @@ async function recordInstanceAdminAudit(
   action: string,
   reportId: string | null = null,
   targetUserId: string | null = null,
+  details: Record<string, unknown> = {},
 ) {
   await db`
     insert into instance_admin_audit_logs (
-      admin_user_id, admin_username, admin_display_name, action, report_id, target_user_id
+      admin_user_id, admin_username, admin_display_name, action, report_id, target_user_id, details
     ) values (
-      ${operator.id}, ${operator.username}, ${operator.username}, ${action}, ${reportId}, ${targetUserId}
+      ${operator.id}, ${operator.username}, ${operator.username}, ${action}, ${reportId}, ${targetUserId}, ${JSON.stringify(details)}::jsonb
     )
   `;
 }
@@ -332,6 +348,8 @@ const serverPermissionNames = [
   "unban_members",
   "timeout_members",
   "remove_timeouts",
+  "warn_members",
+  "revoke_warnings",
   "pin_messages",
   "delete_others_messages",
   "delete_messages",
@@ -400,6 +418,8 @@ function defaultRolePermissions(systemKey: ServerSystemKey): ServerPermissionMap
     unban_members: true,
     timeout_members: true,
     remove_timeouts: true,
+    warn_members: true,
+    revoke_warnings: true,
     pin_messages: true,
     delete_others_messages: true,
     delete_messages: true,
@@ -862,7 +882,25 @@ export function createApp() {
     userId: string;
     connection: RealtimeConnection;
     close: () => void;
+    operationsMember: string;
   }>();
+  let liveConnectionRefreshTimer: ReturnType<typeof setInterval> | undefined;
+
+  function ensureLiveConnectionRefresh() {
+    if (liveConnectionRefreshTimer) return;
+    liveConnectionRefreshTimer = setInterval(() => {
+      const members = [...realtimeConnections.values()].map((active) => active.operationsMember);
+      void refreshLiveConnections(members).catch(() => {
+        // Connection leases expire on their own if Redis is temporarily unavailable.
+      });
+    }, liveConnectionRefreshMs);
+  }
+
+  function stopLiveConnectionRefreshIfIdle() {
+    if (realtimeConnections.size > 0 || !liveConnectionRefreshTimer) return;
+    clearInterval(liveConnectionRefreshTimer);
+    liveConnectionRefreshTimer = undefined;
+  }
 
   return new Elysia()
     .onError(({ code, error, request, set }) => {
@@ -875,7 +913,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.16.0" };
+         ?? { name: "Naigi", version: "0.17.0" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -917,6 +955,36 @@ export function createApp() {
       set.headers["cache-control"] = "no-store";
       return file;
     })
+    .get("/instance-admin/operations", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      const file = await publicFile(
+        operator ? "instance-operations.html" : "instance-admin-login.html",
+        "text/html; charset=utf-8",
+      );
+      if (!file) return respondError(set, 404, "client_not_built");
+      set.headers["cache-control"] = "no-store";
+      return file;
+    })
+    .get("/instance-admin/users", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      const file = await publicFile(
+        operator ? "instance-users.html" : "instance-admin-login.html",
+        "text/html; charset=utf-8",
+      );
+      if (!file) return respondError(set, 404, "client_not_built");
+      set.headers["cache-control"] = "no-store";
+      return file;
+    })
+    .get("/instance-admin/maintenance", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      const file = await publicFile(
+        operator ? "instance-maintenance.html" : "instance-admin-login.html",
+        "text/html; charset=utf-8",
+      );
+      if (!file) return respondError(set, 404, "client_not_built");
+      set.headers["cache-control"] = "no-store";
+      return file;
+    })
     .get("/auth.js", async ({ set }) => {
       const file = await publicFile("auth.js", "text/javascript; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
@@ -949,6 +1017,21 @@ export function createApp() {
     })
     .get("/instance-admin.js", async ({ set }) => {
       const file = await publicFile("instance-admin.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/instance-operations.js", async ({ set }) => {
+      const file = await publicFile("instance-operations.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/instance-users.js", async ({ set }) => {
+      const file = await publicFile("instance-users.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/instance-maintenance.js", async ({ set }) => {
+      const file = await publicFile("instance-maintenance.js", "text/javascript; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
@@ -1275,6 +1358,203 @@ export function createApp() {
     }, {
       params: t.Object({ reportId: t.String({ format: "uuid" }) }),
     })
+    .get("/v1/instance-admin/users", async ({ headers, query, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const search = query.search?.trim().slice(0, 100) ?? "";
+      const pattern = `%${search}%`;
+      const status = query.status ?? "all";
+      const requestedLimit = Number(query.limit ?? 50);
+      const limit = Number.isInteger(requestedLimit) ? Math.max(10, Math.min(requestedLimit, 100)) : 50;
+      const requestedOffset = Number(query.offset ?? 0);
+      const offset = Number.isInteger(requestedOffset) ? Math.max(0, Math.min(requestedOffset, 1_000_000)) : 0;
+      const normalizeCount = (value: string | undefined) => {
+        const parsed = Number(value ?? 0);
+        return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : 0;
+      };
+      const [count] = await db<{ total: string }[]>`
+        select count(*)::text as total
+        from users u
+        left join instance_user_suspensions s on s.user_id = u.id
+        where (${search} = '' or u.username ilike ${pattern} or u.display_name ilike ${pattern})
+          and (${status} = 'all' or (${status} = 'banned' and s.user_id is not null)
+            or (${status} = 'active' and s.user_id is null))
+      `;
+      const users = await db<{
+        id: string;
+        username: string;
+        display_name: string;
+        created_at: Date;
+        banned: boolean;
+        active_warning_count: string;
+      }[]>`
+        select u.id, u.username, u.display_name, u.created_at,
+          (s.user_id is not null) as banned,
+          (select count(*)::text from instance_user_warnings w
+            where w.user_id = u.id and w.revoked_at is null
+              and (w.expires_at is null or w.expires_at > now())) as active_warning_count
+        from users u
+        left join instance_user_suspensions s on s.user_id = u.id
+        where (${search} = '' or u.username ilike ${pattern} or u.display_name ilike ${pattern})
+          and (${status} = 'all' or (${status} = 'banned' and s.user_id is not null)
+            or (${status} = 'active' and s.user_id is null))
+        order by u.created_at desc, u.id
+        limit ${limit} offset ${offset}
+      `;
+      return {
+        users: users.map((row) => ({
+          id: row.id,
+          username: row.username,
+          displayName: row.display_name,
+          createdAt: row.created_at,
+          banned: row.banned,
+          activeWarningCount: normalizeCount(row.active_warning_count),
+        })),
+        total: normalizeCount(count?.total),
+        limit,
+        offset,
+      };
+    }, {
+      query: t.Object({
+        search: t.Optional(t.String({ maxLength: 100 })),
+        status: t.Optional(t.Union([t.Literal("all"), t.Literal("active"), t.Literal("banned")])),
+        limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })),
+        offset: t.Optional(t.String({ pattern: "^[0-9]{1,7}$" })),
+      }),
+    })
+    .get("/v1/instance-admin/users/:userId", async ({ headers, params, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const [target] = await db<{
+        id: string;
+        username: string;
+        display_name: string;
+        created_at: Date;
+        banned_at: Date | null;
+        ban_reason: string | null;
+      }[]>`
+        select u.id, u.username, u.display_name, u.created_at,
+          s.created_at as banned_at, s.reason as ban_reason
+        from users u
+        left join instance_user_suspensions s on s.user_id = u.id
+        where u.id = ${params.userId}
+      `;
+      if (!target) return respondError(set, 404, "user_not_found");
+      const [warnings, actions] = await Promise.all([
+        db<{
+          id: string;
+          reason: string;
+          created_by_username: string;
+          created_at: Date;
+          expires_at: Date | null;
+          acknowledged_at: Date | null;
+          revoked_at: Date | null;
+        }[]>`
+          select id, reason, created_by_username, created_at, expires_at, acknowledged_at, revoked_at
+          from instance_user_warnings where user_id = ${params.userId}
+          order by created_at desc limit 100
+        `,
+        db<{ id: bigint | number | string; action: string; admin_username: string; details: Record<string, unknown>; created_at: Date }[]>`
+          select id, action, admin_username, details, created_at
+          from instance_admin_audit_logs
+          where target_user_id = ${params.userId}
+          order by created_at desc, id desc limit 100
+        `,
+      ]);
+      return {
+        user: {
+          id: target.id,
+          username: target.username,
+          displayName: target.display_name,
+          createdAt: target.created_at,
+          ban: target.banned_at ? { createdAt: target.banned_at, reason: target.ban_reason } : null,
+        },
+        warnings: warnings.map((warning) => ({
+          id: warning.id,
+          reason: warning.reason,
+          createdByUsername: warning.created_by_username,
+          createdAt: warning.created_at,
+          expiresAt: warning.expires_at,
+          acknowledgedAt: warning.acknowledged_at,
+          revokedAt: warning.revoked_at,
+          active: !warning.revoked_at && (!warning.expires_at || warning.expires_at > new Date()),
+        })),
+        actions: actions.map((action) => ({
+          id: String(action.id),
+          action: action.action,
+          operatorUsername: action.admin_username,
+          details: action.details ?? {},
+          createdAt: action.created_at,
+        })),
+      };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/instance-admin/users/:userId/warnings", async ({ body, headers, params, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      const reason = body.reason.trim();
+      if (!reason) return respondError(set, 422, "warning_reason_required");
+      const expiresInSeconds = body.expiresInSeconds ?? null;
+      const [warning] = await db.begin(async (transaction) => {
+        const [created] = await transaction<{ id: string; created_at: Date; expires_at: Date | null }[]>`
+          insert into instance_user_warnings (
+            user_id, created_by, created_by_username, reason, expires_at
+          )
+          select ${params.userId}, ${operator.id}, ${operator.username}, ${reason},
+            case when ${expiresInSeconds}::integer is null then null::timestamptz
+              else now() + make_interval(secs => ${expiresInSeconds}::integer) end
+          where exists (select 1 from users where id = ${params.userId})
+          returning id, created_at, expires_at
+        `;
+        if (!created) return [undefined];
+        await transaction`
+          insert into instance_admin_audit_logs (
+            admin_user_id, admin_username, admin_display_name, action, target_user_id, details
+          ) values (
+            ${operator.id}, ${operator.username}, ${operator.username}, 'user.warned', ${params.userId},
+            ${JSON.stringify({ warningId: created.id, expiresAt: created.expires_at })}::jsonb
+          )
+        `;
+        return [created];
+      });
+      if (!warning) return respondError(set, 404, "user_not_found");
+      set.status = 201;
+      return { warning: { id: warning.id, createdAt: warning.created_at, expiresAt: warning.expires_at } };
+    }, {
+      params: t.Object({ userId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        reason: t.String({ minLength: 1, maxLength: 240 }),
+        expiresInSeconds: t.Optional(t.Integer({ minimum: 300, maximum: 31_536_000 })),
+      }),
+    })
+    .delete("/v1/instance-admin/warnings/:warningId", async ({ headers, params, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      const revoked = await db.begin(async (transaction) => {
+        const [warning] = await transaction<{ id: string; user_id: string }[]>`
+          update instance_user_warnings set revoked_at = coalesce(revoked_at, now())
+          where id = ${params.warningId} and revoked_at is null
+          returning id, user_id
+        `;
+        if (!warning) return undefined;
+        await transaction`
+          insert into instance_admin_audit_logs (
+            admin_user_id, admin_username, admin_display_name, action, target_user_id, details
+          ) values (
+            ${operator.id}, ${operator.username}, ${operator.username}, 'user.warning_revoked', ${warning.user_id},
+            ${JSON.stringify({ warningId: warning.id })}::jsonb
+          )
+        `;
+        return warning;
+      });
+      if (!revoked) return respondError(set, 404, "warning_not_found");
+      return { revoked: true };
+    }, {
+      params: t.Object({ warningId: t.String({ format: "uuid" }) }),
+    })
     .post("/v1/instance-admin/users/:userId/suspend", async ({ body, headers, params, set }) => {
       const user = await authenticateAdmin(headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
@@ -1289,15 +1569,15 @@ export function createApp() {
       await db.begin(async (transaction) => {
         await transaction`
           insert into instance_user_suspensions (
-            user_id, created_by, created_by_username, created_by_display_name, report_id
+            user_id, created_by, created_by_username, created_by_display_name, report_id, reason
           ) values (
-            ${params.userId}, ${user.id}, ${user.username}, ${user.username}, ${body.reportId ?? null}
+            ${params.userId}, ${user.id}, ${user.username}, ${user.username}, ${body.reportId ?? null}, ${body.reason?.trim() || null}
           )
           on conflict (user_id) do update
             set created_by = excluded.created_by,
               created_by_username = excluded.created_by_username,
               created_by_display_name = excluded.created_by_display_name,
-              report_id = excluded.report_id, created_at = now()
+              report_id = excluded.report_id, reason = excluded.reason, created_at = now()
         `;
         await transaction`delete from sessions where user_id = ${params.userId}`;
         await transaction`delete from fcm_push_subscriptions where user_id = ${params.userId}`;
@@ -1310,9 +1590,10 @@ export function createApp() {
         }
         await transaction`
           insert into instance_admin_audit_logs (
-            admin_user_id, admin_username, admin_display_name, action, report_id, target_user_id
+            admin_user_id, admin_username, admin_display_name, action, report_id, target_user_id, details
           ) values (
-            ${user.id}, ${user.username}, ${user.username}, 'user.suspended', ${body.reportId ?? null}, ${params.userId}
+            ${user.id}, ${user.username}, ${user.username}, 'user.suspended', ${body.reportId ?? null}, ${params.userId},
+            ${JSON.stringify({ reason: body.reason?.trim() || null })}::jsonb
           )
         `;
       });
@@ -1322,7 +1603,10 @@ export function createApp() {
       return { suspended: true };
     }, {
       params: t.Object({ userId: t.String({ format: "uuid" }) }),
-      body: t.Object({ reportId: t.Optional(t.String({ format: "uuid" })) }),
+      body: t.Object({
+        reportId: t.Optional(t.String({ format: "uuid" })),
+        reason: t.Optional(t.String({ maxLength: 240 })),
+      }),
     })
     .delete("/v1/instance-admin/users/:userId/suspension", async ({ headers, params, set }) => {
       const user = await authenticateAdmin(headers.cookie);
@@ -1408,11 +1692,12 @@ export function createApp() {
         admin_username: string;
         admin_display_name: string;
         action: string;
+        details: Record<string, unknown>;
         report_id: string | null;
         target_user_id: string | null;
         created_at: Date;
       }[]>`
-        select l.id, l.admin_user_id, l.admin_username, l.admin_display_name, l.action, l.report_id,
+        select l.id, l.admin_user_id, l.admin_username, l.admin_display_name, l.action, l.details, l.report_id,
           l.target_user_id, l.created_at
         from instance_admin_audit_logs l
         order by l.created_at desc, l.id desc limit ${Number.isInteger(limit) ? limit : 100}
@@ -1423,12 +1708,76 @@ export function createApp() {
         adminUsername: row.admin_username,
         adminDisplayName: row.admin_display_name,
         action: row.action,
+        details: row.details ?? {},
         reportId: row.report_id,
         targetUserId: row.target_user_id,
         createdAt: row.created_at,
       })) };
     }, {
       query: t.Object({ limit: t.Optional(t.String({ pattern: "^[0-9]{1,3}$" })) }),
+    })
+    .get("/v1/instance-admin/operations", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      return await getInstanceOperationsSnapshot();
+    })
+    .get("/v1/instance-admin/operations/live", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      return getInstanceLiveResources();
+    })
+    .get("/v1/instance-admin/operations/overview", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      return await getInstanceOperationsOverview();
+    })
+    .get("/v1/instance-admin/maintenance/summary", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      return await getStorageMaintenanceSummary(operator);
+    })
+    .post("/v1/instance-admin/maintenance/preview", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      return await inspectStorageMaintenance();
+    })
+    .post("/v1/instance-admin/maintenance/quarantine", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      try {
+        return await quarantineOrphanedStorage(operator);
+      } catch (error) {
+        if (error instanceof StorageMaintenanceError) return respondError(set, error.status, error.code);
+        throw error;
+      }
+    })
+    .post("/v1/instance-admin/maintenance/restore", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      try {
+        return await restoreQuarantinedStorage(operator);
+      } catch (error) {
+        if (error instanceof StorageMaintenanceError) return respondError(set, error.status, error.code);
+        throw error;
+      }
+    })
+    .post("/v1/instance-admin/maintenance/purge", async ({ headers, set }) => {
+      const operator = await authenticateAdmin(headers.cookie);
+      if (!operator) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      try {
+        return await purgeExpiredQuarantinedStorage(operator);
+      } catch (error) {
+        if (error instanceof StorageMaintenanceError) return respondError(set, error.status, error.code);
+        throw error;
+      }
     })
     .post("/v1/previews/twitter", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -1499,6 +1848,39 @@ export function createApp() {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
       return { user };
+    })
+    .get("/v1/me/instance-warnings", async ({ headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const warnings = await db<{ id: string; reason: string; created_at: Date; expires_at: Date | null }[]>`
+        select id, reason, created_at, expires_at
+        from instance_user_warnings
+        where user_id = ${user.id} and acknowledged_at is null and revoked_at is null
+          and (expires_at is null or expires_at > now())
+        order by created_at desc limit 25
+      `;
+      return { warnings: warnings.map((warning) => ({
+        id: warning.id,
+        reason: warning.reason,
+        createdAt: warning.created_at,
+        expiresAt: warning.expires_at,
+      })) };
+    })
+    .patch("/v1/me/instance-warnings/:warningId/acknowledge", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const [warning] = await db<{ id: string }[]>`
+        update instance_user_warnings set acknowledged_at = coalesce(acknowledged_at, now())
+        where id = ${params.warningId} and user_id = ${user.id} and revoked_at is null
+          and (expires_at is null or expires_at > now())
+        returning id
+      `;
+      if (!warning) return respondError(set, 404, "warning_not_found");
+      return { acknowledged: true };
+    }, {
+      params: t.Object({ warningId: t.String({ format: "uuid" }) }),
     })
     .post("/v1/push/subscriptions", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -3506,6 +3888,28 @@ export function createApp() {
           and t.revoked_at is null and t.expires_at > now()
         order by t.expires_at asc
       `;
+      const warnings = await db<{
+        id: string;
+        user_id: string;
+        username: string;
+        display_name: string;
+        created_by_username: string;
+        reason: string;
+        expires_at: Date | null;
+        created_at: Date;
+        acknowledged_at: Date | null;
+        revoked_at: Date | null;
+        active: boolean;
+      }[]>`
+        select w.id, w.user_id, u.username, u.display_name,
+          creator.username as created_by_username, w.reason, w.expires_at, w.created_at, w.acknowledged_at, w.revoked_at,
+          (w.revoked_at is null and (w.expires_at is null or w.expires_at > now())) as active
+        from server_member_warnings w
+        join users u on u.id = w.user_id
+        join users creator on creator.id = w.created_by
+        where w.server_id = ${params.serverId}
+        order by w.created_at desc limit 100
+      `;
       return {
         bans: bans.map((ban) => ({
           id: ban.id,
@@ -3525,9 +3929,129 @@ export function createApp() {
           expiresAt: timeout.expires_at,
           createdAt: timeout.created_at,
         })),
+        warnings: warnings.map((warning) => ({
+          id: warning.id,
+          userId: warning.user_id,
+          username: warning.username,
+          displayName: warning.display_name,
+          createdByUsername: warning.created_by_username,
+          reason: warning.reason,
+          expiresAt: warning.expires_at,
+          createdAt: warning.created_at,
+          acknowledgedAt: warning.acknowledged_at,
+          revokedAt: warning.revoked_at,
+          active: warning.active,
+        })),
       };
     }, {
       params: t.Object({ serverId: t.String({ format: "uuid" }) }),
+    })
+    .get("/v1/me/server-warnings", async ({ headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const warnings = await db<{
+        id: string;
+        server_id: string;
+        reason: string;
+        created_at: Date;
+        expires_at: Date | null;
+      }[]>`
+        select id, server_id, reason, created_at, expires_at
+        from server_member_warnings
+        where user_id = ${user.id} and acknowledged_at is null and revoked_at is null
+          and (expires_at is null or expires_at > now())
+        order by created_at desc limit 50
+      `;
+      return { warnings: warnings.map((warning) => ({
+        id: warning.id,
+        serverId: warning.server_id,
+        reason: warning.reason,
+        createdAt: warning.created_at,
+        expiresAt: warning.expires_at,
+      })) };
+    })
+    .patch("/v1/me/server-warnings/:warningId/acknowledge", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      set.headers["cache-control"] = "no-store";
+      const [warning] = await db<{ id: string }[]>`
+        update server_member_warnings set acknowledged_at = coalesce(acknowledged_at, now())
+        where id = ${params.warningId} and user_id = ${user.id} and revoked_at is null
+          and (expires_at is null or expires_at > now())
+        returning id
+      `;
+      if (!warning) return respondError(set, 404, "warning_not_found");
+      return { acknowledged: true };
+    }, {
+      params: t.Object({ warningId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/servers/:serverId/members/:userId/warnings", async ({ body, headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasAnyServerPermission(authorization, "manage_members", "warn_members")) return respondError(set, 403, "insufficient_server_permissions");
+      if (params.userId === user.id) return respondError(set, 400, "cannot_moderate_self");
+      const target = await serverAuthorization(params.serverId, params.userId);
+      if (!target) return respondError(set, 404, "server_member_not_found");
+      if (target.isOwner || !canModerateTarget(authorization, target)) return respondError(set, 403, "insufficient_server_permissions");
+      const reason = body.reason.trim();
+      if (!reason) return respondError(set, 422, "warning_reason_required");
+      const expiresInSeconds = body.expiresInSeconds ?? null;
+      const warning = await db.begin(async (transaction) => {
+        const [created] = await transaction<{ id: string; created_at: Date; expires_at: Date | null }[]>`
+          insert into server_member_warnings (server_id, user_id, created_by, reason, expires_at)
+          values (
+            ${params.serverId}, ${params.userId}, ${user.id}, ${reason},
+            case when ${expiresInSeconds}::integer is null then null::timestamptz
+              else now() + make_interval(secs => ${expiresInSeconds}::integer) end
+          ) returning id, created_at, expires_at
+        `;
+        await transaction`
+          insert into server_audit_logs (server_id, actor_id, action, target_id, target_user_id)
+          values (${params.serverId}, ${user.id}, 'member.warned', ${created.id}, ${params.userId})
+        `;
+        return created;
+      });
+      set.status = 201;
+      return { warning: { id: warning.id, createdAt: warning.created_at, expiresAt: warning.expires_at } };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), userId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        reason: t.String({ minLength: 1, maxLength: 240 }),
+        expiresInSeconds: t.Optional(t.Integer({ minimum: 300, maximum: 31_536_000 })),
+      }),
+    })
+    .delete("/v1/servers/:serverId/warnings/:warningId", async ({ headers, params, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasAnyServerPermission(authorization, "manage_members", "revoke_warnings")) return respondError(set, 403, "insufficient_server_permissions");
+      const [warning] = await db<{ id: string; user_id: string }[]>`
+        select id, user_id from server_member_warnings
+        where id = ${params.warningId} and server_id = ${params.serverId} and revoked_at is null
+      `;
+      if (!warning) return respondError(set, 404, "warning_not_found");
+      const target = await serverAuthorization(params.serverId, warning.user_id);
+      if (target && (target.isOwner || !canModerateTarget(authorization, target))) return respondError(set, 403, "insufficient_server_permissions");
+      const revoked = await db.begin(async (transaction) => {
+        const [row] = await transaction<{ id: string }[]>`
+          update server_member_warnings set revoked_at = coalesce(revoked_at, now())
+          where id = ${warning.id} and revoked_at is null returning id
+        `;
+        if (!row) return undefined;
+        await transaction`
+          insert into server_audit_logs (server_id, actor_id, action, target_id, target_user_id)
+          values (${params.serverId}, ${user.id}, 'member.warning_revoked', ${warning.id}, ${warning.user_id})
+        `;
+        return row;
+      });
+      if (!revoked) return respondError(set, 404, "warning_not_found");
+      return { revoked: true };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), warningId: t.String({ format: "uuid" }) }),
     })
     .post("/v1/servers/:serverId/members/:userId/ban", async ({ body, headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
@@ -5147,16 +5671,24 @@ export function createApp() {
           ws.close(4001, "unauthorized");
           return;
         }
-
+        let connection: RealtimeConnection | undefined;
+        let operationsMember: string | undefined;
         try {
-          const connection = await createRealtimeConnection(ws, user.id);
+          connection = await createRealtimeConnection(ws, user.id);
+          operationsMember = await registerLiveConnection(user.id);
           realtimeConnections.set(ws.raw, {
             userId: user.id,
             connection,
             close: () => ws.close(4003, "account_suspended"),
+            operationsMember,
           });
+          ensureLiveConnectionRefresh();
           ws.send(JSON.stringify({ type: "ready" }));
         } catch {
+          if (operationsMember) await removeLiveConnection(operationsMember).catch(() => undefined);
+          realtimeConnections.delete(ws.raw);
+          if (connection) await connection.close().catch(() => undefined);
+          stopLiveConnectionRefreshIfIdle();
           ws.close(1013, "realtime_unavailable");
         }
       },
@@ -5206,7 +5738,11 @@ export function createApp() {
       close: async (ws) => {
         const active = realtimeConnections.get(ws.raw);
         realtimeConnections.delete(ws.raw);
-        if (active) await active.connection.close();
+        if (active) {
+          await removeLiveConnection(active.operationsMember).catch(() => undefined);
+          await active.connection.close();
+        }
+        stopLiveConnectionRefreshIfIdle();
       },
     });
 }

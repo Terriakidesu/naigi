@@ -1,4 +1,9 @@
-import { ApiClient, ApiError, type InstanceReport, type InstanceReportSummary } from "./api";
+import {
+  ApiClient,
+  ApiError,
+  type InstanceReport,
+  type InstanceReportSummary,
+} from "./api";
 import {
   createEncryptedPrivateKeyBackup,
   decryptReportEvidence,
@@ -6,12 +11,15 @@ import {
   importEncryptedPrivateKeyBackup,
   makeReportPrivateKeyNonExtractable,
 } from "./report-evidence";
-import { renderIcons } from "./icons";
+import { iconElement, renderIcons } from "./icons";
 
 const api = new ApiClient();
 const status = document.getElementById("instance-admin-status") as HTMLElement;
 const statusFilter = document.getElementById("report-status-filter") as HTMLSelectElement;
 const reportList = document.getElementById("instance-report-list") as HTMLElement;
+const reportCount = document.getElementById("report-list-count") as HTMLElement;
+const reportGrid = document.querySelector(".instance-admin-grid") as HTMLElement;
+const reportDetailPanel = document.querySelector(".report-detail-panel") as HTMLElement;
 const refreshReportsButton = document.getElementById("refresh-reports") as HTMLButtonElement;
 const emptyDetail = document.getElementById("instance-report-empty") as HTMLElement;
 const detail = document.getElementById("instance-report-detail") as HTMLElement;
@@ -62,6 +70,7 @@ function setEmptyDetail() {
   selectedReport = undefined;
   detail.hidden = true;
   emptyDetail.hidden = false;
+  reportDetailPanel.hidden = reports.length === 0;
 }
 
 function addMetadata(label: string, value: string) {
@@ -76,7 +85,7 @@ function addMetadata(label: string, value: string) {
 
 function userLabel(displayName: string | null, username: string | null, userId: string | null) {
   if (displayName || username) return `${displayName ?? username}${username ? ` (@${username})` : ""}`;
-  return userId ? `Deleted account · ${userId}` : "Unavailable";
+  return userId ? `Deleted account · ${userId.slice(0, 8)}` : "Unavailable";
 }
 
 function readableDate(value: string) {
@@ -84,15 +93,72 @@ function readableDate(value: string) {
   return Number.isNaN(date.getTime()) ? "Date unavailable" : date.toLocaleString();
 }
 
+function relativeDate(value: string) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "Date unavailable";
+  const seconds = Math.round((timestamp - Date.now()) / 1_000);
+  const absolute = Math.abs(seconds);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (absolute < 60) return formatter.format(seconds, "second");
+  if (absolute < 3_600) return formatter.format(Math.round(seconds / 60), "minute");
+  if (absolute < 86_400) return formatter.format(Math.round(seconds / 3_600), "hour");
+  return formatter.format(Math.round(seconds / 86_400), "day");
+}
+
+function auditActionLabel(action: string) {
+  const labels: Record<string, string> = {
+    "report.viewed": "Report opened",
+    "report.evidence_accessed": "Evidence access recorded",
+    "report.open": "Report reopened",
+    "report.reviewing": "Report marked reviewing",
+    "report.resolved": "Report resolved",
+    "report.dismissed": "Report dismissed",
+    "report.message_removed": "Reported message removed",
+    "report_key.created": "Evidence encryption key created",
+    "user.suspended": "Account suspended",
+    "user.restored": "Account restored",
+    "storage.quarantine_started": "Storage quarantine started",
+    "storage.quarantine_batch": "Storage quarantine batch completed",
+    "storage.quarantine.reconciled": "Interrupted quarantine reconciled",
+    "storage.restore_started": "Storage restore started",
+    "storage.restore_batch": "Storage restore batch completed",
+    "storage.restore.reconciled": "Interrupted restore reconciled",
+    "storage.purge_started": "Expired storage purge started",
+    "storage.purge_batch": "Expired storage purge batch completed",
+    "storage.purge.reconciled": "Interrupted purge reconciled",
+  };
+  return labels[action] ?? `Action: ${action.replace(/[._]/g, " ")}`;
+}
+
+function renderReportListState(title: string, message: string, kind: "empty" | "error") {
+  const state = document.createElement("div");
+  state.className = `instance-report-list-state is-${kind}`;
+  const icon = iconElement(kind === "empty" ? "inbox" : "info");
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  const copy = document.createElement("p");
+  copy.className = "muted";
+  copy.textContent = message;
+  state.append(icon, heading, copy);
+  renderIcons(state);
+  return state;
+}
+
 function renderReportList() {
   reportList.replaceChildren();
+  reportList.setAttribute("aria-busy", "false");
+  reportGrid.removeAttribute("data-list-error");
+  reportCount.textContent = `${reports.length.toLocaleString()} ${reports.length === 1 ? "report" : "reports"}`;
   if (reports.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "muted";
-    empty.textContent = "No reports in this queue.";
-    reportList.append(empty);
+    const filterLabel = statusFilter.options[statusFilter.selectedIndex]?.text.toLowerCase() ?? "selected";
+    const title = statusFilter.value === "open" ? "No open reports" : "No reports here";
+    reportList.append(renderReportListState(title, `There are no ${filterLabel} reports right now. New reports will appear here.`, "empty"));
+    reportGrid.dataset.empty = "true";
+    reportDetailPanel.hidden = true;
     return;
   }
+  reportGrid.removeAttribute("data-empty");
+  reportDetailPanel.hidden = false;
   for (const report of reports) {
     const button = document.createElement("button");
     button.type = "button";
@@ -104,6 +170,7 @@ function renderReportList() {
     reason.textContent = reasonLabels[report.reason] ?? "Other concern";
     const state = document.createElement("span");
     state.className = "instance-report-status";
+    state.dataset.status = report.status;
     state.textContent = report.status;
     line.append(reason, state);
     const target = document.createElement("span");
@@ -112,10 +179,12 @@ function renderReportList() {
     reporter.textContent = `By: ${userLabel(report.reporterDisplayName, report.reporterUsername, report.reporterUserId)}`;
     const date = document.createElement("time");
     date.dateTime = report.createdAt;
-    date.textContent = readableDate(report.createdAt);
+    date.title = readableDate(report.createdAt);
+    date.textContent = relativeDate(report.createdAt);
     button.append(line, target, reporter, date);
     if (report.hasEvidence) {
       const evidence = document.createElement("span");
+      evidence.className = "instance-report-evidence-indicator";
       evidence.textContent = "Encrypted evidence attached";
       button.append(evidence);
     }
@@ -126,6 +195,8 @@ function renderReportList() {
 
 async function loadReports(keepSelection = true) {
   refreshReportsButton.disabled = true;
+  reportList.setAttribute("aria-busy", "true");
+  reportCount.textContent = "Loading…";
   try {
     const previousId = keepSelection ? selectedReport?.id : undefined;
     const result = await api.instanceReports(statusFilter.value as "all" | "open" | "reviewing" | "resolved" | "dismissed");
@@ -139,11 +210,23 @@ async function loadReports(keepSelection = true) {
       setEmptyDetail();
     }
   } catch (error) {
+    detailRequest += 1;
+    reports = [];
+    selectedReport = undefined;
     reportList.replaceChildren();
-    const errorMessage = document.createElement("p");
-    errorMessage.className = "muted";
-     errorMessage.textContent = "Unable to load reports. Sign in with a host operator identity.";
-    reportList.append(errorMessage);
+    reportList.setAttribute("aria-busy", "false");
+    reportGrid.removeAttribute("data-empty");
+    reportGrid.dataset.listError = "true";
+    reportDetailPanel.hidden = true;
+    reportCount.textContent = "Unavailable";
+    const state = renderReportListState("Reports could not be loaded", "Check your operator session and server connection, then retry.", "error");
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "secondary";
+    retry.textContent = "Retry loading reports";
+    retry.addEventListener("click", () => void loadReports());
+    state.append(retry);
+    reportList.append(state);
     setStatus(error instanceof Error ? error.message : "Unable to load reports.", true);
   } finally {
     refreshReportsButton.disabled = false;
@@ -173,6 +256,7 @@ async function openReport(reportId: string) {
     selectedReport = result.report;
     detailTitle.textContent = `Report ${result.report.id.slice(0, 8)}`;
     detailStatus.textContent = result.report.status;
+    detailStatus.dataset.status = result.report.status;
     metadata.replaceChildren();
     addMetadata("Reported account", userLabel(result.report.targetDisplayName, result.report.targetUsername, result.report.targetUserId));
     addMetadata("Reporter", userLabel(result.report.reporterDisplayName, result.report.reporterUsername, result.report.reporterUserId));
@@ -407,19 +491,26 @@ async function loadAudit() {
       row.className = "instance-admin-audit-row";
       const description = document.createElement("div");
       const action = document.createElement("strong");
-      action.textContent = log.action;
+      action.textContent = auditActionLabel(log.action);
       const actor = document.createElement("span");
       actor.textContent = log.adminDisplayName === log.adminUsername
         ? `@${log.adminUsername}`
         : `${log.adminDisplayName} (@${log.adminUsername})`;
       const target = document.createElement("span");
-      target.textContent = log.reportId
+      const reference = log.reportId
         ? ` · report ${log.reportId.slice(0, 8)}${log.targetUserId ? ` · user ${log.targetUserId.slice(0, 8)}` : ""}`
         : log.targetUserId ? ` · user ${log.targetUserId.slice(0, 8)}` : "";
+      const detailParts: string[] = [];
+      const fileCount = log.details.fileCount;
+      const bytes = log.details.bytes;
+      if (typeof fileCount === "number" && Number.isFinite(fileCount)) detailParts.push(`${Math.max(0, Math.trunc(fileCount)).toLocaleString()} files`);
+      if (typeof bytes === "number" && Number.isFinite(bytes)) detailParts.push(`${Math.max(0, Math.trunc(bytes)).toLocaleString()} bytes`);
+      target.textContent = `${reference}${detailParts.length > 0 ? ` · ${detailParts.join(" · ")}` : ""}`;
       description.append(action, actor, target);
       const time = document.createElement("time");
       time.dateTime = log.createdAt;
-      time.textContent = readableDate(log.createdAt);
+      time.title = readableDate(log.createdAt);
+      time.textContent = relativeDate(log.createdAt);
       row.append(description, time);
       auditList.append(row);
     }
