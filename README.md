@@ -21,7 +21,12 @@ accept plaintext message content or implement cryptography.
 - **Auditable boundaries:** keep authorization, delivery, and storage on the server while
   leaving cryptography and plaintext rendering to reviewed clients.
 
+See [`docs/README.md`](docs/README.md) for setup, feature, architecture, security, voice, and API
+guides.
+
 ## Self-hosting
+
+For the full operator guide, see [`docs/SETUP.md`](docs/SETUP.md).
 
 Copy `.env.example` to `.env` and set credentials for PostgreSQL and Redis. `ADMIN_DATABASE_URL`
 must point to a PostgreSQL database distinct from `DATABASE_URL` (the default is the app database
@@ -31,12 +36,17 @@ name with `_admin` appended); make sure both databases exist before migrating. T
 - PostgreSQL stores accounts, devices, memberships, and encrypted messages.
 - The separate admin PostgreSQL database stores only host-operator identities and sessions.
 - Redis is used for readiness checks, cross-instance pub/sub, and best-effort realtime notifications.
-- Local development stores encrypted attachments under `ATTACHMENTS_DIR`; production should replace this with object storage.
+- Encrypted chat attachments and server-managed profile images are stored in the filesystem paths
+  `ATTACHMENTS_DIR` and `PROFILE_IMAGES_DIR`; deploy both on persistent storage. This release does
+  not include an object-storage adapter.
 
-Run the initial schema migration before starting the server:
+Install dependencies, apply schema migrations, and build the browser client before starting the
+server:
 
 ```bash
+bun install
 bun run db:migrate
+bun run build:client
 bun run dev
 ```
 
