@@ -9,5 +9,5 @@
 .profile-image-editor-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 0.75rem; }
 .profile-image-editor-controls label { gap: 0.35rem; font-size: 0.72rem; }
 .profile-image-editor-controls select { padding: 0.55rem; font-size: 0.74rem; }
-.profile-image-editor-controls input[type="range"] { width: 100%; padding: 0.55rem 0; accent-color: var(--accent); }
+.profile-image-editor-controls input[type="range"] { width: 100%; padding: 0; accent-color: var(--accent); }
 .profile-image-editor-status { margin: 0; }

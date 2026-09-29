@@ -1,5 +1,26 @@
 import { ApiClient, ApiError } from "./api";
-import { applyAppPreferences, defaultAppPreferences, loadAppPreferences, saveAppPreferences, type AppPreferences } from "./app-preferences";
+import { accentForeground, applyAppPreferences, applyThemeDesign as applyAppThemeDesign, contrastRatio, defaultAppPreferences, loadAppPreferences, readableAccentText, saveAppPreferences, type AppPreferences, type AppTheme } from "./app-preferences";
+import {
+  builtInThemeColors,
+  cloneCustomThemePresets,
+  defaultThemeDesign,
+  exportSharedTheme,
+  exportThemePackage,
+  importSharedTheme,
+  MAX_CUSTOM_THEME_PRESETS,
+  MAX_THEME_IMAGE_BYTES,
+  MAX_THEME_PACKAGE_LENGTH,
+  MAX_THEME_NAME_LENGTH,
+  normalizeThemeHex,
+  themeImageMimeTypes,
+  themeColorTokens,
+  type CustomThemePreset,
+  type ImportedSharedThemePreset,
+  type SharedThemePreset,
+  type ThemeColors,
+  type ThemeDesign,
+} from "./theme-presets";
+import { deleteThemeBackgroundImages, readThemeBackgroundImage, saveThemeBackgroundImage } from "./theme-assets";
 import { CryptoClient, LocalCryptoStoreError } from "./crypto";
 import { iconElement, renderIcons } from "./icons";
 import { clearLocalData } from "./local-data";
@@ -51,7 +72,61 @@ const clearMessageCacheButton = document.getElementById("clear-message-cache-but
 const blockedUsersList = document.getElementById("blocked-users-list") as HTMLElement;
 const appPreferencesForm = document.getElementById("app-preferences-form") as HTMLFormElement;
 const appTheme = document.getElementById("app-theme") as HTMLSelectElement;
+const themePresetCards = document.getElementById("theme-preset-cards") as HTMLElement;
 const appAccent = document.getElementById("app-accent") as HTMLInputElement;
+const appAccentRow = document.getElementById("app-accent-row") as HTMLElement;
+const createThemePresetButton = document.getElementById("create-theme-preset") as HTMLButtonElement;
+const editThemePresetButton = document.getElementById("edit-theme-preset") as HTMLButtonElement;
+const openThemeImportButton = document.getElementById("open-theme-import") as HTMLButtonElement;
+const deleteThemePresetButton = document.getElementById("delete-theme-preset") as HTMLButtonElement;
+const customThemeEditor = document.getElementById("custom-theme-editor") as HTMLDialogElement;
+const customThemeEditorHeading = document.getElementById("custom-theme-editor-heading") as HTMLElement;
+const closeThemeEditorButton = document.getElementById("close-theme-editor") as HTMLButtonElement;
+const cancelThemeEditorButton = document.getElementById("cancel-theme-editor") as HTMLButtonElement;
+const doneThemeEditorButton = document.getElementById("done-theme-editor") as HTMLButtonElement;
+const customThemeName = document.getElementById("custom-theme-name") as HTMLInputElement;
+const customThemeBase = document.getElementById("custom-theme-base") as HTMLSelectElement;
+const themeColorControls = document.getElementById("theme-color-controls") as HTMLElement;
+const themeContrastWarning = document.getElementById("theme-contrast-warning") as HTMLElement;
+const themeBackgroundMode = document.getElementById("theme-background-mode") as HTMLSelectElement;
+const themeGradientControls = document.getElementById("theme-gradient-controls") as HTMLElement;
+const themeGradientStart = document.getElementById("theme-gradient-start") as HTMLInputElement;
+const themeGradientEnd = document.getElementById("theme-gradient-end") as HTMLInputElement;
+const themeGradientAngle = document.getElementById("theme-gradient-angle") as HTMLSelectElement;
+const themeImageControls = document.getElementById("theme-image-controls") as HTMLElement;
+const themeBackgroundFile = document.getElementById("theme-background-file") as HTMLInputElement;
+const themeImageStatus = document.getElementById("theme-image-status") as HTMLElement;
+const themeImageFit = document.getElementById("theme-image-fit") as HTMLSelectElement;
+const themeImagePosition = document.getElementById("theme-image-position") as HTMLSelectElement;
+const themeBackgroundOverlay = document.getElementById("theme-background-overlay") as HTMLInputElement;
+const themeBackgroundOverlayValue = document.getElementById("theme-background-overlay-value") as HTMLOutputElement;
+const removeThemeBackgroundButton = document.getElementById("remove-theme-background") as HTMLButtonElement;
+const themeContentWidth = document.getElementById("theme-content-width") as HTMLSelectElement;
+const themeDensity = document.getElementById("theme-density") as HTMLSelectElement;
+const themeRadius = document.getElementById("theme-radius") as HTMLInputElement;
+const themeRadiusValue = document.getElementById("theme-radius-value") as HTMLOutputElement;
+const themeShadow = document.getElementById("theme-shadow") as HTMLSelectElement;
+const themeBorderStyle = document.getElementById("theme-border-style") as HTMLSelectElement;
+const themeMotion = document.getElementById("theme-motion") as HTMLSelectElement;
+const themeTransitionSpeed = document.getElementById("theme-transition-speed") as HTMLSelectElement;
+const themeTransitionEasing = document.getElementById("theme-transition-easing") as HTMLSelectElement;
+const copyThemePresetButton = document.getElementById("copy-theme-preset") as HTMLButtonElement;
+const downloadThemePresetButton = document.getElementById("download-theme-preset") as HTMLButtonElement;
+const themeShareCodeDetails = document.getElementById("theme-share-code-details") as HTMLDetailsElement;
+const themeExportCode = document.getElementById("theme-export-code") as HTMLTextAreaElement;
+const themeImportDialog = document.getElementById("theme-import-dialog") as HTMLDialogElement;
+const closeThemeImportButton = document.getElementById("close-theme-import") as HTMLButtonElement;
+const cancelThemeImportButton = document.getElementById("cancel-theme-import") as HTMLButtonElement;
+const themeImportCode = document.getElementById("theme-import-code") as HTMLTextAreaElement;
+const themeImportFile = document.getElementById("theme-import-file") as HTMLInputElement;
+const reviewThemeImportButton = document.getElementById("review-theme-import") as HTMLButtonElement;
+const importThemePresetButton = document.getElementById("import-theme-preset") as HTMLButtonElement;
+const themeImportStatus = document.getElementById("theme-import-status") as HTMLElement;
+const themeImportReviewPanel = document.getElementById("theme-import-review-panel") as HTMLElement;
+const themeImportPreviewName = document.getElementById("theme-import-preview-name") as HTMLElement;
+const themeImportPreviewBase = document.getElementById("theme-import-preview-base") as HTMLElement;
+const themeEditorPreview = document.getElementById("theme-editor-preview") as HTMLElement;
+const themeImportPreview = document.getElementById("theme-import-preview") as HTMLElement;
 const appScale = document.getElementById("app-scale") as HTMLInputElement;
 const appScaleValue = document.getElementById("app-scale-value") as HTMLOutputElement;
 const appMessageTextSize = document.getElementById("app-message-text-size") as HTMLInputElement;
@@ -81,6 +156,16 @@ const settingsPageDescription = document.getElementById("settings-page-descripti
 let currentUserId: string | undefined;
 let appPreferences: AppPreferences = { ...defaultAppPreferences };
 let appPreferencesLoaded = false;
+let draftCustomThemes: CustomThemePreset[] = [];
+let builtInAccentDraft = defaultAppPreferences.accent;
+let editorThemeId: string | undefined;
+let editorThemeSnapshot: CustomThemePreset | undefined;
+let editorThemeIsNew = false;
+let editorPreviousSelection = "dark";
+let stagedImportedTheme: ImportedSharedThemePreset | undefined;
+let stagedImportedImage: Blob | undefined;
+let stagedThemePreviewUrl: string | undefined;
+const unsavedThemeImageIds = new Set<string>();
 let recoveryCrypto: CryptoClient | undefined;
 
 function setStatus(message: string, error = false) {
@@ -227,10 +312,580 @@ window.addEventListener("resize", () => setMobileSidebar(settingsLayout.classLis
 setMobileSidebar(settingsLayout.classList.contains("mobile-sidebar-open"));
 renderIcons();
 
+const builtInThemeOptions: Array<{ id: AppTheme; name: string }> = [
+  { id: "dark", name: "Dark" },
+  { id: "dim", name: "Dim" },
+  { id: "light", name: "Light" },
+  { id: "black", name: "Black (OLED)" },
+  { id: "momotalk", name: "MomoTalk" },
+];
+
+function selectedCustomTheme() {
+  return draftCustomThemes.find((theme) => theme.id === appTheme.value);
+}
+
+function isAppTheme(value: string): value is AppTheme {
+  return value === "dark" || value === "dim" || value === "light" || value === "black" || value === "momotalk";
+}
+
+function renderThemeOptions(selectedId: string) {
+  appTheme.replaceChildren();
+  const builtIns = document.createElement("optgroup");
+  builtIns.label = "Built-in themes";
+  for (const theme of builtInThemeOptions) {
+    const option = document.createElement("option");
+    option.value = theme.id;
+    option.textContent = theme.name;
+    builtIns.append(option);
+  }
+  appTheme.append(builtIns);
+  if (draftCustomThemes.length > 0) {
+    const custom = document.createElement("optgroup");
+    custom.label = "Your presets";
+    for (const theme of draftCustomThemes) {
+      const option = document.createElement("option");
+      option.value = theme.id;
+      option.textContent = theme.name;
+      custom.append(option);
+    }
+    appTheme.append(custom);
+  }
+  appTheme.value = selectedId;
+  renderThemeCards(selectedId);
+}
+
+function colorsForPreset(id: string): ThemeColors {
+  const customTheme = draftCustomThemes.find((theme) => theme.id === id);
+  if (customTheme) return customTheme.colors;
+  if (!isAppTheme(id)) return builtInThemeColors.dark;
+  const colors = { ...builtInThemeColors[id] };
+  if (id !== "momotalk") colors.accent = builtInAccentDraft;
+  return colors;
+}
+
+function renderThemeCards(selectedId: string) {
+  themePresetCards.replaceChildren();
+  const choices = [
+    ...builtInThemeOptions.map((theme) => ({ id: theme.id, name: theme.name, description: "Built-in theme" })),
+    ...draftCustomThemes.map((theme) => ({
+      id: theme.id,
+      name: theme.name,
+      description: `${builtInThemeOptions.find((item) => item.id === theme.baseTheme)?.name ?? "Theme"} · custom`,
+    })),
+  ];
+  for (const choice of choices) {
+    const colors = colorsForPreset(choice.id);
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "theme-preset-card";
+    card.dataset.themeId = choice.id;
+    card.setAttribute("aria-pressed", String(choice.id === selectedId));
+    card.addEventListener("click", () => selectThemePreset(choice.id));
+
+    const sample = document.createElement("span");
+    sample.className = "theme-card-sample";
+    sample.setAttribute("aria-hidden", "true");
+    for (const [property, value] of Object.entries({
+      "--card-bg": colors.bg,
+      "--card-sidebar": colors.bgSidebar,
+      "--card-rail": colors.workspaceRail,
+      "--card-accent": colors.accent,
+      "--card-bubble": colors.messageBubble,
+    })) sample.style.setProperty(property, value);
+    const sampleRail = document.createElement("i");
+    const sampleSide = document.createElement("i");
+    const sampleChat = document.createElement("i");
+    sample.append(sampleRail, sampleSide, sampleChat);
+
+    const copy = document.createElement("span");
+    copy.className = "theme-preset-card-copy";
+    const title = document.createElement("strong");
+    title.textContent = choice.name;
+    const description = document.createElement("small");
+    description.textContent = choice.description;
+    copy.append(title, description);
+
+    const check = document.createElement("span");
+    check.className = "theme-preset-card-check";
+    check.setAttribute("aria-hidden", "true");
+    check.textContent = "✓";
+    card.append(sample, copy, check);
+    themePresetCards.append(card);
+  }
+}
+
+function selectThemePreset(id: string) {
+  if (appTheme.value === id) return;
+  appTheme.value = id;
+  invalidateThemeShareCode();
+  renderThemeCards(id);
+  renderCustomThemeEditor();
+  syncAppPreferencesDirty();
+}
+
+function createThemePreviewMarkup(preview: HTMLElement) {
+  if (preview.firstElementChild) return;
+  const window = document.createElement("div");
+  window.className = "theme-preview-window";
+  const topbar = document.createElement("header");
+  topbar.className = "theme-preview-titlebar";
+  const title = document.createElement("strong");
+  title.className = "theme-preview-title";
+  const windowAction = document.createElement("span");
+  windowAction.className = "theme-preview-window-action";
+  windowAction.textContent = "×";
+  topbar.append(title, windowAction);
+
+  const body = document.createElement("div");
+  body.className = "theme-preview-body";
+  const rail = document.createElement("aside");
+  rail.className = "theme-preview-rail";
+  for (const text of ["N", "✦", "＋"]) {
+    const item = document.createElement("span");
+    item.textContent = text;
+    rail.append(item);
+  }
+  const sidebar = document.createElement("aside");
+  sidebar.className = "theme-preview-sidebar";
+  const sidebarHeading = document.createElement("strong");
+  sidebarHeading.textContent = "Messages";
+  const rows = document.createElement("div");
+  rows.className = "theme-preview-list";
+  for (const [person, subtitle] of [["Riley", "See you soon"], ["Kai", "That looks great"], ["Studio", "3 new updates"]]) {
+    const row = document.createElement("div");
+    row.className = "theme-preview-list-row";
+    const avatar = document.createElement("i");
+    avatar.textContent = person[0];
+    const text = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = person;
+    const previewText = document.createElement("small");
+    previewText.textContent = subtitle;
+    text.append(name, previewText);
+    row.append(avatar, text);
+    rows.append(row);
+  }
+  sidebar.append(sidebarHeading, rows);
+  const sidebarSurface = document.createElement("div");
+  sidebarSurface.className = "theme-preview-surface-samples";
+  const raisedSurface = document.createElement("span");
+  raisedSurface.textContent = "Raised surface";
+  const hoverSurface = document.createElement("span");
+  hoverSurface.textContent = "Hover state";
+  const success = document.createElement("span");
+  success.className = "theme-preview-success";
+  success.textContent = "Online";
+  const danger = document.createElement("span");
+  danger.className = "theme-preview-danger";
+  danger.textContent = "Remove";
+  sidebarSurface.append(raisedSurface, hoverSurface, success, danger);
+  sidebar.append(sidebarSurface);
+
+  const chat = document.createElement("section");
+  chat.className = "theme-preview-chat";
+  const chatHeader = document.createElement("header");
+  chatHeader.className = "theme-preview-chat-header";
+  const chatTitle = document.createElement("strong");
+  chatTitle.textContent = "# lobby";
+  const chatStatus = document.createElement("small");
+  chatStatus.textContent = "2 members · encrypted";
+  chatHeader.append(chatTitle, chatStatus);
+  const messages = document.createElement("div");
+  messages.className = "theme-preview-messages";
+  const received = document.createElement("div");
+  received.className = "theme-preview-message theme-preview-received";
+  received.textContent = "Hey! What do you think of this?";
+  const sent = document.createElement("div");
+  sent.className = "theme-preview-message theme-preview-sent";
+  sent.textContent = "Love it ✨";
+  messages.append(received, sent);
+  const composer = document.createElement("div");
+  composer.className = "theme-preview-composer";
+  composer.textContent = "Message this conversation…";
+  const statuses = document.createElement("div");
+  statuses.className = "theme-preview-statuses";
+  const successStatus = document.createElement("span");
+  successStatus.className = "theme-preview-success-status";
+  successStatus.textContent = "Saved";
+  const dangerStatus = document.createElement("span");
+  dangerStatus.className = "theme-preview-danger-status";
+  dangerStatus.textContent = "Needs attention";
+  statuses.append(successStatus, dangerStatus);
+  chat.append(chatHeader, messages, composer, statuses);
+  body.append(rail, sidebar, chat);
+  const palette = document.createElement("div");
+  palette.className = "theme-preview-palette";
+  palette.setAttribute("aria-label", "Every theme color token");
+  for (const token of themeColorTokens) {
+    const item = document.createElement("div");
+    item.className = "theme-preview-palette-item";
+    item.dataset.colorKey = token.key;
+    const swatch = document.createElement("i");
+    swatch.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.textContent = token.label;
+    const value = document.createElement("code");
+    item.append(swatch, label, value);
+    palette.append(item);
+  }
+  const designSummary = document.createElement("div");
+  designSummary.className = "theme-preview-design-summary";
+  window.append(topbar, body, palette, designSummary);
+  preview.replaceChildren(window);
+}
+
+function renderThemePreview(preview: HTMLElement, name: string, baseTheme: AppTheme, colors: ThemeColors, design: ThemeDesign = defaultThemeDesign) {
+  createThemePreviewMarkup(preview);
+  const frame = preview.firstElementChild as HTMLElement;
+  frame.dataset.appTheme = baseTheme;
+  frame.style.colorScheme = baseTheme === "light" || baseTheme === "momotalk" ? "light" : "dark";
+  for (const { key, variable } of themeColorTokens) frame.style.setProperty(variable, colors[key]);
+  frame.style.setProperty("--accent-ink", accentForeground(colors.accent));
+  frame.style.setProperty("--accent-hover-ink", accentForeground(colors.accentHover));
+  frame.style.setProperty("--accent-text", readableAccentText(colors.accent, baseTheme));
+  frame.style.setProperty("--workspace-rail-ink", accentForeground(colors.workspaceRail));
+  applyAppThemeDesign(frame, design, true);
+  const title = frame.querySelector<HTMLElement>(".theme-preview-title");
+  if (title) title.textContent = name.trim() || "Untitled theme";
+  for (const token of themeColorTokens) {
+    const item = frame.querySelector<HTMLElement>(`.theme-preview-palette-item[data-color-key="${token.key}"]`);
+    if (!item) continue;
+    const swatch = item.querySelector<HTMLElement>("i");
+    const value = item.querySelector<HTMLElement>("code");
+    if (swatch) swatch.style.backgroundColor = colors[token.key];
+    if (value) value.textContent = colors[token.key].toUpperCase();
+    item.title = `${token.label}: ${colors[token.key].toUpperCase()}`;
+  }
+  const background = design.backgroundMode === "solid"
+    ? "Solid"
+    : design.backgroundMode === "gradient"
+      ? `Gradient · ${design.gradientAngle}° · ${design.gradientStart.toUpperCase()} → ${design.gradientEnd.toUpperCase()}`
+      : `Image · ${design.imageFit === "cover" ? "Fill area" : "Fit inside"} · ${design.imagePosition} · ${design.overlay}% overlay`;
+  const specs: [string, string][] = [
+    ["Starting palette", builtInThemeOptions.find((theme) => theme.id === baseTheme)?.name ?? baseTheme],
+    ["Backdrop", background],
+    ["Message width", design.contentWidth],
+    ["Spacing", design.density],
+    ["Corners", `${design.radius}px`],
+    ["Borders", design.borderStyle],
+    ["Shadows", design.shadow],
+    ["Entrance", design.motion],
+    ["Transition", `${design.transitionSpeed} · ${design.transitionEasing}`],
+  ];
+  const summary = frame.querySelector<HTMLElement>(".theme-preview-design-summary");
+  summary?.replaceChildren(...specs.map(([label, value]) => {
+    const item = document.createElement("span");
+    item.className = "theme-preview-design-chip";
+    const key = document.createElement("strong");
+    key.textContent = `${label}: `;
+    item.append(key, document.createTextNode(value));
+    return item;
+  }));
+}
+
+function renderThemeDesignControls(theme?: CustomThemePreset) {
+  if (!theme) return;
+  const design = theme.design;
+  themeBackgroundMode.value = design.backgroundMode;
+  themeGradientControls.hidden = design.backgroundMode !== "gradient";
+  themeImageControls.hidden = design.backgroundMode !== "image";
+  themeGradientStart.value = design.gradientStart;
+  themeGradientEnd.value = design.gradientEnd;
+  themeGradientAngle.value = String(design.gradientAngle);
+  themeImageFit.value = design.imageFit;
+  themeImagePosition.value = design.imagePosition;
+  themeBackgroundOverlay.value = String(design.overlay);
+  themeBackgroundOverlayValue.value = `${design.overlay}%`;
+  themeImageStatus.textContent = design.backgroundImageAssetId
+    ? "Background image ready. It stays in this browser unless you include it in a theme file."
+    : "PNG, JPEG, or WebP up to 1 MB. Stored in this browser only.";
+  removeThemeBackgroundButton.hidden = !design.backgroundImageAssetId;
+  removeThemeBackgroundButton.disabled = !design.backgroundImageAssetId;
+  themeContentWidth.value = design.contentWidth;
+  themeDensity.value = design.density;
+  themeRadius.value = String(design.radius);
+  themeRadiusValue.value = `${design.radius} px`;
+  themeShadow.value = design.shadow;
+  themeBorderStyle.value = design.borderStyle;
+  themeMotion.value = design.motion;
+  themeTransitionSpeed.value = design.transitionSpeed;
+  themeTransitionEasing.value = design.transitionEasing;
+}
+
+function updateSelectedThemeDesign(update: Partial<ThemeDesign>) {
+  const theme = selectedCustomTheme();
+  if (!theme) return;
+  Object.assign(theme.design, update);
+  renderThemeDesignControls(theme);
+  renderThemePreview(themeEditorPreview, theme.name, theme.baseTheme, theme.colors, theme.design);
+  invalidateThemeShareCode();
+  syncAppPreferencesDirty();
+}
+
+function newThemeImageAssetId() {
+  const random = typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `theme-image-${random}`;
+}
+
+async function validateThemeImage(image: Blob, mimeType: string) {
+  if (!themeImageMimeTypes.includes(mimeType as typeof themeImageMimeTypes[number])) {
+    throw new Error("Choose a PNG, JPEG, or WebP image.");
+  }
+  if (image.size === 0 || image.size > MAX_THEME_IMAGE_BYTES) throw new Error("Theme background images must be 1 MB or smaller.");
+  const header = new Uint8Array(await image.slice(0, 12).arrayBuffer());
+  const signatureMatches = mimeType === "image/png"
+    ? header.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => header[index] === byte)
+    : mimeType === "image/jpeg"
+      ? header.length >= 3 && header[0] === 255 && header[1] === 216 && header[2] === 255
+      : header.length >= 12 && String.fromCharCode(...header.slice(0, 4)) === "RIFF" && String.fromCharCode(...header.slice(8, 12)) === "WEBP";
+  if (!signatureMatches) throw new Error("The image file type does not match its contents.");
+  if (typeof createImageBitmap === "undefined") throw new Error("This browser cannot safely preview theme images.");
+  const bitmap = await createImageBitmap(image);
+  try {
+    if (bitmap.width < 1 || bitmap.height < 1 || bitmap.width > 8192 || bitmap.height > 8192 || bitmap.width * bitmap.height > 25_000_000) {
+      throw new Error("Theme background images must be no larger than 8192 × 8192 pixels.");
+    }
+  } finally {
+    bitmap.close();
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function base64ToThemeImage(base64: string, mimeType: string) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: mimeType });
+}
+
+function themeImageIds(themes: readonly CustomThemePreset[]) {
+  return new Set(themes.map((theme) => theme.design.backgroundImageAssetId).filter((id): id is string => Boolean(id)));
+}
+
+async function discardUnreferencedDraftThemeImages() {
+  const referenced = themeImageIds([...appPreferences.customThemes, ...draftCustomThemes]);
+  const abandoned = [...unsavedThemeImageIds].filter((id) => !referenced.has(id));
+  if (abandoned.length === 0) return;
+  await deleteThemeBackgroundImages(abandoned);
+  for (const id of abandoned) unsavedThemeImageIds.delete(id);
+}
+
+async function onThemeBackgroundFile() {
+  const file = themeBackgroundFile.files?.[0];
+  themeBackgroundFile.value = "";
+  const theme = selectedCustomTheme();
+  if (!file || !theme) return;
+  themeImageStatus.textContent = "Checking image…";
+  try {
+    await validateThemeImage(file, file.type);
+    const id = newThemeImageAssetId();
+    await saveThemeBackgroundImage(id, file);
+    unsavedThemeImageIds.add(id);
+    updateSelectedThemeDesign({ backgroundMode: "image", backgroundImageAssetId: id });
+    themeImageStatus.textContent = "Background image ready. It stays in this browser unless you include it in a theme file.";
+  } catch (error) {
+    themeImageStatus.textContent = error instanceof Error ? error.message : "Unable to use that image.";
+    setStatus(themeImageStatus.textContent, true);
+  }
+}
+
+function sharedThemeForSelected(): SharedThemePreset | undefined {
+  const theme = selectedCustomTheme();
+  if (!theme) return undefined;
+  const name = theme.name.trim();
+  if (!name || name.length > MAX_THEME_NAME_LENGTH) {
+    setStatus(`Preset names must be 1–${MAX_THEME_NAME_LENGTH} characters long.`, true);
+    customThemeName.focus();
+    return undefined;
+  }
+  const { backgroundImageAssetId: _localAsset, ...design } = theme.design;
+  if (design.backgroundMode === "image") design.backgroundMode = "solid";
+  return { name, baseTheme: theme.baseTheme, colors: { ...theme.colors }, design };
+}
+
+async function themePackageForSelected() {
+  const theme = selectedCustomTheme();
+  const shared = sharedThemeForSelected();
+  if (!theme || !shared) return undefined;
+  const imageId = theme.design.backgroundImageAssetId;
+  if (theme.design.backgroundMode !== "image" || !imageId) return exportThemePackage(shared);
+  const image = await readThemeBackgroundImage(imageId);
+  if (!image || !themeImageMimeTypes.includes(image.type as typeof themeImageMimeTypes[number])) {
+    throw new Error("The local background image is unavailable. Choose it again before exporting the theme file.");
+  }
+  const base64 = bytesToBase64(new Uint8Array(await image.arrayBuffer()));
+  const packagedDesign = { ...theme.design };
+  delete packagedDesign.backgroundImageAssetId;
+  return exportThemePackage({ ...shared, design: packagedDesign }, { mimeType: image.type as typeof themeImageMimeTypes[number], base64 });
+}
+
+function renderThemeColorControls(theme?: CustomThemePreset) {
+  themeColorControls.replaceChildren();
+  if (!theme) return;
+  let activeGroup: string | undefined;
+  let groupFields: HTMLElement | undefined;
+  for (const token of themeColorTokens) {
+    if (token.group !== activeGroup) {
+      activeGroup = token.group;
+      groupFields = document.createElement("div");
+      groupFields.className = "theme-color-fields";
+      if (token.group === "Status") {
+        const advancedDetails = document.createElement("details");
+        advancedDetails.className = "theme-color-advanced";
+        const summary = document.createElement("summary");
+        summary.textContent = "Advanced · status colors";
+        advancedDetails.append(summary, groupFields);
+        themeColorControls.append(advancedDetails);
+      } else {
+        const group = document.createElement("details");
+        group.className = "theme-color-group";
+        group.open = token.group === "Surfaces";
+        const summary = document.createElement("summary");
+        summary.textContent = token.group;
+        group.append(summary, groupFields);
+        themeColorControls.append(group);
+      }
+    }
+    const control = document.createElement("div");
+    control.className = "theme-color-control";
+    const label = document.createElement("label");
+    label.className = "theme-color-label";
+    label.textContent = token.label;
+    const fields = document.createElement("span");
+    fields.className = "theme-color-inputs";
+    const colorInput = document.createElement("input");
+    colorInput.type = "color";
+    colorInput.value = theme.colors[token.key];
+    colorInput.id = `theme-color-${token.key}`;
+    label.htmlFor = colorInput.id;
+    colorInput.setAttribute("aria-label", `${token.label} color picker`);
+    const hexInput = document.createElement("input");
+    hexInput.type = "text";
+    hexInput.className = "theme-color-hex";
+    hexInput.value = theme.colors[token.key];
+    hexInput.maxLength = 7;
+    hexInput.spellcheck = false;
+    hexInput.autocomplete = "off";
+    hexInput.setAttribute("aria-label", `${token.label} hex value`);
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "theme-color-reset secondary";
+    reset.textContent = "Reset";
+    reset.setAttribute("aria-label", `Reset ${token.label} to the ${theme.baseTheme} palette`);
+
+    const applyColor = (value: string) => {
+      const selected = selectedCustomTheme();
+      const normalized = normalizeThemeHex(value);
+      if (!selected || !normalized) return false;
+      selected.colors[token.key] = normalized;
+      colorInput.value = normalized;
+      hexInput.value = normalized;
+      invalidateThemeShareCode();
+      renderThemePreview(themeEditorPreview, selected.name, selected.baseTheme, selected.colors, selected.design);
+      renderThemeContrastWarning(selected);
+      renderThemeCards(appTheme.value);
+      syncAppPreferencesDirty();
+      return true;
+    };
+    colorInput.addEventListener("input", () => applyColor(colorInput.value));
+    hexInput.addEventListener("change", () => {
+      const normalized = normalizeThemeHex(hexInput.value);
+      if (!normalized) hexInput.value = selectedCustomTheme()?.colors[token.key] ?? theme.colors[token.key];
+      else applyColor(normalized);
+    });
+    hexInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        hexInput.blur();
+      }
+    });
+    reset.addEventListener("click", () => applyColor(builtInThemeColors[theme.baseTheme][token.key]));
+    fields.append(colorInput, hexInput, reset);
+    control.append(label, fields);
+    groupFields?.append(control);
+  }
+}
+
+function renderThemeContrastWarning(theme = selectedCustomTheme()) {
+  if (!theme) {
+    themeContrastWarning.hidden = true;
+    themeContrastWarning.textContent = "";
+    return;
+  }
+  const lowContrast = [
+    ["main text", theme.colors.text, theme.colors.bg],
+    ["secondary text", theme.colors.textMuted, theme.colors.bg],
+    ["muted text", theme.colors.textFaint, theme.colors.bg],
+    ["placeholder text", theme.colors.textPlaceholder, theme.colors.bgInput],
+    ["received bubble text", theme.colors.messageBubbleText, theme.colors.messageBubble],
+    ["sent bubble text", theme.colors.messageBubbleOwnText, theme.colors.messageBubbleOwn],
+  ].filter(([, foreground, background]) => contrastRatio(foreground, background) < 4.5);
+  themeContrastWarning.hidden = lowContrast.length === 0;
+  themeContrastWarning.textContent = lowContrast.length > 0
+    ? `Low contrast: ${lowContrast.map(([label]) => label).join(", ")}. Aim for at least 4.5:1 for readable text.`
+    : "Text contrast meets the 4.5:1 guideline for the checked surfaces.";
+  themeContrastWarning.classList.toggle("has-low-contrast", lowContrast.length > 0);
+}
+
+function invalidateThemeShareCode() {
+  themeExportCode.value = "";
+  themeShareCodeDetails.open = false;
+}
+
+function renderCustomThemeEditor() {
+  const theme = selectedCustomTheme();
+  const custom = Boolean(theme);
+  customThemeName.disabled = !custom;
+  customThemeName.required = custom && customThemeEditor.open;
+  customThemeBase.disabled = !custom;
+  deleteThemePresetButton.hidden = !custom;
+  editThemePresetButton.hidden = !custom;
+  copyThemePresetButton.disabled = !custom;
+  downloadThemePresetButton.disabled = !custom;
+  appAccentRow.hidden = custom || appTheme.value === "momotalk";
+  if (theme) {
+    customThemeName.value = theme.name;
+    customThemeBase.value = theme.baseTheme;
+    customThemeEditorHeading.textContent = editorThemeIsNew && editorThemeId === theme.id ? "Create preset" : "Edit preset";
+    renderThemeColorControls(theme);
+    renderThemeContrastWarning(theme);
+    renderThemeDesignControls(theme);
+    renderThemePreview(themeEditorPreview, theme.name, theme.baseTheme, theme.colors, theme.design);
+  } else {
+    renderThemeColorControls();
+    renderThemeContrastWarning();
+    invalidateThemeShareCode();
+  }
+}
+
+function appPreferencesDraft(): AppPreferences {
+  const presetId = appTheme.value;
+  const customTheme = draftCustomThemes.find((theme) => theme.id === presetId);
+  const baseTheme = customTheme?.baseTheme ?? (isAppTheme(presetId) ? presetId : appPreferences.theme);
+  return {
+    ...readAppPreferencesForm(),
+    theme: baseTheme,
+    themePreset: presetId,
+    customThemes: cloneCustomThemePresets(draftCustomThemes),
+  };
+}
+
 function renderAppPreferences(preferences: AppPreferences) {
   appPreferences = applyAppPreferences(preferences, settingsLayout);
-  appTheme.value = appPreferences.theme;
+  draftCustomThemes = cloneCustomThemePresets(appPreferences.customThemes);
+  builtInAccentDraft = appPreferences.accent;
+  renderThemeOptions(appPreferences.themePreset);
   appAccent.value = appPreferences.accent;
+  renderCustomThemeEditor();
   appScale.value = String(Math.round(appPreferences.scale * 100));
   updateAppScaleValue();
   appMessageTextSize.value = String(appPreferences.messageTextSize);
@@ -250,9 +905,12 @@ function renderAppPreferences(preferences: AppPreferences) {
 }
 
 function readAppPreferencesForm(notificationMode = appNotificationMode.value as AppPreferences["notificationMode"]): AppPreferences {
+  const customTheme = selectedCustomTheme();
   return {
-    theme: appTheme.value as AppPreferences["theme"],
-    accent: appAccent.value,
+    theme: customTheme?.baseTheme ?? (isAppTheme(appTheme.value) ? appTheme.value : appPreferences.theme),
+    themePreset: appTheme.value,
+    customThemes: cloneCustomThemePresets(draftCustomThemes),
+    accent: builtInAccentDraft,
     scale: Number(appScale.value) / 100,
     messageTextSize: Number(appMessageTextSize.value),
     sounds: appSounds.checked,
@@ -279,7 +937,238 @@ function syncAppPreferencesDirty() {
 function appPreferencesAreDirty() {
   if (!appPreferencesLoaded) return false;
   const draft = readAppPreferencesForm();
-  return (Object.keys(draft) as (keyof AppPreferences)[]).some((key) => draft[key] !== appPreferences[key]);
+  return (Object.keys(draft) as (keyof AppPreferences)[]).some((key) => key === "customThemes"
+    ? JSON.stringify(draft.customThemes) !== JSON.stringify(appPreferences.customThemes)
+    : draft[key] !== appPreferences[key]);
+}
+
+function createCustomThemeId() {
+  const random = typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `custom-${random}`;
+}
+
+function createThemePreset() {
+  if (draftCustomThemes.length >= MAX_CUSTOM_THEME_PRESETS) {
+    setStatus(`You can keep up to ${MAX_CUSTOM_THEME_PRESETS} custom presets on this browser.`, true);
+    return;
+  }
+  const previousSelection = appTheme.value;
+  const current = appPreferencesDraft();
+  const baseName = selectedCustomTheme()?.name ?? builtInThemeOptions.find((theme) => theme.id === current.theme)?.name ?? "Theme";
+  const theme: CustomThemePreset = {
+    id: createCustomThemeId(),
+    name: `${baseName} custom`.slice(0, MAX_THEME_NAME_LENGTH),
+    baseTheme: current.theme,
+    colors: colorsForPreset(current.themePreset),
+    design: { ...defaultThemeDesign },
+  };
+  theme.design.gradientStart = theme.colors.bg;
+  theme.design.gradientEnd = theme.colors.bgDeep;
+  draftCustomThemes.push(theme);
+  renderThemeOptions(theme.id);
+  renderCustomThemeEditor();
+  openThemeEditor(theme, true, previousSelection);
+  syncAppPreferencesDirty();
+}
+
+function openThemeEditor(theme: CustomThemePreset, isNew = false, previousSelection = appTheme.value) {
+  appTheme.value = theme.id;
+  editorThemeId = theme.id;
+  editorThemeSnapshot = isNew ? undefined : cloneCustomThemePresets([theme])[0];
+  editorThemeIsNew = isNew;
+  editorPreviousSelection = previousSelection;
+  invalidateThemeShareCode();
+  renderThemeCards(theme.id);
+  renderCustomThemeEditor();
+  customThemeName.required = true;
+  customThemeEditor.returnValue = "";
+  customThemeEditor.showModal();
+  customThemeName.focus();
+  customThemeName.select();
+}
+
+function editSelectedThemePreset() {
+  const theme = selectedCustomTheme();
+  if (!theme) return;
+  openThemeEditor(theme);
+}
+
+function deleteThemePreset() {
+  const theme = selectedCustomTheme();
+  if (!theme || !window.confirm(`Delete the “${theme.name}” preset? Save preferences to keep this deletion.`)) return;
+  draftCustomThemes = draftCustomThemes.filter((candidate) => candidate.id !== theme.id);
+  appTheme.value = theme.baseTheme;
+  customThemeEditor.close("deleted");
+}
+
+async function copyThemePreset() {
+  const sharedTheme = sharedThemeForSelected();
+  if (!sharedTheme) return;
+  const code = exportSharedTheme(sharedTheme);
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+    await navigator.clipboard.writeText(code);
+    setStatus("Theme share code copied.");
+  } catch {
+    themeExportCode.value = code;
+    themeShareCodeDetails.open = true;
+    themeExportCode.focus();
+    themeExportCode.select();
+    setStatus("Clipboard unavailable. The share code is open and selected so you can copy it.");
+  }
+}
+
+async function downloadThemePreset() {
+  const sharedTheme = sharedThemeForSelected();
+  if (!sharedTheme) return;
+  try {
+    const code = await themePackageForSelected();
+    if (!code) return;
+    const slug = sharedTheme.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "theme";
+    const url = URL.createObjectURL(new Blob([code], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${slug}.naigi-theme.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Unable to export this theme file.", true);
+  }
+}
+
+async function reviewThemeImport() {
+  const code = themeImportCode.value.trim();
+  if (!code) {
+    stagedImportedTheme = undefined;
+    themeImportReviewPanel.hidden = true;
+    importThemePresetButton.disabled = true;
+    themeImportStatus.textContent = "Paste a theme code or choose a theme file to review.";
+    themeImportStatus.dataset.state = "error";
+    return;
+  }
+  if (code.length > MAX_THEME_PACKAGE_LENGTH) {
+    stagedImportedTheme = undefined;
+    themeImportReviewPanel.hidden = true;
+    importThemePresetButton.disabled = true;
+    themeImportStatus.textContent = "Theme file is too large to import.";
+    themeImportStatus.dataset.state = "error";
+    return;
+  }
+  reviewThemeImportButton.disabled = true;
+  themeImportStatus.textContent = "Validating theme…";
+  try {
+    stagedImportedTheme = importSharedTheme(code);
+    stagedImportedImage = undefined;
+    if (stagedImportedTheme.backgroundImage) {
+      const { base64, mimeType } = stagedImportedTheme.backgroundImage;
+      const image = base64ToThemeImage(base64, mimeType);
+      await validateThemeImage(image, mimeType);
+      stagedImportedImage = image;
+    }
+    themeImportPreviewName.textContent = stagedImportedTheme.name;
+    themeImportPreviewBase.textContent = `Based on ${builtInThemeOptions.find((theme) => theme.id === stagedImportedTheme?.baseTheme)?.name ?? "a built-in theme"}`;
+    renderThemePreview(themeImportPreview, stagedImportedTheme.name, stagedImportedTheme.baseTheme, stagedImportedTheme.colors, stagedImportedTheme.design);
+    if (stagedImportedImage) {
+      stagedThemePreviewUrl = URL.createObjectURL(stagedImportedImage);
+      const frame = themeImportPreview.firstElementChild as HTMLElement;
+      frame.style.setProperty("--theme-background-image", `url("${stagedThemePreviewUrl}")`);
+    }
+    themeImportReviewPanel.hidden = false;
+    importThemePresetButton.disabled = false;
+    themeImportStatus.textContent = "Theme looks valid. Review the preview, then choose Import & use preset.";
+    themeImportStatus.dataset.state = "valid";
+  } catch (error) {
+    stagedImportedTheme = undefined;
+    stagedImportedImage = undefined;
+    if (stagedThemePreviewUrl) URL.revokeObjectURL(stagedThemePreviewUrl);
+    stagedThemePreviewUrl = undefined;
+    themeImportReviewPanel.hidden = true;
+    importThemePresetButton.disabled = true;
+    themeImportStatus.textContent = error instanceof Error ? error.message : "Unable to review this theme code.";
+    themeImportStatus.dataset.state = "error";
+  } finally {
+    reviewThemeImportButton.disabled = false;
+  }
+}
+
+async function loadThemeImportFile() {
+  const file = themeImportFile.files?.[0];
+  if (!file) return;
+  clearThemeImportReview();
+  if (file.size > MAX_THEME_PACKAGE_LENGTH) {
+    themeImportStatus.textContent = "Theme file is too large to import.";
+    themeImportStatus.dataset.state = "error";
+    themeImportFile.value = "";
+    return;
+  }
+  try {
+    themeImportCode.value = await file.text();
+    reviewThemeImport();
+  } catch {
+    themeImportStatus.textContent = "Unable to read that theme file.";
+    themeImportStatus.dataset.state = "error";
+  } finally {
+    themeImportFile.value = "";
+  }
+}
+
+function clearThemeImportReview() {
+  stagedImportedTheme = undefined;
+  stagedImportedImage = undefined;
+  if (stagedThemePreviewUrl) URL.revokeObjectURL(stagedThemePreviewUrl);
+  stagedThemePreviewUrl = undefined;
+  themeImportReviewPanel.hidden = true;
+  themeImportPreview.replaceChildren();
+  importThemePresetButton.disabled = true;
+}
+
+function openThemeImport() {
+  if (draftCustomThemes.length >= MAX_CUSTOM_THEME_PRESETS) {
+    setStatus(`You can keep up to ${MAX_CUSTOM_THEME_PRESETS} custom presets on this browser.`, true);
+    return;
+  }
+  themeImportStatus.textContent = "";
+  themeImportStatus.dataset.state = "";
+  clearThemeImportReview();
+  themeImportDialog.returnValue = "";
+  themeImportDialog.showModal();
+  themeImportCode.focus();
+}
+
+async function importThemePreset() {
+  if (!stagedImportedTheme) return;
+  if (draftCustomThemes.length >= MAX_CUSTOM_THEME_PRESETS) {
+    themeImportStatus.textContent = `You can keep up to ${MAX_CUSTOM_THEME_PRESETS} custom presets on this browser.`;
+    themeImportStatus.dataset.state = "error";
+    return;
+  }
+  let backgroundImageAssetId: string | undefined;
+  if (stagedImportedImage) {
+    backgroundImageAssetId = newThemeImageAssetId();
+    try {
+      await saveThemeBackgroundImage(backgroundImageAssetId, stagedImportedImage);
+      unsavedThemeImageIds.add(backgroundImageAssetId);
+    } catch (error) {
+      themeImportStatus.textContent = error instanceof Error ? error.message : "Unable to store the imported image locally.";
+      themeImportStatus.dataset.state = "error";
+      return;
+    }
+  }
+  const theme: CustomThemePreset = {
+    id: createCustomThemeId(),
+    name: stagedImportedTheme.name,
+    baseTheme: stagedImportedTheme.baseTheme,
+    colors: { ...stagedImportedTheme.colors },
+    design: { ...stagedImportedTheme.design, ...(backgroundImageAssetId ? { backgroundImageAssetId } : {}) },
+  };
+  draftCustomThemes.push(theme);
+  renderThemeOptions(theme.id);
+  renderCustomThemeEditor();
+  syncAppPreferencesDirty();
+  themeImportDialog.close("imported");
+  setStatus(`Imported “${theme.name}” and selected it. Save preferences to keep it on this browser.`);
 }
 
 type LeavePreferencesChoice = "save" | "discard" | "stay";
@@ -491,7 +1380,19 @@ async function saveAppPreferencesDraft() {
       }
     }
   }
+  const previousImageIds = themeImageIds(appPreferences.customThemes);
   appPreferences = saveAppPreferences(currentUserId, readAppPreferencesForm(notificationMode));
+  const saved = loadAppPreferences(currentUserId);
+  const savedImageIds = themeImageIds(saved.customThemes);
+  const persistedImageIds = themeImageIds(appPreferences.customThemes);
+  const persisted = saved.themePreset === appPreferences.themePreset
+    && JSON.stringify(saved.customThemes) === JSON.stringify(appPreferences.customThemes)
+    && [...persistedImageIds].every((id) => savedImageIds.has(id));
+  if (persisted) {
+    const obsolete = [...new Set([...previousImageIds, ...unsavedThemeImageIds])].filter((id) => !persistedImageIds.has(id));
+    await deleteThemeBackgroundImages(obsolete);
+    unsavedThemeImageIds.clear();
+  }
   if (currentUserId) void synchronizeFcmPush(api, currentUserId, appPreferences);
   renderAppPreferences(appPreferences);
   appPreferencesStatus.textContent = "Changes saved on this browser.";
@@ -504,12 +1405,124 @@ appPreferencesForm.addEventListener("submit", async (event) => {
   await saveAppPreferencesDraft();
 });
 
+appTheme.addEventListener("change", () => {
+  invalidateThemeShareCode();
+  renderThemeCards(appTheme.value);
+  renderCustomThemeEditor();
+  void discardUnreferencedDraftThemeImages();
+  syncAppPreferencesDirty();
+});
+appAccent.addEventListener("input", () => {
+  builtInAccentDraft = appAccent.value;
+  renderThemeCards(appTheme.value);
+  syncAppPreferencesDirty();
+});
+  customThemeName.addEventListener("input", () => {
+  const theme = selectedCustomTheme();
+  if (!theme) return;
+  theme.name = customThemeName.value;
+  invalidateThemeShareCode();
+  renderThemePreview(themeEditorPreview, theme.name, theme.baseTheme, theme.colors, theme.design);
+  syncAppPreferencesDirty();
+});
+customThemeName.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") event.preventDefault();
+});
+customThemeBase.addEventListener("change", () => {
+  const theme = selectedCustomTheme();
+  if (!theme) return;
+  theme.baseTheme = customThemeBase.value as AppTheme;
+  invalidateThemeShareCode();
+  renderThemeCards(theme.id);
+  renderThemePreview(themeEditorPreview, theme.name, theme.baseTheme, theme.colors, theme.design);
+  renderThemeContrastWarning(theme);
+  syncAppPreferencesDirty();
+});
+themeBackgroundMode.addEventListener("change", () => updateSelectedThemeDesign({ backgroundMode: themeBackgroundMode.value as ThemeDesign["backgroundMode"] }));
+themeGradientStart.addEventListener("input", () => updateSelectedThemeDesign({ gradientStart: themeGradientStart.value }));
+themeGradientEnd.addEventListener("input", () => updateSelectedThemeDesign({ gradientEnd: themeGradientEnd.value }));
+themeGradientAngle.addEventListener("change", () => updateSelectedThemeDesign({ gradientAngle: Number(themeGradientAngle.value) }));
+themeImageFit.addEventListener("change", () => updateSelectedThemeDesign({ imageFit: themeImageFit.value as ThemeDesign["imageFit"] }));
+themeImagePosition.addEventListener("change", () => updateSelectedThemeDesign({ imagePosition: themeImagePosition.value as ThemeDesign["imagePosition"] }));
+themeBackgroundOverlay.addEventListener("input", () => updateSelectedThemeDesign({ overlay: Number(themeBackgroundOverlay.value) }));
+themeContentWidth.addEventListener("change", () => updateSelectedThemeDesign({ contentWidth: themeContentWidth.value as ThemeDesign["contentWidth"] }));
+themeDensity.addEventListener("change", () => updateSelectedThemeDesign({ density: themeDensity.value as ThemeDesign["density"] }));
+themeRadius.addEventListener("input", () => updateSelectedThemeDesign({ radius: Number(themeRadius.value) }));
+themeShadow.addEventListener("change", () => updateSelectedThemeDesign({ shadow: themeShadow.value as ThemeDesign["shadow"] }));
+themeBorderStyle.addEventListener("change", () => updateSelectedThemeDesign({ borderStyle: themeBorderStyle.value as ThemeDesign["borderStyle"] }));
+themeMotion.addEventListener("change", () => updateSelectedThemeDesign({ motion: themeMotion.value as ThemeDesign["motion"] }));
+themeTransitionSpeed.addEventListener("change", () => updateSelectedThemeDesign({ transitionSpeed: themeTransitionSpeed.value as ThemeDesign["transitionSpeed"] }));
+themeTransitionEasing.addEventListener("change", () => updateSelectedThemeDesign({ transitionEasing: themeTransitionEasing.value as ThemeDesign["transitionEasing"] }));
+themeBackgroundFile.addEventListener("change", () => void onThemeBackgroundFile());
+removeThemeBackgroundButton.addEventListener("click", () => {
+  updateSelectedThemeDesign({ backgroundMode: "solid", backgroundImageAssetId: undefined });
+  themeImageStatus.textContent = "Image removed from this preset draft. Save preferences to keep the change.";
+  void discardUnreferencedDraftThemeImages();
+});
+createThemePresetButton.addEventListener("click", createThemePreset);
+editThemePresetButton.addEventListener("click", editSelectedThemePreset);
+deleteThemePresetButton.addEventListener("click", deleteThemePreset);
+closeThemeEditorButton.addEventListener("click", () => customThemeEditor.close("cancel"));
+cancelThemeEditorButton.addEventListener("click", () => customThemeEditor.close("cancel"));
+doneThemeEditorButton.addEventListener("click", () => {
+  const theme = selectedCustomTheme();
+  if (!theme || !theme.name.trim() || theme.name.trim().length > MAX_THEME_NAME_LENGTH) {
+    setStatus(`Preset names must be 1–${MAX_THEME_NAME_LENGTH} characters long.`, true);
+    customThemeName.focus();
+    return;
+  }
+  customThemeEditor.close("done");
+});
+customThemeEditor.addEventListener("close", () => {
+  const accepted = customThemeEditor.returnValue === "done" || customThemeEditor.returnValue === "deleted";
+  if (!accepted) {
+    if (editorThemeIsNew && editorThemeId) {
+      draftCustomThemes = draftCustomThemes.filter((theme) => theme.id !== editorThemeId);
+    } else if (editorThemeSnapshot && editorThemeId) {
+      const index = draftCustomThemes.findIndex((theme) => theme.id === editorThemeId);
+      if (index >= 0) draftCustomThemes[index] = editorThemeSnapshot;
+    }
+    appTheme.value = editorPreviousSelection;
+  }
+  const deleted = customThemeEditor.returnValue === "deleted";
+  editorThemeId = undefined;
+  editorThemeSnapshot = undefined;
+  editorThemeIsNew = false;
+  customThemeName.required = false;
+  renderThemeOptions(appTheme.value);
+  renderCustomThemeEditor();
+  syncAppPreferencesDirty();
+  if (deleted) setStatus("Preset removed from this draft. Save preferences to keep the deletion.");
+  else if (accepted) setStatus("Preset edits are in your draft. Save preferences to keep the changes.");
+});
+copyThemePresetButton.addEventListener("click", () => void copyThemePreset());
+downloadThemePresetButton.addEventListener("click", downloadThemePreset);
+themeShareCodeDetails.addEventListener("toggle", () => {
+  if (!themeShareCodeDetails.open || themeExportCode.value) return;
+  const sharedTheme = sharedThemeForSelected();
+  if (sharedTheme) themeExportCode.value = exportSharedTheme(sharedTheme);
+  else themeShareCodeDetails.open = false;
+});
+openThemeImportButton.addEventListener("click", openThemeImport);
+closeThemeImportButton.addEventListener("click", () => themeImportDialog.close("cancel"));
+cancelThemeImportButton.addEventListener("click", () => themeImportDialog.close("cancel"));
+reviewThemeImportButton.addEventListener("click", () => void reviewThemeImport());
+themeImportCode.addEventListener("input", () => {
+  clearThemeImportReview();
+  themeImportStatus.textContent = "";
+  themeImportStatus.dataset.state = "";
+});
+themeImportFile.addEventListener("change", () => void loadThemeImportFile());
+importThemePresetButton.addEventListener("click", () => void importThemePreset());
+themeImportDialog.addEventListener("close", clearThemeImportReview);
+
 appScale.addEventListener("input", updateAppScaleValue);
 appMessageTextSize.addEventListener("input", updateMessageTextSizeValue);
 appPreferencesForm.addEventListener("input", syncAppPreferencesDirty);
 appPreferencesForm.addEventListener("change", syncAppPreferencesDirty);
 discardAppPreferencesButton.addEventListener("click", () => {
   renderAppPreferences(appPreferences);
+  void discardUnreferencedDraftThemeImages();
   appPreferencesStatus.textContent = "Unsaved changes discarded.";
 });
 

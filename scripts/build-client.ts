@@ -30,6 +30,7 @@ const styleSheets = [
   "profile-editor.css",
   "pages.css",
   "responsive.css",
+  "controls.css",
 ];
 const bundledStyles = (await Promise.all(styleSheets.map((sheet) => Bun.file(`client/styles/${sheet}`).text()))).join("");
 await Bun.write("public/app.css", bundledStyles);

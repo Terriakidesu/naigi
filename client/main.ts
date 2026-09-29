@@ -5229,12 +5229,17 @@ function renderMessage(
   message: MessageEnvelope,
   decrypted: { sender: string; content: Record<string, unknown> } | null,
   error?: string,
-  options: { grouped: boolean } = { grouped: false },
+  options: { grouped: boolean; animate?: boolean } = { grouped: false },
 ): boolean {
   const wasRealtimeMessage = pendingMentionNotifications.delete(message.id);
   const article = document.createElement("article");
   article.className = "message";
+  article.classList.toggle("message-own", isOwnMessage(message));
   if (options.grouped) article.classList.add("message-compact");
+  if (options.animate) {
+    article.classList.add("message-entering");
+    article.addEventListener("animationend", () => article.classList.remove("message-entering"), { once: true });
+  }
   const senderIdentity = senderLabel(message, decrypted);
   const edited = editedMessageBodies.get(message.id);
   const originalBody = decrypted && typeof decrypted.content.body === "string" ? decrypted.content.body : "";
@@ -5614,7 +5619,7 @@ async function appendNewMessagesInternal(messages: MessageEnvelope[], conversati
       }
       const currentGroup = groupStateForMessage(message, decrypted);
       const grouped = shouldGroupMessage(previousGroup, currentGroup);
-      const rendered = renderMessage(message, decrypted, error, { grouped });
+      const rendered = renderMessage(message, decrypted, error, { grouped, animate: true });
       if (!rendered) {
         divider?.remove();
         previousDay = previousDayBeforeMessage;

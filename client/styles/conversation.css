@@ -140,22 +140,22 @@
 .code-token-addition { color: #aff5b4; background: rgba(46, 160, 67, 0.16); }
 .code-token-deletion { color: #ffdcd7; background: rgba(248, 81, 73, 0.16); }
 .code-token-diff-meta { color: #79c0ff; }
-:root[data-app-theme="light"] .text-attachment-preview-content { color: #24292f; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-keyword,
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-operator { color: #cf222e; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-string { color: #0a3069; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-comment { color: #6e7781; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-number,
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-literal,
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-diff-meta { color: #0550ae; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-function { color: #8250df; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-type { color: #953800; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-property,
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-tag { color: #116329; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-attribute { color: #8250df; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-punctuation { color: #57606a; }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-addition { color: #116329; background: rgba(46, 160, 67, 0.12); }
-:root[data-app-theme="light"] .text-attachment-preview-content .code-token-deletion { color: #cf222e; background: rgba(248, 81, 73, 0.12); }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content { color: #24292f; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-keyword,
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-operator { color: #cf222e; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-string { color: #0a3069; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-comment { color: #6e7781; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-number,
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-literal,
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-diff-meta { color: #0550ae; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-function { color: #8250df; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-type { color: #953800; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-property,
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-tag { color: #116329; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-attribute { color: #8250df; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-punctuation { color: #57606a; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-addition { color: #116329; background: rgba(46, 160, 67, 0.12); }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .text-attachment-preview-content .code-token-deletion { color: #cf222e; background: rgba(248, 81, 73, 0.12); }
 .text-attachment-footer { display: flex; align-items: center; justify-content: space-between; gap: 0.65rem; min-height: 30px; margin-top: 0.35rem; }
 .text-attachment-more { min-width: 0; overflow: hidden; color: var(--text-faint); font-size: 0.61rem; text-overflow: ellipsis; white-space: nowrap; }
 .text-attachment-expand { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 28px; padding: 0; border: 1px solid var(--line-soft); border-radius: 6px; color: var(--text-muted); background: transparent; }
@@ -290,7 +290,7 @@
 .privacy-card strong, .privacy-card span { display: block; }
 .privacy-card strong { color: #b9cdc6; font-size: 0.68rem; }
 .privacy-card span:not(.privacy-icon) { margin-top: 0.25rem; color: #9db4aa; font-size: 0.62rem; line-height: 1.35; }
-:root[data-app-theme="light"] .privacy-icon, :root[data-app-theme="light"] .privacy-card strong, :root[data-app-theme="light"] .privacy-card span:not(.privacy-icon) { color: #246b49; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .privacy-icon, :root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .privacy-card strong, :root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .privacy-card span:not(.privacy-icon) { color: #246b49; }
 .details-section-title { margin-bottom: 0.55rem; color: var(--text-faint); font-size: 0.62rem; font-weight: 800; letter-spacing: 0.08em; }
 .member-list { display: grid; gap: 0.6rem; }
 .member-row { display: flex; align-items: center; gap: 0.55rem; min-width: 0; width: 100%; padding: 0; color: var(--text-muted); background: transparent; text-align: left; }
@@ -314,3 +314,85 @@
 .member-presence::before { width: 6px; height: 6px; border-radius: 50%; content: ""; background: var(--text-faint); }
 .member-presence[data-state="online"]::before { background: var(--green); }
 .member-presence[data-state="idle"]::before { background: #a8a47e; }
+
+.chat-layout[data-app-theme="momotalk"] .chat-header { border-bottom-color: color-mix(in srgb, var(--accent) 72%, #702346); color: var(--accent-ink); background: var(--accent); box-shadow: 0 2px 7px rgba(61, 37, 58, 0.16); }
+.chat-layout[data-app-theme="momotalk"] .chat-header h2,
+.chat-layout[data-app-theme="momotalk"] .chat-header .channel-icon,
+.chat-layout[data-app-theme="momotalk"] .chat-header .icon-button { color: var(--accent-ink); }
+.chat-layout[data-app-theme="momotalk"] .chat-header .channel-subtitle,
+.chat-layout[data-app-theme="momotalk"] .chat-header .status { color: color-mix(in srgb, var(--accent-ink) 78%, transparent); }
+.chat-layout[data-app-theme="momotalk"] .chat-header .icon-button:hover { color: var(--accent-hover-ink); background: color-mix(in srgb, var(--accent-ink) 14%, var(--accent)); }
+.chat-layout[data-app-theme="momotalk"] .chat-header #notification-toggle[aria-pressed="true"] { color: var(--accent-ink); }
+.chat-layout[data-app-theme="momotalk"] .chat-header .message-search { color: var(--accent-ink); background: color-mix(in srgb, #fff 88%, var(--accent)); }
+.chat-layout[data-app-theme="momotalk"] .chat-header .message-search input { color: #263548; }
+.chat-layout[data-app-theme="momotalk"] .messages { background: var(--bg); scrollbar-color: var(--line) var(--bg); }
+.chat-layout[data-app-theme="momotalk"] .message { grid-template-columns: 34px minmax(0, 1fr); align-items: end; max-width: 900px; margin-bottom: 0.28rem; padding: 0.28rem 0.5rem; border-color: transparent; }
+.chat-layout[data-app-theme="momotalk"] .message > .message-avatar { width: 32px; height: 32px; border-radius: 50%; }
+.chat-layout[data-app-theme="momotalk"] .message > .message-content { width: fit-content; max-width: min(100%, 620px); min-width: 0; padding: 0.55rem 0.78rem; border: 1px solid color-mix(in srgb, var(--message-bubble) 78%, #253548); border-radius: 15px 15px 15px 5px; color: var(--message-bubble-text); background: var(--message-bubble); box-shadow: 0 2px 5px rgba(37, 48, 64, 0.13); }
+.chat-layout[data-app-theme="momotalk"] .message > .message-content .message-meta { color: color-mix(in srgb, var(--message-bubble-text) 76%, transparent); }
+.chat-layout[data-app-theme="momotalk"] .message > .message-content .message-meta time,
+.chat-layout[data-app-theme="momotalk"] .message > .message-content .edited-label { color: color-mix(in srgb, var(--message-bubble-text) 72%, transparent); }
+.chat-layout[data-app-theme="momotalk"] .message > .message-content .message-meta strong,
+.chat-layout[data-app-theme="momotalk"] .message > .message-content .message-sender-link { color: var(--message-bubble-text); }
+.chat-layout[data-app-theme="momotalk"] .message > .message-content .markdown-body,
+.chat-layout[data-app-theme="momotalk"] .message > .message-content .message-body { color: var(--message-bubble-text); }
+.chat-layout[data-app-theme="momotalk"] .message > .message-content .markdown-body pre { background: #29394a; }
+.chat-layout[data-app-theme="momotalk"] .message-own { grid-template-columns: minmax(0, 1fr) 34px; }
+.chat-layout[data-app-theme="momotalk"] .message-own > .message-avatar { grid-column: 2; grid-row: 1; }
+.chat-layout[data-app-theme="momotalk"] .message-own > .message-content { grid-column: 1; grid-row: 1; justify-self: end; border-color: color-mix(in srgb, var(--message-bubble-own) 78%, #253548); border-radius: 15px 15px 5px 15px; color: var(--message-bubble-own-text); background: var(--message-bubble-own); }
+.chat-layout[data-app-theme="momotalk"] .message-own > .message-content .message-meta,
+.chat-layout[data-app-theme="momotalk"] .message-own > .message-content .message-meta time,
+.chat-layout[data-app-theme="momotalk"] .message-own > .message-content .edited-label { color: color-mix(in srgb, var(--message-bubble-own-text) 76%, transparent); }
+.chat-layout[data-app-theme="momotalk"] .message-own > .message-content .message-meta strong,
+.chat-layout[data-app-theme="momotalk"] .message-own > .message-content .message-sender-link { color: var(--message-bubble-own-text); }
+.chat-layout[data-app-theme="momotalk"] .message-own > .message-content .markdown-body,
+.chat-layout[data-app-theme="momotalk"] .message-own > .message-content .message-body { color: var(--message-bubble-own-text); }
+.chat-layout[data-app-theme="momotalk"] .message-compact > .message-content { border-radius: 11px; }
+.chat-layout[data-app-theme="momotalk"] .message-mention { box-shadow: none; }
+.chat-layout[data-app-theme="momotalk"] .reply-context { padding-right: 0.55rem; border-color: var(--accent); color: var(--text-muted); background: var(--bg-elevated); }
+.chat-layout[data-app-theme="momotalk"] .reply-context:hover { color: var(--text); background: var(--bg-hover); }
+
+/* Safe, per-preset design controls. The values come from validated enums and numbers. */
+.chat-layout[data-theme-design="true"] .chat-content { background: var(--theme-chat-background, var(--bg)); background-position: center; background-size: cover; }
+.chat-layout[data-theme-design="true"] .messages { background: transparent; }
+.chat-layout[data-theme-design="true"] .message { max-width: var(--theme-content-width, 920px); margin-bottom: var(--theme-message-gap, 4px); padding: var(--theme-message-pad-y, 10px) var(--theme-message-pad-x, 11px); border-radius: var(--theme-message-radius, 12px); }
+.chat-layout[data-theme-design="true"] .message-compact { padding-top: max(2px, calc(var(--theme-message-pad-y, 10px) * 0.45)); padding-bottom: max(2px, calc(var(--theme-message-pad-y, 10px) * 0.45)); }
+.chat-layout[data-theme-design="true"] .message > .message-content { border-radius: var(--theme-message-radius, 12px); box-shadow: var(--theme-shadow, none); }
+.chat-layout[data-theme-design="true"][data-theme-background="image"]:not([data-app-theme="momotalk"]) .message > .message-content,
+.chat-layout[data-theme-design="true"][data-theme-background="gradient"]:not([data-app-theme="momotalk"]) .message > .message-content { padding: 0.45rem 0.55rem; border-radius: var(--theme-message-radius, 12px); background: color-mix(in srgb, var(--bg-elevated) 92%, transparent); backdrop-filter: blur(5px); }
+.chat-layout[data-theme-design="true"] .message-own > .message-content { border-radius: var(--theme-message-radius, 12px); }
+.chat-layout[data-theme-design="true"] .message-avatar { border-radius: var(--theme-control-radius, 9px); }
+.chat-layout[data-theme-design="true"] .chat-header,
+.chat-layout[data-theme-design="true"] .sidebar,
+.chat-layout[data-theme-design="true"] .composer-box { border-radius: var(--theme-panel-radius, 12px); }
+.chat-layout[data-theme-design="true"] .composer-box,
+.chat-layout[data-theme-design="true"] .chat-header,
+.chat-layout[data-theme-design="true"] .message > .message-content { border-width: var(--theme-border-width, 1px); border-style: var(--theme-border-line-style, solid); }
+.chat-layout[data-theme-design="true"][data-theme-borders="none"] .composer-box,
+.chat-layout[data-theme-design="true"][data-theme-borders="none"] .chat-header,
+.chat-layout[data-theme-design="true"][data-theme-borders="none"] .message > .message-content { border-color: transparent; }
+.chat-layout[data-theme-design="true"][data-theme-borders="subtle"] .message > .message-content { border-color: color-mix(in srgb, var(--line-soft) 70%, transparent); }
+.chat-layout[data-theme-design="true"][data-theme-borders="solid"] .message > .message-content,
+.chat-layout[data-theme-design="true"][data-theme-borders="dashed"] .message > .message-content { border-color: var(--line-soft); }
+.chat-layout[data-theme-design="true"] .chat-header,
+.chat-layout[data-theme-design="true"] .sidebar,
+.chat-layout[data-theme-design="true"] .composer-box { box-shadow: var(--theme-shadow, none); }
+.chat-layout[data-theme-design="true"] button,
+.chat-layout[data-theme-design="true"] a,
+.chat-layout[data-theme-design="true"] .message,
+.chat-layout[data-theme-design="true"] .message > .message-content,
+.chat-layout[data-theme-design="true"] .composer-box { transition-duration: var(--theme-transition-time, 160ms); transition-timing-function: var(--theme-transition-easing, ease); }
+
+@keyframes theme-message-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes theme-message-slide { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes theme-message-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+.chat-layout[data-theme-design="true"][data-theme-motion="fade"] .message.message-entering { animation: theme-message-fade var(--theme-motion-duration, 180ms) var(--theme-transition-easing, ease) both; }
+.chat-layout[data-theme-design="true"][data-theme-motion="slide"] .message.message-entering { animation: theme-message-slide var(--theme-motion-duration, 220ms) var(--theme-transition-easing, ease) both; }
+.chat-layout[data-theme-design="true"][data-theme-motion="pop"] .message.message-entering { animation: theme-message-pop var(--theme-motion-duration, 240ms) var(--theme-transition-easing, ease) both; }
+:root[data-reduced-motion="true"] .chat-layout[data-theme-design="true"] .message.message-entering { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-layout[data-theme-design="true"] .message,
+  .theme-preview-window .theme-preview-message { animation: none !important; }
+  .chat-layout[data-theme-design="true"] *,
+  .theme-preview-window * { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+}

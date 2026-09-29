@@ -17,6 +17,8 @@ import { renderAvatar } from "./avatar";
 import { readableAccentText, type AppTheme } from "./app-preferences";
 import { CryptoClient, LocalCryptoStoreError } from "./crypto";
 import { renderIcons } from "./icons";
+import { highestSeparatedRole } from "./member-roles";
+import { previewChannelCapabilities, previewRoleFeatures } from "./role-preview";
 import { showOneTimeToken } from "./ui-dialog";
 import {
   clearSessionPassphrase,
@@ -29,11 +31,18 @@ const api = new ApiClient();
 
 function currentAppTheme(): AppTheme {
   const theme = document.documentElement.dataset.appTheme;
-  return theme === "light" || theme === "dim" ? theme : "dark";
+  return theme === "light" || theme === "dim" || theme === "momotalk" ? theme : "dark";
 }
 
 const serverId = new URLSearchParams(window.location.search).get("server");
 const title = document.getElementById("server-settings-title") as HTMLElement;
+const settingsLayout = document.getElementById("server-settings-layout") as HTMLElement;
+const settingsSidebar = document.getElementById("server-settings-sidebar") as HTMLElement;
+const mobileSidebarToggle = document.getElementById("server-settings-mobile-sidebar-toggle") as HTMLButtonElement;
+const mobileSidebarClose = document.getElementById("server-settings-mobile-sidebar-close") as HTMLButtonElement;
+const mobileSidebarBackdrop = document.getElementById("server-settings-mobile-sidebar-backdrop") as HTMLButtonElement;
+const settingsPageTitle = document.getElementById("server-settings-page-title") as HTMLElement;
+const settingsPageDescription = document.getElementById("server-settings-page-description") as HTMLElement;
 const roleLabel = document.getElementById("server-settings-role") as HTMLElement;
 const serverForm = document.getElementById("server-form") as HTMLFormElement;
 const serverName = document.getElementById("server-name") as HTMLInputElement;
@@ -64,11 +73,19 @@ const roleForm = document.getElementById("role-form") as HTMLFormElement;
 const newRoleName = document.getElementById("new-role-name") as HTMLInputElement;
 const newRoleColor = document.getElementById("new-role-color") as HTMLInputElement;
 const roleList = document.getElementById("role-settings-list") as HTMLElement;
-const rolePreview = document.getElementById("role-preview") as HTMLElement;
+const rolePreview = document.getElementById("role-preview") as HTMLDialogElement;
 const rolePreviewTitle = document.getElementById("role-preview-title") as HTMLElement;
+const rolePreviewDescription = document.getElementById("role-preview-description") as HTMLElement;
 const rolePreviewBanner = document.getElementById("role-preview-banner") as HTMLElement;
 const rolePreviewContent = document.getElementById("role-preview-content") as HTMLElement;
 const exitRolePreview = document.getElementById("exit-role-preview") as HTMLButtonElement;
+const previewRoomToggle = document.getElementById("role-preview-room-toggle") as HTMLButtonElement;
+const previewInspectorToggle = document.getElementById("role-preview-inspector-toggle") as HTMLButtonElement;
+const previewRoomBackdrop = document.getElementById("role-preview-room-backdrop") as HTMLButtonElement;
+const previewInspectorBackdrop = document.getElementById("role-preview-inspector-backdrop") as HTMLButtonElement;
+const previewSidebar = document.getElementById("role-preview-sidebar") as HTMLElement;
+const previewMain = document.getElementById("role-preview-main") as HTMLElement;
+const previewInspector = document.getElementById("role-preview-inspector") as HTMLElement;
 const memberList = document.getElementById("member-settings-list") as HTMLElement;
 const moderationList = document.getElementById("moderation-settings-list") as HTMLElement;
 const moderationActionDialog = document.getElementById("moderation-action-dialog") as HTMLDialogElement;
@@ -107,6 +124,7 @@ let metadataConversationId: string | undefined;
 let metadataMembers: Awaited<ReturnType<ApiClient["conversationMembers"]>>["members"] = [];
 let selectedRoleId: string | undefined;
 let previewRoleId: string | undefined;
+let previewChannelId: string | undefined;
 let roleSearchQuery = "";
 let roleEditorDirty = false;
 let metadataReady = false;
@@ -186,14 +204,49 @@ function syncSettingsNav() {
   const views = [...document.querySelectorAll<HTMLElement>("[data-settings-view]")];
   const hash = views.some((view) => `#${view.id}` === requestedHash) ? requestedHash : "#overview";
   for (const view of views) view.hidden = `#${view.id}` !== hash;
+  let activeLink: HTMLAnchorElement | undefined;
   for (const link of document.querySelectorAll<HTMLAnchorElement>(".server-settings-nav-item")) {
     const active = link.hash === hash;
     link.classList.toggle("active", active);
-    if (active) link.setAttribute("aria-current", "location");
-    else link.removeAttribute("aria-current");
+    if (active) {
+      activeLink = link;
+      link.setAttribute("aria-current", "location");
+    } else link.removeAttribute("aria-current");
+  }
+  settingsPageTitle.textContent = activeLink?.dataset.title ?? "Space settings";
+  settingsPageDescription.textContent = activeLink?.dataset.description ?? "Manage this private space.";
+}
+
+function setMobileSidebar(open: boolean, focusNavigation = false) {
+  settingsLayout.classList.toggle("mobile-sidebar-open", open);
+  mobileSidebarToggle.setAttribute("aria-expanded", String(open));
+  mobileSidebarToggle.setAttribute("aria-label", open ? "Hide settings navigation" : "Show settings navigation");
+  settingsSidebar.inert = window.matchMedia("(max-width: 760px)").matches && !open;
+  if (open && focusNavigation && window.matchMedia("(max-width: 760px)").matches) {
+    settingsSidebar.querySelector<HTMLElement>(".server-settings-nav-item.active")?.focus();
   }
 }
 
+for (const link of document.querySelectorAll<HTMLAnchorElement>(".server-settings-nav-item")) {
+  link.addEventListener("click", (event: MouseEvent) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (window.matchMedia("(max-width: 760px)").matches) setMobileSidebar(false);
+  });
+}
+
+mobileSidebarToggle.addEventListener("click", () => {
+  setMobileSidebar(!settingsLayout.classList.contains("mobile-sidebar-open"), true);
+});
+mobileSidebarClose.addEventListener("click", () => {
+  setMobileSidebar(false);
+  mobileSidebarToggle.focus();
+});
+mobileSidebarBackdrop.addEventListener("click", () => {
+  setMobileSidebar(false);
+  mobileSidebarToggle.focus();
+});
+window.addEventListener("resize", () => setMobileSidebar(settingsLayout.classList.contains("mobile-sidebar-open")));
+setMobileSidebar(settingsLayout.classList.contains("mobile-sidebar-open"));
 window.addEventListener("hashchange", syncSettingsNav);
 syncSettingsNav();
 renderIcons();
@@ -333,103 +386,444 @@ function previewPermissions(role: CustomServerRole) {
   return permissions;
 }
 
+// I have nothing but my burger and I want nothing more
+function rolePreviewStatus(label: string, allowed: boolean) {
+  const status = document.createElement("span");
+  status.className = `role-preview-action ${allowed ? "allowed" : "blocked"}`;
+  status.textContent = `${label} · ${allowed ? "Allowed" : "Blocked"}`;
+  return status;
+}
+
+function rolePreviewIcon(name: string) {
+  const icon = document.createElement("i");
+  icon.dataset.lucide = name;
+  return icon;
+}
+
+function setPreviewRoomNavigation(open: boolean) {
+  const mobile = window.matchMedia("(max-width: 760px)").matches;
+  rolePreviewContent.classList.toggle("role-preview-room-nav-open", mobile && open);
+  previewRoomToggle.setAttribute("aria-expanded", String(mobile && open));
+  previewRoomToggle.setAttribute("aria-label", mobile && open ? "Hide rooms" : "Show rooms");
+  previewSidebar.inert = mobile && !open;
+}
+
+function setPreviewInspector(open: boolean) {
+  const compact = window.matchMedia("(max-width: 1000px)").matches;
+  rolePreviewContent.classList.toggle("role-preview-inspector-open", compact && open);
+  previewInspectorToggle.setAttribute("aria-expanded", String(compact && open));
+  previewInspector.inert = compact && !open;
+}
+
 function renderRolePreview() {
   const role = previewRoleId ? roles.find((candidate) => candidate.id === previewRoleId) : undefined;
   if (!role) {
-    rolePreview.hidden = true;
-    rolePreviewBanner.replaceChildren();
-    rolePreviewContent.replaceChildren();
+    previewSidebar.replaceChildren();
+    previewMain.replaceChildren();
+    previewInspector.replaceChildren();
     return;
   }
 
   const permissions = previewPermissions(role);
-  rolePreview.hidden = false;
+  const features = previewRoleFeatures(role);
+  const visibleChannels = [...channels]
+    .filter((channel) => previewChannelCapabilities(role, channel).canView)
+    .sort((left, right) => left.position - right.position);
+  const selectedChannel = visibleChannels.find((channel) => channel.id === previewChannelId) ?? visibleChannels[0];
+  previewChannelId = selectedChannel?.id;
+  const capabilities = selectedChannel
+    ? previewChannelCapabilities(role, selectedChannel)
+    : { canView: false, canSend: false, canUpload: false };
+  const unavailableToCurrentAccount = Math.max(0, (currentServer?.channelCount ?? channels.length) - channels.length);
+
   rolePreview.style.setProperty("--role-color", role.color);
   rolePreviewTitle.textContent = `Viewing as ${roleName(role)}`;
-  rolePreviewBanner.replaceChildren();
+  rolePreviewDescription.textContent = "Read-only · no member impersonation, message history, sends, uploads, or settings changes.";
+  rolePreviewBanner.querySelector<HTMLElement>(".role-preview-swatch")?.style.setProperty("background", role.color);
 
-  const swatch = document.createElement("span");
-  swatch.className = "role-preview-swatch";
-  swatch.style.background = role.color;
-  swatch.setAttribute("aria-hidden", "true");
-  const copy = document.createElement("div");
-  copy.className = "role-preview-banner-copy";
-  const stack = document.createElement("strong");
-  stack.textContent = role.systemKey === "everyone" ? "All members" : `All members · ${roleName(role)}`;
-  const explanation = document.createElement("span");
-  explanation.textContent = "Read-only simulation. No member is impersonated and no encrypted message history is loaded or decrypted.";
-  copy.append(stack, explanation);
-  rolePreviewBanner.append(swatch, copy);
+  previewSidebar.replaceChildren();
+  previewMain.replaceChildren();
+  previewInspector.replaceChildren();
 
-  const roomCard = document.createElement("section");
-  roomCard.className = "role-preview-card";
+  const feedback = document.createElement("p");
+  feedback.className = "role-preview-feedback";
+  feedback.setAttribute("role", "status");
+  feedback.textContent = "Preview only · no server actions are performed.";
+
+  const spaceHeading = document.createElement("div");
+  spaceHeading.className = "role-preview-space-heading";
+  const spaceIcon = document.createElement("span");
+  spaceIcon.className = "role-preview-space-icon";
+  if (currentServer?.iconUrl) {
+    const image = document.createElement("img");
+    image.src = currentServer.iconUrl;
+    image.alt = "";
+    spaceIcon.append(image);
+  } else {
+    spaceIcon.textContent = (serverName.value.trim() || "N").slice(0, 1).toLocaleUpperCase();
+  }
+  const spaceIdentity = document.createElement("div");
+  spaceIdentity.className = "role-preview-space-identity";
+  const spaceName = document.createElement("strong");
+  spaceName.textContent = serverName.value.trim() || "Private space";
+  const roleLabel = document.createElement("span");
+  roleLabel.textContent = `As ${roleName(role)}`;
+  spaceIdentity.append(spaceName, roleLabel);
+  spaceHeading.append(spaceIcon, spaceIdentity);
+  previewSidebar.append(spaceHeading);
+
   const roomHeading = document.createElement("div");
-  roomHeading.className = "role-preview-card-heading";
-  const roomTitle = document.createElement("strong");
-  roomTitle.textContent = "Room access";
-  const roomMeta = document.createElement("span");
-  roomMeta.className = "muted small";
-  roomMeta.textContent = `${channels.length} room${channels.length === 1 ? "" : "s"}`;
-  roomHeading.append(roomTitle, roomMeta);
-  const roomList = document.createElement("div");
-  roomList.className = "role-preview-channel-list";
-  for (const channel of [...channels].sort((left, right) => left.position - right.position)) {
-    const access = role.channelAccess.find((item) => item.channelId === channel.id);
-    const categoryAccess = channel.categoryId ? (role.categoryAccess ?? []).find((item) => item.categoryId === channel.categoryId) : undefined;
-    const canView = permissions.view_channels && (role.viewAllChannels || Boolean(access?.canView || access?.canUpload || categoryAccess?.canView || categoryAccess?.canUpload));
-    const canSend = canView && permissions.send_messages;
-    const canUpload = canView && permissions.upload_files && (role.viewAllChannels || Boolean(access?.canUpload || categoryAccess?.canUpload));
-    const row = document.createElement("div");
-    row.className = "role-preview-channel";
-    const name = document.createElement("strong");
-    name.textContent = channelName(channel);
-    const actions = document.createElement("div");
-    actions.className = "role-preview-channel-actions";
-    for (const action of [
-      ["View", canView],
-      ["Send", canSend],
-      ["Upload", canUpload],
-    ] as const) {
-      const badge = document.createElement("span");
-      badge.className = `role-preview-action ${action[1] ? "allowed" : "blocked"}`;
-      badge.textContent = action[0];
-      actions.append(badge);
-    }
-    row.append(name, actions);
-    roomList.append(row);
-  }
-  if (channels.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "muted small";
-    empty.textContent = "No active encrypted rooms.";
-    roomList.append(empty);
-  }
-  roomCard.append(roomHeading, roomList);
+  roomHeading.className = "role-preview-sidebar-heading";
+  const roomHeadingLabel = document.createElement("strong");
+  roomHeadingLabel.textContent = "ROOMS";
+  const roomCount = document.createElement("span");
+  roomCount.textContent = `${visibleChannels.length}`;
+  roomHeading.append(roomHeadingLabel, roomCount);
+  previewSidebar.append(roomHeading);
 
-  const permissionCard = document.createElement("section");
-  permissionCard.className = "role-preview-card";
-  const permissionHeading = document.createElement("div");
-  permissionHeading.className = "role-preview-card-heading";
-  const permissionTitle = document.createElement("strong");
-  permissionTitle.textContent = "Actions";
-  const permissionMeta = document.createElement("span");
-  permissionMeta.className = "muted small";
-  permissionMeta.textContent = "Allowed and blocked";
-  permissionHeading.append(permissionTitle, permissionMeta);
+  const roomNavigation = document.createElement("nav");
+  roomNavigation.className = "role-preview-room-list";
+  roomNavigation.setAttribute("aria-label", "Rooms visible to this role");
+  const visibleByCategory = new Map<string | null, ServerChannel[]>();
+  for (const channel of visibleChannels) {
+    const grouped = visibleByCategory.get(channel.categoryId) ?? [];
+    grouped.push(channel);
+    visibleByCategory.set(channel.categoryId, grouped);
+  }
+  const appendRoom = (channel: ServerChannel, parent: HTMLElement) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "role-preview-room-item";
+    button.classList.toggle("selected", channel.id === selectedChannel?.id);
+    button.setAttribute("aria-pressed", String(channel.id === selectedChannel?.id));
+    if (channel.id === selectedChannel?.id) button.setAttribute("aria-current", "page");
+    button.append(rolePreviewIcon("hash"));
+    const name = document.createElement("span");
+    name.textContent = channelName(channel);
+    button.append(name);
+    button.addEventListener("click", () => {
+      previewChannelId = channel.id;
+      renderRolePreview();
+      setPreviewRoomNavigation(false);
+    });
+    parent.append(button);
+  };
+  const categoryIds = new Set(categories.map((category) => category.id));
+  for (const category of [...categories].sort((left, right) => left.position - right.position)) {
+    const categoryChannels = visibleByCategory.get(category.id) ?? [];
+    if (categoryChannels.length === 0) continue;
+    const group = document.createElement("details");
+    group.className = "role-preview-room-group";
+    group.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = categoryName(category);
+    const count = document.createElement("span");
+    count.textContent = String(categoryChannels.length);
+    summary.append(count);
+    group.append(summary);
+    for (const channel of categoryChannels) appendRoom(channel, group);
+    roomNavigation.append(group);
+  }
+  const uncategorizedChannels = visibleChannels.filter((channel) => !channel.categoryId || !categoryIds.has(channel.categoryId));
+  if (categories.length === 0) {
+    for (const channel of uncategorizedChannels) appendRoom(channel, roomNavigation);
+  } else if (uncategorizedChannels.length > 0) {
+    const group = document.createElement("details");
+    group.className = "role-preview-room-group";
+    group.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "Uncategorized";
+    const count = document.createElement("span");
+    count.textContent = String(uncategorizedChannels.length);
+    summary.append(count);
+    group.append(summary);
+    for (const channel of uncategorizedChannels) appendRoom(channel, group);
+    roomNavigation.append(group);
+  }
+  if (visibleChannels.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "role-preview-empty small";
+    empty.textContent = "No rooms are visible with this role.";
+    roomNavigation.append(empty);
+  }
+  previewSidebar.append(roomNavigation);
+
+  if (visibleChannels.length < channels.length) {
+    const hiddenRooms = document.createElement("p");
+    hiddenRooms.className = "role-preview-hidden-rooms";
+    hiddenRooms.textContent = `${channels.length - visibleChannels.length} room${channels.length - visibleChannels.length === 1 ? " is" : "s are"} hidden with this role.`;
+    previewSidebar.append(hiddenRooms);
+  }
+  if (unavailableToCurrentAccount > 0) {
+    const notAvailable = document.createElement("p");
+    notAvailable.className = "role-preview-hidden-rooms";
+    notAvailable.textContent = `${unavailableToCurrentAccount} other room${unavailableToCurrentAccount === 1 ? " is" : "s are"} outside your account's access and can't be previewed.`;
+    previewSidebar.append(notAvailable);
+  }
+
+  const addSidebarAction = (label: string, iconName: string) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "role-preview-sidebar-action";
+    button.append(rolePreviewIcon(iconName));
+    const text = document.createElement("span");
+    text.textContent = label;
+    button.append(text);
+    button.addEventListener("click", () => {
+      feedback.textContent = "Preview only · this action is visible to the role but wasn't performed.";
+    });
+    previewSidebar.append(button);
+  };
+  if (features.canManageChannels) addSidebarAction("Create or manage rooms", "plus");
+  if (features.canManageInvites) addSidebarAction("Invite people", "link");
+  if (features.canManageSettings) addSidebarAction("Space settings", "settings-2");
+
+  const chatHeader = document.createElement("header");
+  chatHeader.className = "role-preview-chat-header";
+  const roomIdentity = document.createElement("div");
+  roomIdentity.className = "role-preview-chat-room";
+  const roomIcon = document.createElement("span");
+  roomIcon.className = "role-preview-chat-icon";
+  roomIcon.append(rolePreviewIcon("hash"));
+  const roomCopy = document.createElement("div");
+  const roomTitle = document.createElement("h2");
+  roomTitle.textContent = selectedChannel ? channelName(selectedChannel) : "No visible room";
+  const roomSubtitle = document.createElement("span");
+  roomSubtitle.textContent = selectedChannel
+    ? "Encrypted room · message history is not loaded in preview"
+    : "This role has no visible rooms";
+  roomCopy.append(roomTitle, roomSubtitle);
+  roomIdentity.append(roomIcon, roomCopy);
+  chatHeader.append(roomIdentity);
+  const chatActions = document.createElement("div");
+  chatActions.className = "role-preview-chat-actions";
+  if (features.canViewMembers) {
+    const peopleButton = document.createElement("button");
+    peopleButton.type = "button";
+    peopleButton.className = "icon-button";
+    peopleButton.title = "Show people visible to this role";
+    peopleButton.setAttribute("aria-label", "Show people visible to this role");
+    peopleButton.append(rolePreviewIcon("users-round"));
+    peopleButton.addEventListener("click", () => setPreviewInspector(true));
+    chatActions.append(peopleButton);
+  }
+  if (features.canManageInvites) {
+    const inviteButton = document.createElement("button");
+    inviteButton.type = "button";
+    inviteButton.className = "icon-button";
+    inviteButton.title = "Create invite (preview only)";
+    inviteButton.setAttribute("aria-label", "Create invite (preview only)");
+    inviteButton.append(rolePreviewIcon("link"));
+    inviteButton.addEventListener("click", () => {
+      feedback.textContent = "Preview only · no invite was created.";
+    });
+    chatActions.append(inviteButton);
+  }
+  if (chatActions.childElementCount > 0) chatHeader.append(chatActions);
+  previewMain.append(chatHeader, feedback);
+
+  if (selectedChannel) {
+    const channelCapabilities = document.createElement("div");
+    channelCapabilities.className = "role-preview-channel-capabilities";
+    channelCapabilities.append(
+      rolePreviewStatus("View", capabilities.canView),
+      rolePreviewStatus("Send", capabilities.canSend),
+      rolePreviewStatus("Upload", capabilities.canUpload),
+    );
+    previewMain.append(channelCapabilities);
+  }
+
+  const messageArea = document.createElement("section");
+  messageArea.className = "role-preview-message-area";
+  const messageEmpty = document.createElement("div");
+  messageEmpty.className = "role-preview-message-empty";
+  const emptyIcon = document.createElement("span");
+  emptyIcon.className = "role-preview-message-empty-icon";
+  emptyIcon.append(rolePreviewIcon(selectedChannel ? "lock-keyhole" : "eye-off"));
+  const emptyTitle = document.createElement("h3");
+  emptyTitle.textContent = selectedChannel ? "Message history isn't loaded" : "No rooms available";
+  const emptyDescription = document.createElement("p");
+  emptyDescription.textContent = selectedChannel
+    ? "This role preview never fetches or decrypts messages. Your own access and keys are unchanged."
+    : "No room that your account can inspect is visible to this role.";
+  messageEmpty.append(emptyIcon, emptyTitle, emptyDescription);
+  messageArea.append(messageEmpty);
+  previewMain.append(messageArea);
+
+  if (selectedChannel) {
+    const composer = document.createElement("form");
+    composer.className = "role-preview-composer";
+    composer.addEventListener("submit", (event) => {
+      event.preventDefault();
+      feedback.textContent = "Preview only · no message was sent.";
+      messageInput.value = "";
+    });
+    const composerBox = document.createElement("div");
+    composerBox.className = "role-preview-composer-box";
+    const uploadButton = document.createElement("button");
+    uploadButton.type = "button";
+    uploadButton.className = "icon-button";
+    uploadButton.disabled = !capabilities.canUpload;
+    uploadButton.title = capabilities.canUpload ? "Upload allowed · preview only" : "Uploads blocked for this role in this room";
+    uploadButton.setAttribute("aria-label", uploadButton.title);
+    uploadButton.append(rolePreviewIcon("paperclip"));
+    uploadButton.addEventListener("click", () => {
+      feedback.textContent = "Preview only · no file was uploaded.";
+    });
+    const messageInput = document.createElement("textarea");
+    messageInput.rows = 1;
+    messageInput.maxLength = 4000;
+    messageInput.disabled = !capabilities.canSend;
+    messageInput.placeholder = capabilities.canSend ? `Message #${channelName(selectedChannel)}` : "Sending is blocked for this role";
+    messageInput.setAttribute("aria-label", "Preview message; not sent");
+    const sendButton = document.createElement("button");
+    sendButton.type = "submit";
+    sendButton.disabled = !capabilities.canSend;
+    sendButton.textContent = "Send";
+    sendButton.title = capabilities.canSend ? "Send allowed · preview only" : "Sending blocked for this role";
+    composerBox.append(uploadButton, messageInput, sendButton);
+    composer.append(composerBox);
+    const composerNote = document.createElement("span");
+    composerNote.textContent = capabilities.canSend
+      ? "Sending allowed · this preview never sends"
+      : "Sending is blocked by this role";
+    composer.append(composerNote);
+    previewMain.append(composer);
+  }
+
+  const inspectorHeading = document.createElement("div");
+  inspectorHeading.className = "role-preview-inspector-heading";
+  const inspectorTitle = document.createElement("strong");
+  inspectorTitle.textContent = "Role access";
+  const inspectorTag = document.createElement("span");
+  inspectorTag.textContent = "PREVIEW INSPECTOR";
+  inspectorHeading.append(inspectorTitle, inspectorTag);
+  previewInspector.append(inspectorHeading);
+  const inspectorNote = document.createElement("p");
+  inspectorNote.className = "role-preview-inspector-note";
+  inspectorNote.textContent = "Only you can see these details. Member-specific bans and timeouts aren't simulated.";
+  previewInspector.append(inspectorNote);
+
+  const selectedRoomAccess = document.createElement("section");
+  selectedRoomAccess.className = "role-preview-inspector-section";
+  const selectedRoomHeading = document.createElement("h3");
+  selectedRoomHeading.textContent = selectedChannel ? `#${channelName(selectedChannel)}` : "Room access";
+  selectedRoomAccess.append(selectedRoomHeading);
+  for (const [label, allowed] of [
+    ["View room", capabilities.canView],
+    ["Send messages", capabilities.canSend],
+    ["Upload files", capabilities.canUpload],
+  ] as const) {
+    selectedRoomAccess.append(rolePreviewStatus(label, allowed));
+  }
+  const featureRows: Array<[string, boolean]> = [
+    ["View people", features.canViewMembers],
+    ["Manage rooms", features.canManageChannels],
+    ["Manage invites", features.canManageInvites],
+    ["Open space settings", features.canManageSettings],
+  ];
+  for (const [label, allowed] of featureRows) selectedRoomAccess.append(rolePreviewStatus(label, allowed));
+  previewInspector.append(selectedRoomAccess);
+
+  const peopleSection = document.createElement("section");
+  peopleSection.className = "role-preview-inspector-section role-preview-people-section";
+  const peopleHeading = document.createElement("h3");
+  peopleHeading.textContent = "People";
+  const peopleCount = document.createElement("span");
+  peopleCount.className = "muted small";
+  peopleCount.textContent = features.canViewMembers ? `${members.length} visible` : "Hidden by role";
+  peopleHeading.append(peopleCount);
+  peopleSection.append(peopleHeading);
+  if (features.canViewMembers) {
+    const peopleList = document.createElement("div");
+    peopleList.className = "role-preview-people-list";
+    const allMembersRole = roles.find((candidate) => candidate.systemKey === "everyone");
+    const groups = new Map<string, { role?: CustomServerRole; members: ServerMember[] }>();
+    for (const member of members) {
+      const roleIds = normalizeRoleIds(member.roleIds ?? roleAssignments.get(member.userId) ?? []);
+      const memberGroupRole = highestSeparatedRole(roleIds, roles) ?? allMembersRole;
+      const key = memberGroupRole?.id ?? "participants";
+      const group = groups.get(key) ?? { role: memberGroupRole, members: [] };
+      group.members.push(member);
+      groups.set(key, group);
+    }
+    let renderedMembers = 0;
+    for (const group of [...groups.values()].sort((left, right) =>
+      (right.role?.position ?? -1) - (left.role?.position ?? -1)
+      || (left.role ? roleName(left.role) : "Participants").localeCompare(right.role ? roleName(right.role) : "Participants"))) {
+      if (renderedMembers >= 12) break;
+      const groupHeading = document.createElement("h4");
+      groupHeading.className = "role-preview-member-group-heading";
+      groupHeading.textContent = group.role ? roleName(group.role) : "Participants";
+      if (group.role?.color) groupHeading.style.color = readableAccentText(group.role.color, currentAppTheme());
+      peopleList.append(groupHeading);
+      for (const member of group.members.sort((left, right) => left.displayName.localeCompare(right.displayName))) {
+        if (renderedMembers >= 12) break;
+        const row = document.createElement("div");
+        row.className = "role-preview-person";
+        const avatar = document.createElement("span");
+        avatar.className = "member-avatar";
+        renderAvatar(avatar, member.displayName, member.userId, member.avatarUrl);
+        avatar.setAttribute("aria-hidden", "true");
+        const copy = document.createElement("span");
+        copy.className = "role-preview-person-copy";
+        const name = document.createElement("strong");
+        name.textContent = member.displayName;
+        const username = document.createElement("small");
+        username.textContent = `@${member.username}`;
+        copy.append(name, username);
+        row.append(avatar, copy);
+        peopleList.append(row);
+        renderedMembers += 1;
+      }
+    }
+    if (members.length > 12) {
+      const more = document.createElement("p");
+      more.className = "muted small";
+      more.textContent = `And ${members.length - 12} more people.`;
+      peopleList.append(more);
+    }
+    if (members.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "role-preview-empty small";
+      empty.textContent = "No other members.";
+      peopleList.append(empty);
+    }
+    peopleSection.append(peopleList);
+  } else {
+    const hidden = document.createElement("p");
+    hidden.className = "role-preview-empty small";
+    hidden.textContent = "The people directory is hidden for this role.";
+    peopleSection.append(hidden);
+  }
+  previewInspector.append(peopleSection);
+
+  const permissionsSection = document.createElement("section");
+  permissionsSection.className = "role-preview-inspector-section";
+  const permissionsHeading = document.createElement("h3");
+  permissionsHeading.textContent = "Permissions";
+  permissionsSection.append(permissionsHeading);
   const permissionGroups = document.createElement("div");
   permissionGroups.className = "role-preview-permission-groups";
-  for (const group of previewPermissionGroups) {
-    const groupSection = document.createElement("section");
-    groupSection.className = "role-preview-permission-group";
-    const groupTitle = document.createElement("h3");
+  for (const [groupIndex, group] of previewPermissionGroups.entries()) {
+    const groupDefinitions = group.permissions
+      .map((permissionId) => permissionDefinitions.find((definition) => definition.id === permissionId))
+      .filter((definition): definition is typeof permissionDefinitions[number] => Boolean(definition));
+    const groupDetails = document.createElement("details");
+    groupDetails.className = "role-preview-permission-group";
+    groupDetails.open = groupIndex === 0;
+    const groupSummary = document.createElement("summary");
+    const groupTitle = document.createElement("strong");
     groupTitle.textContent = group.label;
+    const allowedCount = groupDefinitions.filter((definition) => permissions[definition.id]).length;
+    const groupCount = document.createElement("small");
+    groupCount.textContent = `${allowedCount}/${groupDefinitions.length}`;
+    groupSummary.append(groupTitle, groupCount);
     const groupList = document.createElement("div");
     groupList.className = "role-preview-permission-list";
-    for (const permissionId of group.permissions) {
-      const definition = permissionDefinitions.find((candidate) => candidate.id === permissionId);
-      if (!definition) continue;
+    for (const definition of groupDefinitions) {
+      const allowed = permissions[definition.id];
       const row = document.createElement("div");
-      const allowed = permissions[permissionId];
       row.className = `role-preview-permission ${allowed ? "allowed" : "blocked"}`;
       const statusLabel = document.createElement("span");
       statusLabel.className = "role-preview-permission-status";
@@ -444,17 +838,22 @@ function renderRolePreview() {
       row.append(statusLabel, text);
       groupList.append(row);
     }
-    groupSection.append(groupTitle, groupList);
-    permissionGroups.append(groupSection);
+    groupDetails.append(groupSummary, groupList);
+    permissionGroups.append(groupDetails);
   }
-  permissionCard.append(permissionHeading, permissionGroups);
-  rolePreviewContent.replaceChildren(roomCard, permissionCard);
+  permissionsSection.append(permissionGroups);
+  previewInspector.append(permissionsSection);
+  renderIcons(rolePreviewContent);
 }
 
 function startRolePreview(roleId: string) {
+  if (roleEditorDirty && !window.confirm("This preview uses the last saved role settings. Continue without previewing your unsaved changes?")) return;
   previewRoleId = roleId;
+  previewChannelId = undefined;
   renderRolePreview();
-  rolePreview.scrollIntoView({ behavior: "smooth", block: "start" });
+  setPreviewRoomNavigation(false);
+  setPreviewInspector(!window.matchMedia("(max-width: 1000px)").matches);
+  rolePreview.showModal();
 }
 
 function categoryName(category: ServerCategory) {
@@ -1025,33 +1424,60 @@ function renderRoles() {
   permissionsHeading.className = "role-card-subheading";
   permissionsHeading.textContent = "Permissions";
   card.append(permissionsHeading);
-  const permissionGrid = document.createElement("div");
-  permissionGrid.className = "role-permission-grid";
+  const permissionSections = document.createElement("div");
+  permissionSections.className = "role-permission-groups";
   const permissionInputs = new Map<ServerPermission, HTMLInputElement>();
-  for (const definition of permissionDefinitions) {
-    const label = document.createElement("label");
-    label.className = "permission-option";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = role.permissions[definition.id];
-    checkbox.disabled = ownerRole || !canEditPermissions || !metadataReady;
-    checkbox.addEventListener("change", markDirty);
-    permissionInputs.set(definition.id, checkbox);
-    const copy = document.createElement("span");
-    const title = document.createElement("strong");
-    title.textContent = definition.label;
-    const description = document.createElement("small");
-    description.textContent = definition.description;
-    copy.append(title, description);
-    label.append(checkbox, copy);
-    permissionGrid.append(label);
+  for (const [groupIndex, group] of previewPermissionGroups.entries()) {
+    const definitions = permissionDefinitions.filter((definition) => group.permissions.includes(definition.id));
+    const section = document.createElement("details");
+    section.className = "role-permission-section";
+    section.open = groupIndex === 0;
+    const summary = document.createElement("summary");
+    summary.className = "role-permission-summary";
+    const groupName = document.createElement("strong");
+    groupName.textContent = group.label;
+    const enabledCount = document.createElement("span");
+    enabledCount.className = "muted small";
+    const updateEnabledCount = () => {
+      const enabled = definitions.filter((definition) => permissionInputs.get(definition.id)?.checked).length;
+      enabledCount.textContent = `${enabled} of ${definitions.length} enabled`;
+    };
+    summary.append(groupName, enabledCount);
+    const permissionGrid = document.createElement("div");
+    permissionGrid.className = "role-permission-grid";
+    for (const definition of definitions) {
+      const label = document.createElement("label");
+      label.className = "permission-option";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = role.permissions[definition.id];
+      checkbox.disabled = ownerRole || !canEditPermissions || !metadataReady;
+      checkbox.addEventListener("change", () => {
+        markDirty();
+        updateEnabledCount();
+      });
+      permissionInputs.set(definition.id, checkbox);
+      const copy = document.createElement("span");
+      const title = document.createElement("strong");
+      title.textContent = definition.label;
+      const description = document.createElement("small");
+      description.textContent = definition.description;
+      copy.append(title, description);
+      label.append(checkbox, copy);
+      permissionGrid.append(label);
+    }
+    updateEnabledCount();
+    section.append(summary, permissionGrid);
+    permissionSections.append(section);
   }
-  card.append(permissionGrid);
+  card.append(permissionSections);
 
-  const channelHeading = document.createElement("h3");
-  channelHeading.className = "role-card-subheading";
-  channelHeading.textContent = "Room access";
-  card.append(channelHeading);
+  const channelSection = document.createElement("details");
+  channelSection.className = "role-access-section";
+  const channelSummary = document.createElement("summary");
+  channelSummary.className = "role-access-summary";
+  channelSummary.textContent = `Room access · ${channels.length} rooms`;
+  channelSection.append(channelSummary);
   const accessGrid = document.createElement("div");
   accessGrid.className = "role-channel-access-grid";
   const channelInputs = new Map<string, { view: HTMLInputElement; upload: HTMLInputElement }>();
@@ -1096,12 +1522,15 @@ function renderRoles() {
     empty.textContent = "Create a room before restricting this role.";
     accessGrid.append(empty);
   }
-  card.append(accessGrid);
+  channelSection.append(accessGrid);
+  card.append(channelSection);
 
-  const categoryHeading = document.createElement("h3");
-  categoryHeading.className = "role-card-subheading";
-  categoryHeading.textContent = "Category access (inherited by rooms)";
-  card.append(categoryHeading);
+  const categorySection = document.createElement("details");
+  categorySection.className = "role-access-section";
+  const categorySummary = document.createElement("summary");
+  categorySummary.className = "role-access-summary";
+  categorySummary.textContent = `Group access · ${categories.length} groups`;
+  categorySection.append(categorySummary);
   const categoryAccessGrid = document.createElement("div");
   categoryAccessGrid.className = "role-channel-access-grid";
   const categoryInputs = new Map<string, { view: HTMLInputElement; upload: HTMLInputElement }>();
@@ -1146,7 +1575,8 @@ function renderRoles() {
     empty.textContent = "Create a category before restricting this role by category.";
     categoryAccessGrid.append(empty);
   }
-  card.append(categoryAccessGrid);
+  categorySection.append(categoryAccessGrid);
+  card.append(categorySection);
 
   const actions = document.createElement("div");
   actions.className = "role-card-actions";
@@ -1154,6 +1584,7 @@ function renderRoles() {
   preview.type = "button";
   preview.className = "secondary";
   preview.textContent = previewRoleId === role.id ? "Previewing role" : "View as role";
+  preview.disabled = !metadataReady;
   preview.setAttribute("aria-pressed", String(previewRoleId === role.id));
   preview.addEventListener("click", () => startRolePreview(role.id));
   actions.append(preview);
@@ -1993,10 +2424,42 @@ roleForm.addEventListener("submit", async (event) => {
   }
 });
 
-exitRolePreview.addEventListener("click", () => {
+function closeRolePreview() {
   previewRoleId = undefined;
+  previewChannelId = undefined;
+  if (rolePreview.open) rolePreview.close();
+  setPreviewRoomNavigation(false);
+  setPreviewInspector(false);
   renderRolePreview();
   roleList.querySelector<HTMLElement>(".role-list-item[aria-selected='true']")?.focus();
+}
+
+exitRolePreview.addEventListener("click", closeRolePreview);
+rolePreview.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeRolePreview();
+});
+previewRoomToggle.addEventListener("click", () => {
+  const open = !rolePreviewContent.classList.contains("role-preview-room-nav-open");
+  if (open) setPreviewInspector(false);
+  setPreviewRoomNavigation(open);
+});
+previewInspectorToggle.addEventListener("click", () => {
+  setPreviewRoomNavigation(false);
+  setPreviewInspector(!rolePreviewContent.classList.contains("role-preview-inspector-open"));
+});
+previewRoomBackdrop.addEventListener("click", () => {
+  setPreviewRoomNavigation(false);
+  previewRoomToggle.focus();
+});
+previewInspectorBackdrop.addEventListener("click", () => {
+  setPreviewInspector(false);
+  previewInspectorToggle.focus();
+});
+window.addEventListener("resize", () => {
+  if (!rolePreview.open) return;
+  setPreviewRoomNavigation(false);
+  setPreviewInspector(!window.matchMedia("(max-width: 1000px)").matches);
 });
 
 createInvite.addEventListener("click", async () => {

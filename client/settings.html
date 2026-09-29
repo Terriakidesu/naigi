@@ -167,12 +167,121 @@
             <section id="app" class="settings-section" data-settings-view hidden>
              <p class="eyebrow">APP SETTINGS</p>
              <h1>Customize this browser</h1>
-              <p class="muted">These preferences stay on this device. They are never uploaded or included in encrypted messages.</p>
+              <p class="muted">Preferences and custom presets stay on this device. They are never uploaded or included in encrypted messages. Theme codes and files contain only validated appearance settings; files can optionally carry an embedded background image.</p>
               <form id="app-preferences-form" class="settings-form app-preferences-form">
                 <section class="settings-preference-group" aria-labelledby="appearance-heading">
                   <header class="settings-preference-heading"><h2 id="appearance-heading">Appearance</h2><p>Make Naigi feel comfortable to use.</p></header>
-                  <label class="settings-preference-row" for="app-theme"><span>Theme</span><select id="app-theme"><option value="dark">Dark</option><option value="dim">Dim</option><option value="light">Light</option></select></label>
-                  <label class="settings-preference-row" for="app-accent"><span>Accent color</span><input id="app-accent" type="color" value="#92aaa5"></label>
+                  <div class="theme-choice-field">
+                    <span class="theme-choice-label">Choose a theme</span>
+                    <div id="theme-preset-cards" class="theme-preset-grid" aria-label="Available themes"></div>
+                    <select id="app-theme" class="sr-only" aria-hidden="true" tabindex="-1"><option value="dark">Dark</option><option value="dim">Dim</option><option value="light">Light</option><option value="black">Black (OLED)</option><option value="momotalk">MomoTalk</option></select>
+                  </div>
+                  <label id="app-accent-row" class="settings-preference-row" for="app-accent"><span>Accent color</span><input id="app-accent" type="color" value="#92aaa5"></label>
+                  <div class="theme-preset-actions">
+                    <p class="muted small">Make a preset from your current look, edit it with a live preview, or bring in a theme someone shared.</p>
+                    <button id="create-theme-preset" class="secondary" type="button">Create preset</button>
+                    <button id="edit-theme-preset" class="secondary" type="button" hidden>Edit selected preset</button>
+                    <button id="open-theme-import" class="secondary" type="button">Import theme</button>
+                  </div>
+                  <dialog id="custom-theme-editor" class="theme-editor-dialog" aria-labelledby="custom-theme-editor-heading">
+                    <header class="theme-dialog-header">
+                      <div><p class="eyebrow">THEME STUDIO</p><h2 id="custom-theme-editor-heading">Edit preset</h2><p class="muted">Changes preview live. They stay in this browser and save with your app preferences.</p></div>
+                      <button id="close-theme-editor" class="icon-button" type="button" aria-label="Close theme editor">×</button>
+                    </header>
+                    <div class="theme-editor-layout">
+                      <section class="theme-editor-controls" aria-label="Theme colors">
+                        <label class="theme-preset-name" for="custom-theme-name">Preset name<input id="custom-theme-name" maxlength="48" required></label>
+                        <label class="theme-preset-base" for="custom-theme-base"><span>Starting palette</span><select id="custom-theme-base"><option value="dark">Dark</option><option value="dim">Dim</option><option value="light">Light</option><option value="black">Black (OLED)</option><option value="momotalk">MomoTalk</option></select></label>
+                        <div id="theme-color-controls" class="theme-color-grid"></div>
+                        <p id="theme-contrast-warning" class="theme-contrast-warning" role="status" aria-live="polite" hidden></p>
+                        <details id="theme-design-details" class="theme-design-details" open>
+                          <summary>Full customization</summary>
+                          <p class="theme-design-intro">Adjust the backdrop, layout, shapes, borders, and motion. All values use safe built-in controls—no custom CSS or scripts.</p>
+                          <div class="theme-design-fields">
+                            <fieldset class="theme-design-group">
+                              <legend>Backdrop</legend>
+                              <label for="theme-background-mode">Background style<select id="theme-background-mode"><option value="solid">Solid color</option><option value="gradient">Gradient</option><option value="image">Image</option></select></label>
+                              <div id="theme-gradient-controls" class="theme-gradient-controls" hidden>
+                                <label for="theme-gradient-start">Gradient start<input id="theme-gradient-start" type="color" value="#161d24"></label>
+                                <label for="theme-gradient-end">Gradient end<input id="theme-gradient-end" type="color" value="#0d1319"></label>
+                                <label for="theme-gradient-angle">Direction<select id="theme-gradient-angle"><option value="0">Up</option><option value="45">Up and right</option><option value="90">Right</option><option value="135">Down and right</option><option value="180">Down</option><option value="225">Down and left</option><option value="270">Left</option><option value="315">Up and left</option></select></label>
+                              </div>
+                              <div id="theme-image-controls" class="theme-image-controls" hidden>
+                                <label class="theme-image-file" for="theme-background-file">Choose a local image<input id="theme-background-file" type="file" accept="image/png,image/jpeg,image/webp"></label>
+                                <p id="theme-image-status" class="theme-image-status" role="status" aria-live="polite">PNG, JPEG, or WebP up to 1 MB. Stored in this browser only.</p>
+                                <div class="theme-image-options">
+                                  <label for="theme-image-fit">Image fit<select id="theme-image-fit"><option value="cover">Fill area</option><option value="contain">Fit inside</option></select></label>
+                                  <label for="theme-image-position">Image position<select id="theme-image-position"><option value="center">Center</option><option value="top">Top</option><option value="bottom">Bottom</option></select></label>
+                                  <label for="theme-background-overlay">Dark overlay<input id="theme-background-overlay" type="range" min="0" max="80" step="5" value="35"><output id="theme-background-overlay-value" for="theme-background-overlay">35%</output></label>
+                                </div>
+                                <button id="remove-theme-background" class="secondary" type="button">Remove image</button>
+                              </div>
+                            </fieldset>
+                            <fieldset class="theme-design-group">
+                              <legend>Layout &amp; shape</legend>
+                              <label for="theme-content-width">Message column width<select id="theme-content-width"><option value="narrow">Narrow</option><option value="comfortable">Comfortable</option><option value="wide">Wide</option></select></label>
+                              <label for="theme-density">Spacing density<select id="theme-density"><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="spacious">Spacious</option></select></label>
+                              <label for="theme-radius">Corner roundness<input id="theme-radius" type="range" min="0" max="28" step="2" value="12"><output id="theme-radius-value" for="theme-radius">12 px</output></label>
+                              <label for="theme-shadow">Surface shadows<select id="theme-shadow"><option value="none">None</option><option value="soft">Soft</option><option value="deep">Deep</option></select></label>
+                            </fieldset>
+                            <fieldset class="theme-design-group">
+                              <legend>Borders &amp; motion</legend>
+                              <label for="theme-border-style">Border treatment<select id="theme-border-style"><option value="none">None</option><option value="subtle">Subtle</option><option value="solid">Defined</option><option value="dashed">Dashed</option></select></label>
+                              <label for="theme-motion">Message entrance<select id="theme-motion"><option value="none">None</option><option value="fade">Fade</option><option value="slide">Slide</option><option value="pop">Pop</option></select><small>Uses built-in animation presets. Reduce motion always takes priority.</small></label>
+                              <label for="theme-transition-speed">Transition speed<select id="theme-transition-speed"><option value="quick">Quick</option><option value="balanced">Balanced</option><option value="slow">Slow</option></select></label>
+                              <label for="theme-transition-easing">Transition feel<select id="theme-transition-easing"><option value="standard">Standard</option><option value="smooth">Smooth</option><option value="spring">Spring</option></select></label>
+                            </fieldset>
+                          </div>
+                        </details>
+                      </section>
+                      <aside class="theme-editor-preview-panel">
+                        <h3>Live preview</h3>
+                         <p class="muted small">Sample content only—no messages are loaded or decrypted. The preview shows every palette color and design setting; changes stay here until you save preferences.</p>
+                        <div id="theme-editor-preview" class="theme-preview-host" role="img" aria-label="Live theme preview"></div>
+                      </aside>
+                    </div>
+                    <details id="theme-share-code-details" class="theme-share-code-details">
+                      <summary>View raw share code</summary>
+                      <textarea id="theme-export-code" rows="4" readonly aria-label="Theme share code" placeholder="Open to view the theme code"></textarea>
+                    </details>
+                    <footer class="theme-dialog-footer">
+                      <button id="delete-theme-preset" class="danger-button" type="button">Delete preset</button>
+                      <div class="theme-dialog-footer-actions">
+                        <button id="download-theme-preset" class="secondary" type="button">Download theme file</button>
+                        <button id="copy-theme-preset" class="secondary" type="button">Copy share code</button>
+                        <button id="cancel-theme-editor" class="secondary" type="button">Cancel</button>
+                        <button id="done-theme-editor" type="button">Done editing</button>
+                      </div>
+                    </footer>
+                  </dialog>
+                  <dialog id="theme-import-dialog" class="theme-import-dialog" aria-labelledby="theme-import-heading">
+                    <header class="theme-dialog-header">
+                      <div><p class="eyebrow">THEME STUDIO</p><h2 id="theme-import-heading">Import a theme</h2><p class="muted">Review the palette before adding it. Import accepts Naigi theme codes and .json theme files.</p></div>
+                      <button id="close-theme-import" class="icon-button" type="button" aria-label="Close theme import">×</button>
+                    </header>
+                    <div class="theme-import-layout">
+                      <section class="theme-import-inputs">
+                        <label for="theme-import-code">Paste a theme code<textarea id="theme-import-code" rows="7" aria-label="Paste a shared theme code" placeholder="Paste a Naigi theme code here"></textarea></label>
+                        <label class="theme-file-input" for="theme-import-file">Or choose a theme file<input id="theme-import-file" type="file" accept=".json,.naigi-theme,application/json"></label>
+                        <button id="review-theme-import" class="secondary" type="button">Review theme</button>
+                        <p id="theme-import-status" class="theme-import-status" role="status" aria-live="polite"></p>
+                      </section>
+                      <section id="theme-import-review-panel" class="theme-import-review-panel" aria-label="Theme import preview" hidden>
+                        <span class="eyebrow">PREVIEW</span>
+                        <h3 id="theme-import-preview-name"></h3>
+                        <p id="theme-import-preview-base" class="muted small"></p>
+                        <div id="theme-import-preview" class="theme-preview-host" role="img" aria-label="Preview of the imported theme"></div>
+                        <p class="theme-import-note">Theme files can contain a validated embedded image. No remote assets, account information, or messages are accepted.</p>
+                      </section>
+                    </div>
+                    <footer class="theme-dialog-footer">
+                      <span class="muted small">Confirming adds the preset to this browser’s unsaved preferences.</span>
+                      <div class="theme-dialog-footer-actions">
+                        <button id="cancel-theme-import" class="secondary" type="button">Cancel</button>
+                        <button id="import-theme-preset" type="button" disabled>Import &amp; use preset</button>
+                      </div>
+                    </footer>
+                  </dialog>
                   <div class="settings-preference-row"><label for="app-scale">Interface scale</label><div class="app-scale-control"><div class="app-scale-range app-scale-range-interface"><input id="app-scale" type="range" min="85" max="200" step="5" value="100" aria-label="Interface scale" aria-valuetext="100%"><div class="app-scale-ticks" aria-hidden="true"><span>85%</span><span>100%</span><span>125%</span><span>150%</span><span>175%</span><span>200%</span></div></div><output id="app-scale-value" for="app-scale" aria-live="off">100%</output></div></div>
                   <div class="settings-preference-row"><label for="app-message-text-size">Message text size</label><div class="app-scale-control"><div class="app-scale-range app-scale-range-message"><input id="app-message-text-size" type="range" min="12" max="24" step="1" value="14" aria-label="Message text size" aria-valuetext="14px"><div class="app-scale-ticks" aria-hidden="true"><span>12px</span><span>14px</span><span>16px</span><span>18px</span><span>20px</span><span>22px</span><span>24px</span></div></div><output id="app-message-text-size-value" for="app-message-text-size" aria-live="off">14px</output></div></div>
                   <div id="app-message-size-preview" class="message-size-preview" role="group" aria-label="Chat preview">

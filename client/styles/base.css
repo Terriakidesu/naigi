@@ -16,6 +16,11 @@
   --text-muted: #b1bec0;
   --text-faint: #a7b3b5;
   --text-placeholder: #a5b3b5;
+  --workspace-rail: #0d1319;
+  --message-bubble: #26343b;
+  --message-bubble-own: #30414a;
+  --message-bubble-text: #e7eceb;
+  --message-bubble-own-text: #f4f7f6;
   --accent: #92aaa5;
   --accent-hover: #a7bdb7;
   --accent-ink: #10181c;
@@ -36,6 +41,8 @@ html, body { width: 100%; height: 100%; }
 body { margin: 0; min-width: 320px; overflow: hidden; background: var(--bg); color: var(--text); }
 :root[data-app-theme="light"] { color-scheme: light; --bg: #eef3f2; --bg-deep: #dfe8e6; --bg-sidebar: #e7efed; --bg-elevated: #f8fbfa; --bg-input: #fff; --bg-hover: #dbe7e4; --bg-active: #ccddda; --line: #c3d3d0; --line-soft: #b5c8c4; --text: #1f2c2d; --text-muted: #405154; --text-faint: #516265; --text-placeholder: #516265; --accent-hover: #527d75; --accent-hover-ink: #fff; --accent-text: #527d75; --danger-text: #8e1d28; --danger-hover-bg: #f6c6c6; }
 :root[data-app-theme="dim"] { --bg: #1a2026; --bg-deep: #11171d; --bg-sidebar: #161d23; --bg-elevated: #202a31; --bg-input: #253039; --bg-hover: #2b3a42; --bg-active: #33464d; }
+:root[data-app-theme="black"] { color-scheme: dark; --bg: #000; --bg-deep: #000; --bg-sidebar: #030303; --bg-elevated: #090909; --bg-input: #101010; --bg-hover: #181818; --bg-active: #222; --line: #080808; --line-soft: #292929; --text: #f5f5f5; --text-muted: #c2c2c2; --text-faint: #9b9b9b; --text-placeholder: #929292; }
+:root[data-app-theme="momotalk"] { color-scheme: light; }
 button, input, select, textarea { font: inherit; }
 svg.lucide { width: 1em; height: 1em; flex: 0 0 auto; stroke-width: 1.8; }
 button { cursor: pointer; border: 0; border-radius: 5px; color: var(--accent-ink); background: var(--accent); transition: background 120ms ease, opacity 120ms ease, transform 120ms ease; }
@@ -45,8 +52,8 @@ button:disabled { cursor: not-allowed; opacity: 0.7; transform: none; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid #c2ceca; outline-offset: 2px; }
 button.secondary { color: var(--text); background: var(--bg-active); }
 button.secondary:hover { color: var(--text); background: var(--bg-hover); }
-input, select, textarea { width: 100%; border: 1px solid transparent; border-radius: 5px; padding: 0.7rem; color: var(--text); background: var(--bg-input); outline: none; }
-input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]), select, textarea) { width: 100%; border: 1px solid transparent; border-radius: 5px; padding: 0.7rem; color: var(--text); background: var(--bg-input); outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
 input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 label { display: grid; gap: 0.4rem; color: var(--text-muted); font-size: 0.82rem; font-weight: 600; }
 kbd { border: 1px solid #45606a; border-bottom-width: 2px; border-radius: 4px; padding: 0.05rem 0.3rem; color: var(--text-faint); font-size: 0.68rem; }

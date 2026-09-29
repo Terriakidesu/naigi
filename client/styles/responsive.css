@@ -29,10 +29,8 @@
   .role-list-panel { position: static; }
   .role-list-items { max-height: 220px; }
   .role-preview-grid { grid-template-columns: 1fr; }
-  .server-settings-layout { grid-template-columns: 1fr; width: min(100% - 1rem, 560px); margin: 1rem auto; }
   .settings-nav { top: 0; z-index: 3; grid-template-columns: repeat(4, 1fr); align-items: center; }
   .settings-nav .eyebrow { grid-column: 1 / -1; margin-bottom: 0; }
-  .server-settings-nav { grid-template-columns: repeat(4, 1fr); }
   .settings-nav-item { flex-direction: column; justify-content: center; padding: 0.55rem 0.2rem; text-align: center; }
   .settings-sidebar .settings-nav { display: flex; flex-direction: column; }
   .settings-sidebar .settings-nav-group { display: grid; grid-template-columns: 1fr; }
@@ -42,6 +40,52 @@
   .settings-preference-row { grid-template-columns: minmax(130px, 0.8fr) minmax(170px, 1fr); gap: 1rem; }
   .server-branding-card { align-items: flex-start; flex-wrap: wrap; }
   .server-branding-copy { flex: 1 1 180px; }
+}
+
+@media (max-width: 1050px) {
+  .server-settings-content #overview { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .server-settings-content #overview { grid-template-columns: 1fr; }
+  .server-settings-main-content { padding: 1rem 0.85rem 1.5rem; }
+  .server-settings-content .settings-section-heading { align-items: flex-start; }
+  .server-settings-content .role-manager { grid-template-columns: 1fr; }
+  .server-settings-content .role-list-panel { position: static; }
+}
+
+@media (max-width: 1000px) {
+  .role-preview-workspace { grid-template-columns: minmax(190px, 225px) minmax(0, 1fr); }
+  .role-preview-inspector-toggle { display: inline-flex; }
+  .role-preview-inspector { position: absolute; z-index: 6; top: 0; right: 0; bottom: 0; width: min(360px, 88vw); border-left: 1px solid var(--line-soft); box-shadow: -12px 0 28px rgba(0, 0, 0, 0.28); transform: translateX(105%); transition: transform 160ms ease; }
+  .role-preview-workspace.role-preview-inspector-open .role-preview-inspector { transform: translateX(0); }
+  .role-preview-workspace.role-preview-inspector-open .role-preview-inspector-backdrop { display: block; }
+}
+
+@media (max-width: 760px) {
+  .role-preview-header { gap: 0.55rem; padding: 0 0.65rem; }
+  .role-preview-room-toggle { display: grid; }
+  .role-preview-workspace { display: block; height: 100%; overflow: hidden; }
+  .role-preview-main { width: 100%; height: 100%; }
+  .role-preview-sidebar { position: absolute; z-index: 4; top: 0; bottom: 0; left: 0; width: min(300px, 82vw); box-shadow: 12px 0 28px rgba(0, 0, 0, 0.28); transform: translateX(-105%); transition: transform 160ms ease; }
+  .role-preview-workspace.role-preview-room-nav-open .role-preview-sidebar { transform: translateX(0); }
+  .role-preview-workspace.role-preview-room-nav-open .role-preview-room-backdrop { display: block; }
+  .role-preview-workspace .role-preview-inspector { width: min(360px, 88vw); }
+  .role-preview-composer { padding: 0.5rem; }
+  .role-preview-chat-header { min-height: 52px; padding: 0 0.65rem; }
+  .role-preview-feedback { margin: 0.4rem 0.5rem 0; }
+  .role-preview-channel-capabilities { padding: 0.4rem 0.5rem 0; }
+  .role-preview-message-area { padding: 0.7rem; }
+}
+
+@media (max-width: 480px) {
+  .role-preview-banner { gap: 0.55rem; }
+  .role-preview-banner-copy .eyebrow { font-size: 0.49rem; letter-spacing: 0.08em; }
+  .role-preview-banner-copy h1 { font-size: 0.78rem; }
+  .role-preview-banner-copy span { max-width: 30vw; font-size: 0.52rem; }
+  .role-preview-inspector-toggle { padding: 0.35rem; }
+  .role-preview-inspector-toggle span { display: none; }
+  .role-preview-exit { padding: 0.4rem 0.5rem; font-size: 0.62rem; }
 }
 
 @media (max-width: 620px) {
@@ -68,6 +112,19 @@
   .settings-preference-row { grid-template-columns: 1fr; gap: 0.55rem; }
   .settings-preference-row select { justify-self: stretch; width: 100%; }
   .settings-preference-row input[type="color"] { justify-self: start; }
+  .theme-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 240px; }
+  .theme-preset-actions { align-items: stretch; }
+  .theme-preset-actions p { flex-basis: 100%; }
+  .theme-preset-actions button { flex: 1 1 calc(50% - 0.55rem); }
+  .theme-editor-layout, .theme-import-layout { grid-template-columns: minmax(0, 1fr); }
+  .theme-design-fields { grid-template-columns: minmax(0, 1fr); }
+  .theme-editor-preview-panel { position: static; }
+  .theme-preview-body { grid-template-columns: 30px 96px minmax(0, 1fr); }
+  .theme-dialog-header, .theme-editor-layout, .theme-import-layout { padding-right: 1rem; padding-left: 1rem; }
+  .theme-dialog-footer { align-items: stretch; flex-direction: column; padding: 0.75rem 1rem; }
+  .theme-dialog-footer-actions { justify-content: flex-end; }
+  .theme-dialog-footer-actions button { flex: 1 1 auto; }
+  .theme-share-code-details { margin-right: 1rem; margin-left: 1rem; }
   .settings-preference-row > .app-scale-control { width: 100%; }
   .app-quiet-hours { margin-left: 0; }
 }
@@ -79,6 +136,16 @@
   .auth-panel { padding: 1.5rem; }
   .account-settings-page .settings-main-content { padding-right: 1rem; padding-left: 1rem; }
   .settings-section { padding: 1rem; }
+  .theme-preset-grid { grid-template-columns: 1fr; }
+  .theme-preset-actions button { flex-basis: 100%; }
+  .theme-editor-dialog, .theme-import-dialog { width: calc(100vw - 0.75rem); max-height: 96dvh; border-radius: 12px; }
+  .theme-preset-name, .theme-preset-base { grid-template-columns: 1fr; gap: 0.4rem; }
+  .theme-preset-name input, .theme-preset-base select { justify-self: stretch; width: 100%; }
+  .theme-color-fields { grid-template-columns: 1fr; }
+  .theme-image-options { grid-template-columns: minmax(0, 1fr); }
+  .theme-image-options > label:last-child { grid-column: auto; }
+  .theme-dialog-footer-actions button { flex: 1 1 calc(50% - 0.45rem); }
+  .theme-dialog-footer-actions #delete-theme-preset { flex: 1 1 100%; }
   .topbar-links { gap: 0.65rem; }
 }
 

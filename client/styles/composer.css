@@ -6,7 +6,7 @@
 .file-drop-message strong { font-size: 0.9rem; }
 .file-drop-message span { color: var(--text-muted); font-size: 0.7rem; }
 .outbox-notice { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; margin: 0.65rem 1.2rem; padding: 0.55rem 0.75rem; border: 1px solid rgba(168, 164, 126, 0.3); border-radius: 6px; color: #c4c9b3; background: rgba(168, 164, 126, 0.09); font-size: 0.75rem; }
-:root[data-app-theme="light"] .outbox-notice { color: #5b5331; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .outbox-notice { color: #5b5331; }
 .outbox-notice button { flex: 0 0 auto; padding: 0.35rem 0.6rem; font-size: 0.7rem; }
 .typing-indicator { min-height: 1rem; margin: 0 1rem 0.25rem; color: var(--text-faint); font-size: 0.65rem; font-style: italic; }
 .typing-indicator::before { display: inline-block; width: 1.1rem; content: ""; }
@@ -185,7 +185,7 @@
 .external-link-dialog { width: min(480px, calc(100% - 1.5rem)); padding: 1.35rem; }
 .external-link-dialog h2 { display: flex; align-items: center; gap: 0.65rem; }
 .external-link-mark { display: grid; place-items: center; flex: 0 0 34px; width: 34px; height: 34px; border: 1px solid rgba(221, 183, 112, 0.28); border-radius: 10px; color: #e5c17a; background: rgba(221, 183, 112, 0.12); font-size: 1rem; }
-:root[data-app-theme="light"] .external-link-mark { color: #7a4b00; }
+:root:is([data-app-theme="light"], [data-app-theme="momotalk"]) .external-link-mark { color: #7a4b00; }
 .external-link-destination { display: grid; gap: 0.4rem; min-width: 0; padding: 0.8rem; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--bg-sidebar); }
 .external-link-destination-label { color: var(--text-faint); font-size: 0.6rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
 .external-link-host { overflow-wrap: anywhere; color: var(--text); font-size: 0.8rem; }
@@ -194,4 +194,4 @@
 .external-link-dialog .app-dialog-actions { margin-top: 1.15rem; }
 .external-link-dialog .app-dialog-actions button { min-width: 92px; }
 .checkbox-label { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: 0.5rem; }
-.checkbox-label input { width: auto; accent-color: var(--accent); }
+.checkbox-label input { width: 18px; height: 18px; accent-color: var(--accent); }

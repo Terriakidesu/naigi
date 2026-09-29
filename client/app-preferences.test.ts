@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { accentForeground, contrastRatio, DEFAULT_MESSAGE_TEXT_SIZE, isQuietHours, MAX_APP_SCALE, MAX_MESSAGE_TEXT_SIZE, MIN_APP_SCALE, MIN_MESSAGE_TEXT_SIZE, normalizeAppPreferences, readableAccentText, shouldNotifyAppMessage } from "./app-preferences";
+import { accentForAppPreferences, accentForeground, contrastRatio, DEFAULT_MESSAGE_TEXT_SIZE, isQuietHours, MAX_APP_SCALE, MAX_MESSAGE_TEXT_SIZE, MIN_APP_SCALE, MIN_MESSAGE_TEXT_SIZE, normalizeAppPreferences, readableAccentText, shouldNotifyAppMessage } from "./app-preferences";
+import { builtInThemeColors } from "./theme-presets";
 
 describe("theme text contrast", () => {
   test("chooses readable text for custom accent and hover colors", () => {
@@ -11,6 +12,75 @@ describe("theme text contrast", () => {
   test("keeps accent labels readable against active surfaces in each theme", () => {
     expect(contrastRatio(readableAccentText("#92aaa5", "dark"), "#33464d")).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(readableAccentText("#ff6a00", "light"), "#ccddda")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(readableAccentText("#92aaa5", "black"), "#222222")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test("retains the OLED black theme when loading saved preferences", () => {
+    expect(normalizeAppPreferences({ theme: "black" }).theme).toBe("black");
+  });
+
+  test("recognizes MomoTalk as a built-in light theme", () => {
+    const preferences = normalizeAppPreferences({ theme: "momotalk", accent: "#92aaa5" });
+    expect(preferences.theme).toBe("momotalk");
+    expect(preferences.themePreset).toBe("momotalk");
+    expect(accentForAppPreferences(preferences)).toBe("#ed8ca7");
+    expect(contrastRatio("#ffffff", builtInThemeColors.momotalk.messageBubble)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#ffffff", builtInThemeColors.momotalk.messageBubbleOwn)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(readableAccentText("#ed8ca7", "momotalk"), "#d1cae8")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test("keeps a saved custom accent on non-MomoTalk themes", () => {
+    const preferences = normalizeAppPreferences({ theme: "dark", accent: "#52a8d8" });
+    expect(accentForAppPreferences(preferences)).toBe("#52a8d8");
+  });
+
+  test("selects a saved custom preset and uses its base appearance", () => {
+    const customTheme = {
+      id: "custom-test-theme",
+      name: "Lavender chat",
+      baseTheme: "light",
+      colors: builtInThemeColors.light,
+      design: {
+        backgroundMode: "gradient" as const,
+        gradientStart: "#ffffff",
+        gradientEnd: "#ccddda",
+        gradientAngle: 135,
+        imageFit: "cover" as const,
+        imagePosition: "center" as const,
+        overlay: 35,
+        contentWidth: "wide" as const,
+        density: "spacious" as const,
+        radius: 20,
+        borderStyle: "solid" as const,
+        shadow: "deep" as const,
+        motion: "slide" as const,
+        transitionSpeed: "slow" as const,
+        transitionEasing: "spring" as const,
+      },
+    } as const;
+    const preferences = normalizeAppPreferences({
+      theme: "dark",
+      themePreset: customTheme.id,
+      customThemes: [customTheme],
+    });
+
+    expect(preferences.themePreset).toBe(customTheme.id);
+    expect(preferences.theme).toBe("light");
+    expect(preferences.customThemes).toHaveLength(1);
+    expect(preferences.customThemes[0].design.contentWidth).toBe("wide");
+    expect(preferences.customThemes[0].design.motion).toBe("slide");
+  });
+
+  test("allows custom presets to use MomoTalk as their base appearance", () => {
+    const customTheme = {
+      id: "custom-momo-variant",
+      name: "My Momo colors",
+      baseTheme: "momotalk",
+      colors: builtInThemeColors.momotalk,
+    } as const;
+    const preferences = normalizeAppPreferences({ themePreset: customTheme.id, customThemes: [customTheme] });
+    expect(preferences.theme).toBe("momotalk");
+    expect(preferences.themePreset).toBe(customTheme.id);
   });
 });
 

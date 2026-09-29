@@ -1,8 +1,21 @@
-export type AppTheme = "dark" | "dim" | "light";
+import {
+  builtInThemeColors,
+  defaultThemeDesign,
+  normalizeCustomThemePresets,
+  themeColorTokens,
+  type CustomThemePreset,
+  type ThemeDesign,
+} from "./theme-presets";
+import { applyThemeBackgroundImage } from "./theme-assets";
+
+export type AppTheme = "dark" | "dim" | "light" | "black" | "momotalk";
 export type NotificationMode = "off" | "all" | "mentions";
+export type { CustomThemePreset } from "./theme-presets";
 
 export type AppPreferences = {
   theme: AppTheme;
+  themePreset: string;
+  customThemes: CustomThemePreset[];
   accent: string;
   scale: number;
   sounds: boolean;
@@ -26,6 +39,8 @@ export const DEFAULT_MESSAGE_TEXT_SIZE = 14;
 
 export const defaultAppPreferences: AppPreferences = {
   theme: "dark",
+  themePreset: "dark",
+  customThemes: [],
   accent: "#92aaa5",
   scale: 1,
   sounds: true,
@@ -53,6 +68,41 @@ function validAccent(value: unknown): value is string {
 
 function validTime(value: unknown, fallback: string) {
   return typeof value === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
+}
+
+export function applyThemeDesign(target: HTMLElement, design: ThemeDesign, custom = true) {
+  target.dataset.themeDesign = String(custom);
+  target.dataset.themeBackground = design.backgroundMode;
+  target.dataset.themeBorders = design.borderStyle;
+  target.dataset.themeMotion = design.motion;
+  target.dataset.themeContentWidth = design.contentWidth;
+  target.dataset.themeDensity = design.density;
+  target.dataset.themeShadow = design.shadow;
+  target.style.setProperty("--theme-content-width", ({ narrow: "720px", comfortable: "920px", wide: "1180px" })[design.contentWidth]);
+  target.style.setProperty("--theme-message-gap", ({ compact: "1px", comfortable: "4px", spacious: "10px" })[design.density]);
+  target.style.setProperty("--theme-message-pad-y", ({ compact: "4px", comfortable: "10px", spacious: "16px" })[design.density]);
+  target.style.setProperty("--theme-message-pad-x", ({ compact: "5px", comfortable: "11px", spacious: "17px" })[design.density]);
+  target.style.setProperty("--theme-message-radius", `${design.radius}px`);
+  target.style.setProperty("--theme-panel-radius", `${design.radius}px`);
+  target.style.setProperty("--theme-control-radius", `${Math.round(design.radius * 0.72)}px`);
+  target.style.setProperty("--theme-border-width", design.borderStyle === "none" ? "0px" : design.borderStyle === "solid" || design.borderStyle === "dashed" ? "2px" : "1px");
+  target.style.setProperty("--theme-border-line-style", design.borderStyle === "dashed" ? "dashed" : "solid");
+  target.style.setProperty("--theme-shadow", ({ none: "none", soft: "0 6px 20px rgba(0, 0, 0, 0.12)", deep: "0 12px 35px rgba(0, 0, 0, 0.28)" })[design.shadow]);
+  target.style.setProperty("--theme-transition-time", ({ quick: "90ms", balanced: "160ms", slow: "300ms" })[design.transitionSpeed]);
+  target.style.setProperty("--theme-transition-easing", ({ standard: "ease", smooth: "cubic-bezier(0.2, 0.7, 0.2, 1)", spring: "cubic-bezier(0.2, 0.9, 0.25, 1.3)" })[design.transitionEasing]);
+  target.style.setProperty("--theme-motion-duration", ({ none: "0ms", fade: "180ms", slide: "220ms", pop: "240ms" })[design.motion]);
+  target.style.setProperty("--theme-background-position", design.imagePosition);
+  target.style.setProperty("--theme-background-size", design.imageFit);
+  target.style.setProperty("--theme-background-overlay", String(design.overlay / 100));
+  const gradient = `linear-gradient(${design.gradientAngle}deg, ${design.gradientStart}, ${design.gradientEnd})`;
+  target.style.setProperty("--theme-chat-gradient", gradient);
+  const background = design.backgroundMode === "gradient"
+    ? gradient
+    : design.backgroundMode === "image"
+      ? `linear-gradient(rgba(0, 0, 0, ${design.overlay / 100}), rgba(0, 0, 0, ${design.overlay / 100})), var(--theme-background-image, none)`
+      : "var(--bg)";
+  target.style.setProperty("--theme-chat-background", background);
+  applyThemeBackgroundImage(target, design.backgroundImageAssetId, custom && design.backgroundMode === "image");
 }
 
 function rgb(hex: string) {
@@ -84,8 +134,8 @@ export function accentForeground(accent: string) {
 }
 
 export function readableAccentText(accent: string, theme: AppTheme) {
-  const lightTheme = theme === "light";
-  const background = lightTheme ? "#ccddda" : "#33464d";
+  const lightTheme = theme === "light" || theme === "momotalk";
+  const background = theme === "momotalk" ? "#d1cae8" : lightTheme ? "#ccddda" : "#33464d";
   const target = lightTheme ? "#10181c" : "#ffffff";
   for (let step = 0; step <= 100; step += 1) {
     const candidate = mixHex(accent, target, step / 100);
@@ -108,11 +158,21 @@ export function normalizeAppPreferences(value: unknown): AppPreferences {
     : legacyMessageTextScale === undefined
       ? defaultAppPreferences.messageTextSize
       : Math.round(Math.min(MAX_MESSAGE_TEXT_SIZE, Math.max(MIN_MESSAGE_TEXT_SIZE, legacyMessageTextScale * 14.4)));
-  const theme = input.theme === "dim" || input.theme === "light" || input.theme === "dark"
+  const legacyTheme = input.theme === "dim" || input.theme === "light" || input.theme === "black" || input.theme === "momotalk" || input.theme === "dark"
     ? input.theme
     : defaultAppPreferences.theme;
+  const customThemes = normalizeCustomThemePresets(input.customThemes);
+  const requestedThemePreset = typeof input.themePreset === "string" ? input.themePreset : legacyTheme;
+  const selectedCustomTheme = customThemes.find((candidate) => candidate.id === requestedThemePreset);
+  const themePreset = selectedCustomTheme?.id
+    ?? (requestedThemePreset === "dark" || requestedThemePreset === "dim" || requestedThemePreset === "light" || requestedThemePreset === "black" || requestedThemePreset === "momotalk"
+      ? requestedThemePreset
+      : legacyTheme);
+  const theme: AppTheme = selectedCustomTheme?.baseTheme ?? themePreset as AppTheme;
   return {
     theme,
+    themePreset,
+    customThemes,
     accent: validAccent(input.accent) ? input.accent : defaultAppPreferences.accent,
     scale,
     messageTextSize,
@@ -129,6 +189,13 @@ export function normalizeAppPreferences(value: unknown): AppPreferences {
     quietHoursStart: validTime(input.quietHoursStart, defaultAppPreferences.quietHoursStart),
     quietHoursEnd: validTime(input.quietHoursEnd, defaultAppPreferences.quietHoursEnd),
   };
+}
+
+export function accentForAppPreferences(preferences: AppPreferences) {
+  const customTheme = preferences.customThemes.find((candidate) => candidate.id === preferences.themePreset);
+  if (customTheme) return customTheme.colors.accent;
+  if (preferences.themePreset === "momotalk") return builtInThemeColors.momotalk.accent;
+  return preferences.accent;
 }
 
 export function loadAppPreferences(userId?: string): AppPreferences {
@@ -165,26 +232,34 @@ export function saveAppPreferences(userId: string | undefined, preferences: AppP
 export function applyAppPreferences(preferences: AppPreferences, appRoot: HTMLElement = document.documentElement) {
   const normalized = normalizeAppPreferences(preferences);
   const root = document.documentElement;
-  const accentInk = accentForeground(normalized.accent);
-  const accentHover = normalized.theme === "light" ? "#527d75" : "#a7bdb7";
+  const customTheme = normalized.customThemes.find((candidate) => candidate.id === normalized.themePreset);
+  const colors = customTheme?.colors ?? builtInThemeColors[normalized.theme];
+  const design = customTheme?.design ?? defaultThemeDesign;
+  // MomoTalk's warm pink is part of its signature palette. Keep the user's
+  // general accent preference untouched for the other built-in themes.
+  const accent = accentForAppPreferences(normalized);
+  const accentInk = accentForeground(accent);
+  const accentHover = colors.accentHover;
   const accentHoverInk = accentForeground(accentHover);
-  const accentText = readableAccentText(normalized.accent, normalized.theme);
-  root.dataset.appTheme = normalized.theme;
+  const accentText = readableAccentText(accent, normalized.theme);
+  const targets = appRoot === root ? [root] : [root, appRoot];
+  for (const target of targets) {
+    target.dataset.appTheme = normalized.theme;
+    target.dataset.themePreset = normalized.themePreset;
+    for (const { key, variable } of themeColorTokens) {
+      target.style.setProperty(variable, key === "accent" ? accent : colors[key]);
+    }
+    target.style.setProperty("--accent-ink", accentInk);
+    target.style.setProperty("--accent-hover-ink", accentHoverInk);
+    target.style.setProperty("--accent-text", accentText);
+    applyThemeDesign(target, design, Boolean(customTheme));
+  }
   root.dataset.reducedMotion = String(normalized.reducedMotion);
   root.style.setProperty("--app-scale", String(normalized.scale));
   root.style.setProperty("--message-text-size", `${normalized.messageTextSize}px`);
-  root.style.setProperty("--accent", normalized.accent);
-  root.style.setProperty("--accent-ink", accentInk);
-  root.style.setProperty("--accent-hover-ink", accentHoverInk);
-  root.style.setProperty("--accent-text", accentText);
-  appRoot.dataset.appTheme = normalized.theme;
   appRoot.dataset.compactMessages = String(normalized.compactMessages);
   appRoot.dataset.autoLoadMedia = String(normalized.autoLoadMedia);
   appRoot.dataset.externalPreviews = String(normalized.externalPreviews);
-  appRoot.style.setProperty("--accent", normalized.accent);
-  appRoot.style.setProperty("--accent-ink", accentInk);
-  appRoot.style.setProperty("--accent-hover-ink", accentHoverInk);
-  appRoot.style.setProperty("--accent-text", accentText);
   return normalized;
 }
 

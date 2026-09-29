@@ -1,6 +1,6 @@
 {
   "name": "priv-chat",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "Self-hosted, privacy-focused end-to-end encrypted chat app.",
   "scripts": {
     "test": "bun test",

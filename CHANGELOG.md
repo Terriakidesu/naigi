@@ -2,14 +2,22 @@
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-29
+
 ### Added
 
+- A pure-black app theme for OLED displays, available alongside Dark, Dim, and Light and saved locally with the other browser preferences.
+- Users can build local themes with live previews, custom colors, gradients or browser-local background images, layout and density options, corner/border/shadow styles, and safe animation/transition presets; validated share codes and theme files remain compatible with older presets.
+- A MomoTalk-inspired appearance with a pink chat header, blue-gray navigation rail, lavender conversation list, white chat pane, and slate message bubbles.
 - Admins can assign host operators Admin or Moderator access from the dashboard; operator changes are audited, and Moderators are limited to reports and chat-account moderation.
 - Admins and Moderators can apply audited installation-wide send timeouts to chat accounts, with automatic expiry and a separate removal action.
 - Host operators can activate or deactivate spaces using a reversible access freeze; changes record an operator, reason, and timestamp in paginated per-space audit history.
 
 ### Changed
 
+- Theme edits now stay isolated to the live preview until app preferences are saved; the preview shows every palette color and the selected design settings.
+- Shared form controls now use consistent theme-aware styling across the web app, including circular color pickers and custom checkboxes, sliders, selects, and file buttons.
+- Space role previews now simulate the role-visible rooms, people access, and available controls in a read-only chat view; message history is never loaded or decrypted for previews.
 - The host admin console now supports browser-local System, Light, and Dark themes across its dashboard pages.
 - Host account management now requires a two-character username/display-name prefix search and uses bounded keyset pagination without full result counts or deep offset scans.
 - Members can still see deactivated spaces in their space switcher and receive a clear status page when selecting one; room and message access remains blocked.
@@ -155,6 +163,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.18.0](docs/changelogs/0.18.0.md) — 2026-09-29
 - [0.17.0](docs/changelogs/0.17.0.md) — 2026-09-29
 - [0.16.0](docs/changelogs/0.16.0.md) — 2026-09-28
 - [0.15.0](docs/changelogs/0.15.0.md) — 2026-09-28
