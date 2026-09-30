@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-09-30
+
+### Added
+
+- Voice rooms and direct calls now use a non-blocking in-call dock with microphone mute, local deafen, and a participant roster. Voice-room participant identities are mapped to conversation members through encrypted signaling.
+
 ## [0.21.2] - 2026-09-30
 
 ### Fixed
@@ -209,6 +215,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.22.0](docs/changelogs/0.22.0.md) — 2026-09-30
 - [0.21.2](docs/changelogs/0.21.2.md) — 2026-09-30
 - [0.21.1](docs/changelogs/0.21.1.md) — 2026-09-30
 - [0.21.0](docs/changelogs/0.21.0.md) — 2026-09-30

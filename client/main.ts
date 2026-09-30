@@ -62,6 +62,7 @@ function setRoleTextColor(element: HTMLElement, color: string) {
 let cryptoClient: CryptoClient | undefined;
 let voiceCalls: VoiceCallController | undefined;
 let voiceRooms: VoiceRoomController | undefined;
+const voiceMemberCache = new Map<string, ConversationMember[]>();
 let selectedConversationId: string | undefined;
 let selectedMembers: ConversationMember[] = [];
 let conversations: Conversation[] = [];
@@ -291,7 +292,11 @@ const voiceCallAudioOutput = byId<HTMLElement>("voice-call-audio-output");
 const voiceCallAccept = byId<HTMLButtonElement>("voice-call-accept");
 const voiceCallDecline = byId<HTMLButtonElement>("voice-call-decline");
 const voiceCallMute = byId<HTMLButtonElement>("voice-call-mute");
+const voiceCallDeafen = byId<HTMLButtonElement>("voice-call-deafen");
 const voiceCallEnd = byId<HTMLButtonElement>("voice-call-end");
+const voiceCallParticipants = byId<HTMLElement>("voice-call-participants");
+const voiceCallParticipantCount = byId<HTMLElement>("voice-call-participant-count");
+const voiceCallParticipantList = byId<HTMLUListElement>("voice-call-participant-list");
 const outboxNotice = byId<HTMLElement>("outbox-notice");
 const outboxLabel = byId<HTMLElement>("outbox-label");
 const outboxRetry = byId<HTMLButtonElement>("outbox-retry");
@@ -716,14 +721,49 @@ function updateVoiceRoomPanel() {
   }
 }
 
+type VoiceRosterEntry = { identity?: string; userId?: string; name?: string; local?: boolean };
+
+function renderVoiceParticipants(participants: VoiceRosterEntry[], conversationId?: string) {
+  voiceCallParticipantList.replaceChildren();
+  voiceCallParticipants.hidden = participants.length === 0;
+  voiceCallParticipantCount.textContent = String(participants.length);
+  const members = conversationId ? voiceMemberCache.get(conversationId) ?? selectedMembers : selectedMembers;
+
+  for (const participant of participants) {
+    const member = participant.userId ? members.find((item) => item.userId === participant.userId) : undefined;
+    const local = Boolean(participant.local);
+    const currentAccount = participant.userId === currentUser?.id;
+    const name = participant.name
+      || (currentAccount ? currentUser?.displayName ?? "You" : member?.displayName || (member ? `@${member.username}` : "Participant"));
+    const row = document.createElement("li");
+    row.className = "voice-call-participant";
+    const avatar = document.createElement("span");
+    avatar.className = "voice-call-participant-avatar";
+    renderAvatar(avatar, name, participant.userId ?? participant.identity ?? name, currentAccount ? currentUser?.avatarUrl : member?.avatarUrl);
+    avatar.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.className = "voice-call-participant-name";
+    label.textContent = name;
+    row.append(avatar, label);
+    if (local) {
+      const you = document.createElement("span");
+      you.className = "voice-call-participant-you";
+      you.textContent = "you";
+      row.append(you);
+    }
+    voiceCallParticipantList.append(row);
+  }
+}
+
 function renderVoiceCall(state: VoiceCallView) {
   if (state.status === "idle") {
     if (voiceRooms?.currentState.status === "idle" && voiceCallDialog.open) voiceCallDialog.close();
+    renderVoiceParticipants([]);
     updateVoiceCallButton();
     return;
   }
 
-  if (!voiceCallDialog.open) voiceCallDialog.showModal();
+  if (!voiceCallDialog.open) voiceCallDialog.show();
   voiceCallTitle.textContent = state.status === "incoming" ? "Incoming voice call" : "Voice call";
   if (state.status === "incoming") voiceCallStatus.textContent = `${state.peerName} is calling you.`;
   else if (state.status === "calling") voiceCallStatus.textContent = `Calling ${state.peerName}…`;
@@ -736,19 +776,27 @@ function renderVoiceCall(state: VoiceCallView) {
   voiceCallAccept.hidden = !incoming;
   voiceCallDecline.hidden = !incoming;
   voiceCallMute.hidden = !connected;
+  voiceCallDeafen.hidden = !connected;
+  voiceCallDeafen.textContent = state.deafened ? "Undeafen audio" : "Deafen audio";
+  voiceCallDeafen.setAttribute("aria-pressed", String(Boolean(state.deafened)));
   voiceCallEnd.hidden = incoming;
   voiceCallEnd.textContent = state.status === "calling" ? "Cancel call" : "Leave call";
   voiceCallMute.textContent = state.muted ? "Unmute microphone" : "Mute microphone";
+  voiceCallMute.setAttribute("aria-pressed", String(Boolean(state.muted)));
+  renderVoiceParticipants(connected
+    ? [{ userId: currentUser?.id, local: true }, { name: state.peerName ?? "Contact" }]
+    : incoming ? [{ name: state.peerName ?? "Contact" }] : []);
   updateVoiceCallButton();
 }
 
 function renderVoiceRoom(state: VoiceRoomView) {
   if (state.status === "idle") {
     if (voiceCalls?.currentState.status === "idle" && voiceCallDialog.open) voiceCallDialog.close();
+    renderVoiceParticipants([]);
     updateVoiceCallButton();
     return;
   }
-  if (!voiceCallDialog.open) voiceCallDialog.showModal();
+  if (!voiceCallDialog.open) voiceCallDialog.show();
   voiceCallTitle.textContent = "Voice room";
   if (state.status === "joining") voiceCallStatus.textContent = `Joining ${state.roomName ?? "voice room"}…`;
   else if (state.status === "connecting") voiceCallStatus.textContent = `Connecting to ${state.roomName ?? "voice room"}…`;
@@ -760,15 +808,28 @@ function renderVoiceRoom(state: VoiceRoomView) {
   voiceCallAccept.hidden = true;
   voiceCallDecline.hidden = true;
   voiceCallMute.hidden = state.status !== "connected" && state.status !== "reconnecting";
+  voiceCallDeafen.hidden = voiceCallMute.hidden;
+  voiceCallDeafen.textContent = state.deafened ? "Undeafen audio" : "Deafen audio";
+  voiceCallDeafen.setAttribute("aria-pressed", String(Boolean(state.deafened)));
   voiceCallEnd.hidden = false;
   voiceCallEnd.textContent = state.status === "joining" || state.status === "connecting" ? "Cancel join" : "Leave room";
   voiceCallMute.textContent = state.muted ? "Unmute microphone" : "Mute microphone";
+  voiceCallMute.setAttribute("aria-pressed", String(Boolean(state.muted)));
+  renderVoiceParticipants((state.participants ?? []).map((participant) => ({
+    identity: participant.identity,
+    userId: participant.userId,
+    local: participant.local,
+  })), state.conversationId);
   updateVoiceCallButton();
 }
 
 async function voiceConversationMembers(conversationId: string) {
   const result = await api.conversationMembers(conversationId);
-  return result.members.map((member) => ({ ...member, roleIds: normalizeRoleIds(member.roleIds) }));
+  const members = result.members.map((member) => ({ ...member, roleIds: normalizeRoleIds(member.roleIds) }));
+  voiceMemberCache.delete(conversationId);
+  voiceMemberCache.set(conversationId, members);
+  while (voiceMemberCache.size > 8) voiceMemberCache.delete(voiceMemberCache.keys().next().value!);
+  return members;
 }
 
 async function encryptVoiceSignal(conversationId: string, value: VoiceSignalBody) {
@@ -823,6 +884,7 @@ function initializeVoiceCalls(userId: string) {
     audioOutput: voiceCallAudioOutput,
   });
   voiceRooms = new VoiceRoomController({
+    currentUserId: userId,
     requestToken: (channelId) => api.voiceRoomToken(channelId),
     checkAccess: async (channelId) => {
       try {
@@ -3278,7 +3340,7 @@ function connectRealtime() {
         }
         const voiceChannel = channels.some((channel) => channel.kind === "voice" && channel.conversationId === payload.conversationId);
         if (voiceChannel || voiceRooms?.currentState.conversationId === payload.conversationId) {
-          void voiceRooms?.receiveSignal(payload.conversationId, payload.ciphertext).catch(() => undefined);
+          void voiceRooms?.receiveSignal(payload.conversationId, payload.userId, payload.ciphertext).catch(() => undefined);
         }
         return;
       }
@@ -6964,14 +7026,21 @@ voiceCallAccept.addEventListener("click", () => {
 });
 voiceCallDecline.addEventListener("click", () => void voiceCalls?.decline());
 voiceCallMute.addEventListener("click", () => {
-  if (voiceRooms?.currentState.status !== undefined && voiceRooms.currentState.status !== "idle") {
-    void voiceRooms.toggleMute().catch((error) => setStatus(readableError(error), true));
+  const activeVoiceRooms = voiceRooms;
+  if (activeVoiceRooms && activeVoiceRooms.currentState.status !== "idle") {
+    void activeVoiceRooms.toggleMute().catch((error) => setStatus(readableError(error), true));
   } else {
     void voiceCalls?.toggleMute().catch((error) => setStatus(readableError(error), true));
   }
 });
+voiceCallDeafen.addEventListener("click", () => {
+  const activeVoiceRooms = voiceRooms;
+  if (activeVoiceRooms && activeVoiceRooms.currentState.status !== "idle") activeVoiceRooms.toggleDeafen();
+  else voiceCalls?.toggleDeafen();
+});
 voiceCallEnd.addEventListener("click", () => {
-  if (voiceRooms?.currentState.status !== undefined && voiceRooms.currentState.status !== "idle") void voiceRooms.leave();
+  const activeVoiceRooms = voiceRooms;
+  if (activeVoiceRooms && activeVoiceRooms.currentState.status !== "idle") void activeVoiceRooms.leave();
   else void voiceCalls?.end();
 });
 voiceRoomJoinButton.addEventListener("click", () => {
@@ -6980,7 +7049,8 @@ voiceRoomJoinButton.addEventListener("click", () => {
 });
 voiceCallDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
-  if (voiceRooms?.currentState.status !== undefined && voiceRooms.currentState.status !== "idle") void voiceRooms.leave();
+  const activeVoiceRooms = voiceRooms;
+  if (activeVoiceRooms && activeVoiceRooms.currentState.status !== "idle") void activeVoiceRooms.leave();
   else void voiceCalls?.end();
 });
 

@@ -17,6 +17,7 @@
   .workspace-rail { display: none; }
   .chat-header { padding: 0 0.8rem; }
   .chat-actions .icon-button:nth-child(-n+2) { display: grid; }
+  .voice-call-dialog[open] { right: 0.6rem; bottom: calc(0.6rem + env(safe-area-inset-bottom)); width: min(380px, calc(100vw - 1.2rem)); max-height: 68dvh; }
   .chat-moderation-notices { padding: 0.45rem 0.55rem; }
   .chat-moderation-notice { align-items: flex-start; flex-direction: column; gap: 0.55rem; padding: 0.6rem; }
   .chat-moderation-notice > button { align-self: flex-end; }

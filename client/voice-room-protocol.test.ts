@@ -6,6 +6,7 @@ const senderInstanceId = "529a4e83-3fbd-43b1-87f8-5ce61a8d592f";
 const requestId = "90d9922c-eb1f-4503-8590-f05182d949c2";
 const sessionId = "48b0d4dd-a2f2-4545-817d-96b87e97c295";
 const mediaKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const participantIdentity = "72d55ee8-4283-491d-bb8c-8b977ddac43f";
 
 describe("voice-room signaling", () => {
   it("accepts an unexpired join request", () => {
@@ -42,6 +43,27 @@ describe("voice-room signaling", () => {
       mediaKey,
       expiresAt: 60_000,
     }, 10_000)?.action).toBe("room-key");
+  });
+
+  it("accepts participant identities only inside valid encrypted presence signals", () => {
+    expect(parseVoiceRoomSignal({
+      version: 1,
+      kind: "naigi.voice.room",
+      senderInstanceId,
+      channelId,
+      action: "participant-presence",
+      participantIdentity,
+      expiresAt: 60_000,
+    }, 10_000)?.participantIdentity).toBe(participantIdentity);
+    expect(parseVoiceRoomSignal({
+      version: 1,
+      kind: "naigi.voice.room",
+      senderInstanceId,
+      channelId,
+      action: "participant-presence",
+      participantIdentity: "not-a-uuid",
+      expiresAt: 60_000,
+    }, 10_000)).toBeUndefined();
   });
 
   it("rejects malformed, unknown, and expired room signals", () => {

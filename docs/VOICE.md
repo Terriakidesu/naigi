@@ -9,7 +9,8 @@ separate service; Naigi does not use a hosted voice provider.
 After the host configures LiveKit, a space owner or member with channel-creation permission can open
 **Space Settings → Rooms**, choose **Voice** as the room type, enter a name, and add the room. Select
 the voice room and choose **Join voice room**. Other members with access can join the same room from
-their browser. Microphone permission is required; the in-call controls can mute or leave.
+their browser. A non-blocking in-call dock keeps the rest of Naigi usable and shows the current roster;
+controls can mute your microphone, deafen incoming room audio, or leave. Microphone permission is required.
 
 Voice-room capacity is not capped by Naigi to a fixed participant count. LiveKit's deployment
 configuration, host resources, and network determine how many participants can connect. Direct
@@ -43,6 +44,8 @@ are rate-limited to 12 per account per minute; Redis must be available when issu
   conversation before being sent over Naigi's realtime service. Redis receives ciphertext only.
 - Voice-room join requests and media keys are encrypted inside the voice channel's conversation.
   The LiveKit token endpoint does not return the media key, and the relay never receives it.
+- The mapping between random LiveKit participant identities and conversation members is exchanged
+  only inside encrypted voice-room signals. Names and user identities are not sent to LiveKit.
 - The call media key is generated in the caller's browser and shared only inside that encrypted
   invitation. It is not returned by the token API, stored on the server, or sent to LiveKit.
 - The LiveKit browser SDK encrypts audio frames before they leave the client. The LiveKit server

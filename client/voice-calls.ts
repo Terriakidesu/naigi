@@ -8,6 +8,7 @@ export type VoiceCallView = {
   callId?: string;
   peerName?: string;
   muted?: boolean;
+  deafened?: boolean;
 };
 
 type RoomTicket = { url: string; token: string };
@@ -22,6 +23,7 @@ type ActiveCall = {
   room?: Room;
   worker?: Worker;
   muted: boolean;
+  deafened: boolean;
   peerAccepted?: boolean;
   timer?: number;
   accessTimer?: number;
@@ -76,6 +78,7 @@ export class VoiceCallController {
       callId: this.active.callId,
       peerName: this.active.peerName,
       muted: this.active.muted,
+      deafened: this.active.deafened,
     };
   }
 
@@ -88,6 +91,7 @@ export class VoiceCallController {
       mediaKey: randomMediaKey(),
       direction: "outgoing",
       muted: false,
+      deafened: false,
       accessCheckInFlight: false,
       accessFailures: 0,
       cleaningUp: false,
@@ -132,6 +136,7 @@ export class VoiceCallController {
         direction: "incoming",
         acceptedLocally: false,
         muted: false,
+        deafened: false,
         accessCheckInFlight: false,
         accessFailures: 0,
         cleaningUp: false,
@@ -205,6 +210,16 @@ export class VoiceCallController {
     this.emitState();
   }
 
+  toggleDeafen() {
+    const active = this.active;
+    if (!active?.room) return;
+    active.deafened = !active.deafened;
+    for (const audio of this.options.audioOutput.querySelectorAll<HTMLAudioElement>("audio")) {
+      audio.muted = active.deafened;
+    }
+    this.emitState();
+  }
+
   private async sendAction(active: ActiveCall, action: VoiceSignalBody["action"], extra: Pick<VoiceSignalBody, "expiresAt"> = {}) {
     const ciphertext = await this.options.encryptSignal(active.conversationId, {
       version: 1,
@@ -241,6 +256,7 @@ export class VoiceCallController {
       if (track.kind !== Track.Kind.Audio || !this.isActive(active)) return;
       const element = track.attach();
       element.autoplay = true;
+      element.muted = active.deafened;
       element.setAttribute("playsinline", "");
       element.dataset.voiceCallAudio = "true";
       this.options.audioOutput.append(element);

@@ -198,10 +198,15 @@
       <div class="voice-call-heading"><span class="voice-call-icon" aria-hidden="true"><i data-lucide="phone-call"></i></span><div><p class="eyebrow">END-TO-END ENCRYPTED AUDIO</p><h2 id="voice-call-title">Voice call</h2></div></div>
       <p id="voice-call-status" class="muted" role="status" aria-live="polite"></p>
       <p class="voice-call-security"><i data-lucide="shield-check" aria-hidden="true"></i> Audio is encrypted on your device. The voice relay cannot decrypt it.</p>
+      <section id="voice-call-participants" class="voice-call-participants" aria-labelledby="voice-call-participants-title" hidden>
+        <div class="voice-call-participants-heading"><strong id="voice-call-participants-title">Participants</strong><span id="voice-call-participant-count"></span></div>
+        <ul id="voice-call-participant-list" class="voice-call-participant-list" aria-label="Voice participants"></ul>
+      </section>
       <div id="voice-call-audio-output" class="voice-call-audio-output" aria-label="Incoming call audio"></div>
       <div class="app-dialog-actions voice-call-actions">
         <button id="voice-call-decline" class="secondary" type="button" hidden>Decline</button>
         <button id="voice-call-mute" class="secondary" type="button" hidden>Mute microphone</button>
+        <button id="voice-call-deafen" class="secondary" type="button" hidden aria-pressed="false">Deafen audio</button>
         <button id="voice-call-end" class="secondary" type="button" hidden>Cancel call</button>
         <button id="voice-call-accept" type="button" hidden>Accept call</button>
       </div>

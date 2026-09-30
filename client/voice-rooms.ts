@@ -9,7 +9,11 @@ export type VoiceRoomView = {
   roomName?: string;
   participantCount?: number;
   muted?: boolean;
+  deafened?: boolean;
+  participants?: VoiceRoomParticipantView[];
 };
+
+export type VoiceRoomParticipantView = { identity: string; userId?: string; local: boolean };
 
 type RoomTicket = { url: string; token: string; canStart: boolean };
 type RoomKey = { sessionId: string; mediaKey: string };
@@ -23,6 +27,8 @@ type ActiveRoom = {
   room?: Room;
   worker?: Worker;
   muted: boolean;
+  deafened: boolean;
+  participantUserIds: Map<string, string>;
   accessTimer?: number;
   accessCheckInFlight: boolean;
   accessFailures: number;
@@ -38,6 +44,7 @@ type PendingKeyRequest = {
 };
 
 type VoiceRoomOptions = {
+  currentUserId: string;
   requestToken: (channelId: string) => Promise<RoomTicket>;
   checkAccess: (channelId: string) => Promise<boolean>;
   encryptSignal: (conversationId: string, value: VoiceRoomSignalBody) => Promise<string>;
@@ -74,13 +81,27 @@ export class VoiceRoomController {
         : active.room.state === "connected"
           ? "connected"
           : "connecting";
+    const joinedRoom = active.room?.state === "connected" || active.room?.state === "reconnecting"
+      ? active.room
+      : undefined;
     return {
       status,
       channelId: active.channelId,
       conversationId: active.conversationId,
       roomName: active.roomName,
-      participantCount: active.room?.state === "connected" ? active.room.remoteParticipants.size + 1 : 0,
+      participantCount: joinedRoom ? joinedRoom.remoteParticipants.size + 1 : 0,
       muted: active.muted,
+      deafened: active.deafened,
+      participants: joinedRoom
+        ? [
+            { identity: joinedRoom.localParticipant.identity, userId: this.options.currentUserId, local: true },
+            ...Array.from(joinedRoom.remoteParticipants.values(), (participant) => ({
+              identity: participant.identity,
+              userId: active.participantUserIds.get(participant.identity),
+              local: false,
+            })),
+          ]
+        : [],
     };
   }
 
@@ -91,6 +112,8 @@ export class VoiceRoomController {
       channelId: channel.id,
       roomName: channel.name,
       muted: false,
+      deafened: false,
+      participantUserIds: new Map(),
       accessCheckInFlight: false,
       accessFailures: 0,
       cleaningUp: false,
@@ -134,7 +157,7 @@ export class VoiceRoomController {
     }
   }
 
-  async receiveSignal(conversationId: string, ciphertext: string) {
+  async receiveSignal(conversationId: string, senderUserId: string, ciphertext: string) {
     if (ciphertext.length > 48_000) return;
     let value: Record<string, unknown>;
     try {
@@ -146,6 +169,15 @@ export class VoiceRoomController {
     if (!signal || signal.senderInstanceId === this.instanceId) return;
 
     const active = this.active;
+    if (signal.action === "participant-presence") {
+      if (!active || active.conversationId !== conversationId || active.channelId !== signal.channelId) return;
+      const participantIdentity = signal.participantIdentity!;
+      if (active.participantUserIds.get(participantIdentity) === senderUserId) return;
+      active.participantUserIds.set(participantIdentity, senderUserId);
+      this.emitStateIfActive(active);
+      if (active.room?.state === "connected") await this.announceParticipant(active);
+      return;
+    }
     if (signal.action === "join-request") {
       if (!active || active.conversationId !== conversationId || active.channelId !== signal.channelId
         || !active.sessionId || !active.mediaKey || active.room?.state !== "connected") return;
@@ -171,6 +203,16 @@ export class VoiceRoomController {
     await active.room.localParticipant.setMicrophoneEnabled(!muted);
     if (!this.isActive(active)) return;
     active.muted = muted;
+    this.emitState();
+  }
+
+  toggleDeafen() {
+    const active = this.active;
+    if (!active?.room) return;
+    active.deafened = !active.deafened;
+    for (const audio of this.options.audioOutput.querySelectorAll<HTMLAudioElement>("audio")) {
+      audio.muted = active.deafened;
+    }
     this.emitState();
   }
 
@@ -219,13 +261,17 @@ export class VoiceRoomController {
     active.worker = worker;
     this.emitStateIfActive(active);
     room.on(RoomEvent.ParticipantConnected, () => this.emitStateIfActive(active));
-    room.on(RoomEvent.ParticipantDisconnected, () => this.emitStateIfActive(active));
+    room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      active.participantUserIds.delete(participant.identity);
+      this.emitStateIfActive(active);
+    });
     room.on(RoomEvent.Reconnecting, () => this.emitStateIfActive(active));
     room.on(RoomEvent.Reconnected, () => this.emitStateIfActive(active));
     room.on(RoomEvent.TrackSubscribed, (track) => {
       if (track.kind !== Track.Kind.Audio || !this.isActive(active)) return;
       const element = track.attach();
       element.autoplay = true;
+      element.muted = active.deafened;
       element.setAttribute("playsinline", "");
       element.dataset.voiceRoomAudio = "true";
       this.options.audioOutput.append(element);
@@ -243,6 +289,8 @@ export class VoiceRoomController {
     await room.connect(ticket.url, ticket.token);
     if (!this.isActive(active)) return;
     await waitForLocalVoiceEncryption(room);
+    if (!this.isActive(active)) return;
+    await this.announceParticipant(active);
     if (!this.isActive(active)) return;
     await room.localParticipant.setMicrophoneEnabled(true);
     if (!this.isActive(active)) return;
@@ -263,6 +311,15 @@ export class VoiceRoomController {
         if (this.isActive(active) && active.accessFailures >= 3) void this.finish();
       });
     }, 10_000);
+  }
+
+  private async announceParticipant(active: ActiveRoom) {
+    const participantIdentity = active.room?.localParticipant.identity;
+    if (!participantIdentity) return;
+    await this.sendSignal(active, "participant-presence", {
+      participantIdentity,
+      expiresAt: Date.now() + 60_000,
+    });
   }
 
   private resolvePendingKey(key: RoomKey | undefined) {
