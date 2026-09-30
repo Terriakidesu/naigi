@@ -13,6 +13,8 @@ Use this page to find the guide for your role:
 ## Users
 
 - [Features](FEATURES.md) — conversations, spaces, media, settings, notifications, and current limits.
+- [History recovery](history-recovery.md) — trusted-device approval, encrypted automatic backups,
+  recovery keys, and manual exports.
 - [Voice calls](VOICE.md) — self-hosted LiveKit setup and the call encryption boundary.
 
 ## Developers

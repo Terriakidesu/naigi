@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Selecting composer text shows an icon-only formatting toolbar for bold, italic, strikethrough, and spoilers; Ctrl/⌘+B, Ctrl/⌘+I, Ctrl/⌘+Shift+X, and Ctrl/⌘+Shift+S apply or remove Markdown formatting.
+- MIT license for Naigi's original source code, with third-party asset licenses preserved.
+
 ## [0.23.0] - 2026-09-30
 
 ### Added

@@ -1,147 +1,148 @@
 # Naigi
 
-Self-hosted, privacy-focused chat for people who want to own their infrastructure and keep
-their conversations private.
+**Self-hosted, privacy-focused chat—with encrypted conversations, spaces, media, and voice.**
 
-Naigi is an encrypted-first chat application designed to run on infrastructure you control.
-Its goal is to provide a practical alternative to hosted chat services without giving up
-modern channels, direct conversations, media, or role-based community management.
+Naigi puts your chat infrastructure under your control. Browser clients encrypt messages and
+room metadata before upload; the backend handles authentication, authorization, delivery, and
+opaque encrypted storage. Private chat keys and the local encryption passphrase stay in the browser.
 
-The server stores encrypted message envelopes and public device key material. It does not
-accept plaintext message content or implement cryptography.
+[Quick start](#quick-start) · [Features](#features) · [History recovery](#history-recovery) ·
+[Documentation](#documentation) · [Changelog](CHANGELOG.md)
 
-## Project principles
+## Features
 
-- **Self-hosted by default:** run the application, database, realtime services, and encrypted
-  attachment storage under your own control.
-- **Privacy-focused:** minimize server knowledge and keep message content, names, URLs, embeds,
-  and media keys inside end-to-end encrypted payloads.
-- **Usable security:** provide familiar chat features while keeping local keys and the local
-  encryption passphrase in the browser.
-- **Auditable boundaries:** keep authorization, delivery, and storage on the server while
-  leaving cryptography and plaintext rendering to reviewed clients.
+### Conversations and media
 
-See [`docs/README.md`](docs/README.md) for setup, feature, architecture, security, voice, and API
-guides.
+- End-to-end encrypted direct conversations and invite-only spaces with text and voice rooms.
+- Safe Markdown, replies, reactions, custom emoji, and encrypted photos, videos, and files.
+- Selecting composer text opens an icon-only formatting toolbar. Use Ctrl/⌘+B for bold,
+  Ctrl/⌘+I for italic, Ctrl/⌘+Shift+X for strikethrough, and Ctrl/⌘+Shift+S for spoilers.
+- Cursor-based older-message loading, encrypted local message caching, and draft preservation
+  while navigating.
+- Compact same-space message references that show the room name and jump to the linked message.
+- Private recipient discovery limited to active members of a shared space—no global user directory.
 
-## Self-hosting
+### Spaces and moderation
 
-For the full operator guide, see [`docs/SETUP.md`](docs/SETUP.md).
+- Ordered rooms and categories, permission-aware drag sorting, and a styled room-creation dialog
+  with text/voice choices and category selection.
+- Role hierarchies, room access controls, list-first role management, and anchored member-role pickers.
+- Searchable management lists and compact member action menus for profiles, direct messages,
+  blocking, role assignment, warnings, timeouts, kicks, bans, and copying user IDs.
+- Encrypted space names, descriptions, welcome text, rules, and custom emoji metadata.
+- Custom emoji previews and renaming without reuploading encrypted images.
+- Separate space moderation and host-operator administration, with permission restrictions and audit logs.
 
-Copy `.env.example` to `.env` and set credentials for PostgreSQL and Redis. `ADMIN_DATABASE_URL`
-must point to a PostgreSQL database distinct from `DATABASE_URL` (the default is the app database
-name with `_admin` appended); make sure both databases exist before migrating. The example uses
-`priv_chat` and `priv_chat_admin`. PostgreSQL and Redis are used as follows:
+### Voice and audio
 
-- PostgreSQL stores accounts, devices, memberships, and encrypted messages.
-- The separate admin PostgreSQL database stores only host-operator identities and sessions.
-- Redis is used for readiness checks, cross-instance pub/sub, and best-effort realtime notifications.
-- Encrypted chat attachments and server-managed profile images are stored in the filesystem paths
-  `ATTACHMENTS_DIR` and `PROFILE_IMAGES_DIR`; deploy both on persistent storage. This release does
-  not include an object-storage adapter.
+- Encrypted one-to-one audio calls and joinable space voice rooms through a self-hosted LiveKit relay.
+- Microphone/output selection, input/output volume, local per-participant mute and volume,
+  a silence threshold, and a local microphone test.
+- Page-focused push-to-talk; manual mute takes priority over push-to-talk.
+- Speaker activity, voice-room membership in the sidebar, permanent footer audio controls,
+  and in-room controls with disconnect kept separate.
+- Automatic voice-room rejoining after reload or connection recovery, retaining tab-local audio
+  choices. Leaving, locking, or losing room access cancels rejoining.
 
-Install dependencies, apply schema migrations, and build the browser client before starting the
-server:
+### Settings and recovery
 
-```bash
-bun install
-bun run db:migrate
-bun run build:client
-bun run dev
-```
+- Profile, account security, devices, privacy, blocked users, and local-data management.
+- Separate **Appearance**, **Accessibility**, **Chat & media**, **Notifications**, and **Voice & audio**
+  settings, including custom themes, interface scale, message text size, and reduced motion.
+- Compact account and space settings with close buttons, Escape shortcuts, and unsaved-change guards.
+- Trusted-device history approval through a private QR/link and matching verification codes.
+- Automatic encrypted room-key backups, restoration with a separate generated recovery key,
+  and manual encrypted file export/import.
+- Optional remembered local unlock, notification quiet hours, GIF search, and Firebase web push.
 
-### Instance reports and host moderation
+See [Features](docs/FEATURES.md), [Voice](docs/VOICE.md), and
+[History recovery](docs/history-recovery.md) for details and limitations.
 
-Instance-wide reports and account suspensions are controlled by host operators, separately from
-space owners and moderators. After running `bun run db:migrate`, bootstrap the first Admin identity
-with `bun run admin-users -- create <username>`. The command prompts for a password without echoing it;
-use `disable` or `enable` in place of `create` to revoke or restore an operator account. Admins can
-create and manage Admin and Moderator identities from `/instance-admin/operators`; operator role,
-enable, and disable changes are audited. Moderators can review reports and moderate chat accounts,
-but cannot access platform controls, maintenance, report evidence or evidence keys, or operator
-management. Admins and Moderators can apply audited installation-wide send timeouts of up to 30 days;
-timeouts block sending everywhere while allowing sign-in, reading, and receiving. Operators are
-stored only in the separate admin database: they cannot sign in to chat,
-have chat profiles, or appear in member lists or recipient discovery. Use `password` to rotate an
-operator password and revoke their active sessions. For non-interactive shells, add `--password-stdin`
-and pipe two newline-separated password entries to the command; do not put passwords in command
-arguments.
-The host-only moderation console is at `/instance-admin`; account search and instance-wide bans and
-warnings are on `/instance-admin/users`. Opaque space IDs, reversible access freezes, and per-space
-audit history are on `/instance-admin/spaces`; deactivation retains memberships and data while
-blocking existing access and new joins. Live operations and on-demand database and storage
-measurements are on the separate `/instance-admin/operations` page. Storage cleanup is
-isolated on `/instance-admin/maintenance`: complete scans and a fresh reference check are required
-before files older than 24 hours can be quarantined. Quarantined files can be restored for 30 days;
-permanent purge is manual and only available after that window. Operations remains read-only.
+## Quick start
 
-Reports contain the selected reason and account/message references. Reporters may separately
-opt in to send details or a selected message excerpt encrypted in their browser to a host report
-key. The server stores only the encrypted evidence envelope; it does not retrieve or decrypt the
-reported conversation. The excerpt is supplied by the reporter and is not independently verified
-as an authentic copy of the original message.
+### Requirements
 
-Generate the report key from the host console and store its passphrase-encrypted backup offline.
-Keep the backup and passphrase separate, and share either only with trusted host operators. The
-private key is unlocked in memory in an operator's browser and is not uploaded or saved in browser
-storage. Keep retired-key backups to decrypt evidence encrypted before key rotation. If every copy
-of a private-key backup is lost, its evidence cannot be recovered.
+- [Bun](https://bun.sh/).
+- PostgreSQL with **two separate databases**: one for chat and one for host-operator identities.
+- Redis or Valkey.
+- Persistent filesystem storage for attachments and profile images.
+- HTTPS for remote access; localhost is suitable for development.
 
-Account blocking prevents direct conversations in both directions and suppresses their realtime
-events. It does not hide activity in shared spaces or remove either account from those spaces.
-Instance moderation actions (report review, evidence access, message removal, suspension, and key
-creation, bans/restores, and warning issue/revocation) are recorded in an instance-wide audit log.
-Space moderators can separately warn, ban, and timeout members from the space settings; warning
-reasons and expiry are shown to the affected user, and moderation actions are recorded in the space
-audit log. These controls provide moderation tools but do not by themselves guarantee compliance
-with any particular jurisdiction's legal requirements.
+### Configure and run
 
-To clear all local application data while preserving the schema and migrations:
+1. Copy `.env.example` to `.env` and edit the configuration:
 
-```bash
-bun run db:purge -- --yes
-```
+   ```bash
+   cp .env.example .env
+   ```
 
-The purge refuses to run with `NODE_ENV=production` and does not remove files from
-`ATTACHMENTS_DIR`.
+2. Create the databases named by `DATABASE_URL` and `ADMIN_DATABASE_URL` before migrating.
+   The example uses `priv_chat` and `priv_chat_admin`; these must be distinct databases.
+   Set `REDIS_URL` for your Redis/Valkey service.
 
-## Servers and channels
+3. Install dependencies, migrate both databases, build the browser client, and start development:
 
-The `/v1/servers` API provides invite-only Discord-style servers with ordered text channels,
-memberships, owner/admin roles, and hashed expiring invites. Each channel has its own E2EE
-conversation identity; channel messages use the existing conversation message and realtime
-transport. Server, channel, and category names are client-encrypted opaque metadata, so the
-backend only sees IDs, membership, roles, categories, and ordering. The full future-frontend contract is in
-[`docs/api-v1.md`](docs/api-v1.md).
+   ```bash
+   bun install
+   bun run db:migrate
+   bun run build:client
+   bun run dev
+   ```
 
-Private conversation recipients are limited to active members of a server that the creator also
-belongs to. Naigi does not provide a global account directory or global user search.
+4. Open [http://localhost:3000](http://localhost:3000), register, and choose a local encryption passphrase.
+   **This passphrase is separate from your account password and is never sent to the backend.**
 
-### End-to-end encrypted voice calls
+For deployment and upgrades, use the [operator setup guide](docs/SETUP.md). Build the client and
+apply migrations when upgrading; run `bun run start` rather than the development watcher in production.
+Version 0.23.0 adds migration `028_history_recovery` for encrypted backups and temporary device transfers.
 
-Naigi supports one-to-one audio calls in direct conversations and joinable space voice rooms through
-a self-hosted LiveKit relay. The client encrypts audio frames before publishing; Naigi signaling
-carries only encrypted call control and room keys, and the relay receives no media keys. Configure
-`LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` together to enable voice. Room capacity is
-determined by the LiveKit deployment; host-tuned adaptive quality is planned for a later release. See
-[`docs/VOICE.md`](docs/VOICE.md) for deployment and security details.
+### Storage and health
 
-The browser client supports safe Markdown rendering, cursor-based older-message loading, draft
-preservation while navigating, server/category management, profile/password settings, and an
-opt-in remembered local unlock. Remembered unlock stores only encrypted passphrase material and
-a non-extractable Web Crypto key in IndexedDB; use “Forget remembered unlock” on shared devices.
-On HTTPS or localhost, check **Remember this device** once on the unlock page to avoid
-entering the passphrase again on subsequent visits. The checkbox is opt-in because
-anyone with access to the browser profile can then unlock the encrypted key store.
-The passphrase is never transmitted to the server.
+| Service | Responsibility |
+| --- | --- |
+| App PostgreSQL | Accounts, devices, memberships, permissions, and encrypted messages/backups |
+| Admin PostgreSQL | Separate host-operator identities, sessions, and administration data |
+| Redis/Valkey | Readiness checks, cross-instance pub/sub, and best-effort realtime notifications |
+| `ATTACHMENTS_DIR` | Encrypted chat attachment files |
+| `PROFILE_IMAGES_DIR` | Server-managed profile images |
 
-### Access from another device
+Keep both filesystem directories on persistent storage. There is no object-storage adapter.
+Liveness is at `/health/live`; readiness at `/health/ready` checks PostgreSQL and Redis.
 
-Use HTTPS when accessing Naigi from a LAN address or remote host. Browsers do not
-enable the Web Crypto API required for remembered unlock on plain `http://` IP
-addresses; serving an E2EE app over HTTP also lets a network attacker replace
-the client code. Changing `HOST` or `NODE_ENV` does not make an HTTP origin secure.
-For example, with a domain pointed at your server and a reverse proxy such as Caddy:
+## History recovery
+
+Signing in on another device **does not automatically unlock old messages**. The device needs
+their room keys; an account password or a new local passphrase cannot recreate missing keys.
+
+Open **Settings → Recovery** and unlock that browser:
+
+1. **Preferred: approve from an existing device.** Request approval on the new device, then scan
+   the QR or open the private link on a device that already reads your history. Compare both
+   verification codes and approve only a device you control. Requests expire after ten minutes.
+2. **Fallback: restore an encrypted backup.** On a trusted device, generate a recovery key,
+   save it in a password manager, and enable automatic backup. Enter that key on the new device
+   to restore available history keys.
+3. **Offline alternative: use a manual file backup.** Export/import a passphrase-protected room-key
+   file from the expandable manual section.
+
+Enabled, unlocked devices merge and back up known room keys every minute; **Back up now** performs
+an immediate sync. Revision checks prevent silent concurrent overwrites. The server stores only
+encrypted backup/transfer payloads, and locally remembered backup data keys are encrypted under the
+browser's local passphrase. Recovery secrets are separate from account passwords.
+
+Backups recover **keys**, not deleted messages, and can only include keys known to participating
+devices. If every usable device, recovery key, and manual backup is lost, Naigi cannot recover the
+history. See [History recovery](docs/history-recovery.md) for the full workflow and security limits.
+
+## Deployment and optional services
+
+### HTTPS and remote devices
+
+Use HTTPS for LAN addresses and remote hosts. Plain HTTP IP origins lack the secure browser APIs
+needed for encryption and remembered unlock, and HTTP lets a network attacker replace client code.
+Changing `HOST` or `NODE_ENV` does not make an origin secure.
+
+For example, place Naigi behind Caddy and run the app with `HOST=127.0.0.1`:
 
 ```caddyfile
 chat.example.com {
@@ -149,140 +150,149 @@ chat.example.com {
 }
 ```
 
-Run Naigi with `HOST=127.0.0.1` behind the proxy and visit
-`https://chat.example.com`. For LAN-only access, use a trusted local TLS
-certificate or an HTTPS tunnel instead. If you have SSH access to the host,
-you can forward its port without exposing an insecure HTTP origin:
+For LAN-only use, choose a trusted TLS certificate or an HTTPS tunnel. An SSH port forward is
+another option:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 user@your-server
 ```
 
-Then open `http://localhost:3000` on your own device. Browser storage is scoped to the exact
-origin, so a previously remembered unlock on `localhost` cannot be reused on
-a different domain or port.
+Then open `http://localhost:3000` on your own device. Browser storage belongs to the exact origin;
+changing domains or ports does not transfer local keys or remembered unlock.
 
-### Optional GIF search
+### Optional integrations
 
-Set `KLIPY_API_KEY` and/or `GIPHY_API_KEY` to enable the browser GIF picker.
-These must be browser-restricted public integration keys: authenticated browsers receive the
-configured key and contact the provider directly, so search terms and provider URLs do not pass
-through Naigi. Selected GIF bytes enter the normal browser-encrypted attachment flow. Tenor's
-retired API is not used; pasted Tenor page links remain external previews when previews are
-enabled.
+| Integration | Configuration | Notes |
+| --- | --- | --- |
+| Self-hosted LiveKit | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Configure all three to enable voice. Audio frames are encrypted in the client; the relay receives no media keys. Capacity depends on the relay deployment. |
+| GIF search | `KLIPY_API_KEY` and/or `GIPHY_API_KEY` | Browser-restricted public keys. Browsers search providers directly; selected GIF bytes use the encrypted attachment flow. Tenor's retired API is not used. |
+| Firebase Cloud Messaging | `FCM_SERVICE_ACCOUNT_JSON`, `FCM_WEB_CONFIG_JSON`, `FCM_VAPID_KEY` | Opt-in web push over HTTPS. Keep service-account credentials secret and restrict the web API key to your origin. |
 
-### Optional Firebase Cloud Messaging
+Naigi runs without these integrations. GIF providers can observe searches made to them.
+Firebase receives a device registration token and delivery timing, but no message content, room ID,
+sender identity, or mention data.
 
-Web push is opt-in and requires HTTPS (localhost is suitable for development). Configure a
-Firebase web app with Cloud Messaging and a Web Push certificate, then set
-`FCM_SERVICE_ACCOUNT_JSON`, `FCM_WEB_CONFIG_JSON`, and `FCM_VAPID_KEY` in the server environment.
-The service account needs permission to send Firebase Cloud Messaging messages; keep its private
-key secret and restrict the Firebase web API key to your Naigi origin. Apply database migrations
-after enabling FCM with `bun run db:migrate`.
+Background push requires browser permission and **All new messages**. **Mentions only** works while
+the app is open. The service worker applies browser-local quiet hours; closed-app alerts cannot
+apply per-room mutes because Firebase receives no room IDs.
 
-Users must grant browser notification permission and choose **All new messages** for background
-push. **Mentions only** remains client-side and alerts only while Naigi is open. Quiet hours are
-stored in that browser and applied by the service worker. Pushes are data-only generic events: the
-payload sent to Firebase contains no message content, room ID, sender identity, or mention data.
-As a result, closed-app alerts cannot apply per-room mutes.
-Firebase does receive the device registration token and delivery timing, so enabling FCM adds that
-third-party dependency to the notification path.
+See [Setup](docs/SETUP.md), [Voice](docs/VOICE.md), and [Security](docs/SECURITY.md) before enabling
+optional services.
 
-GIF search and Firebase Cloud Messaging are optional and are not required to run Naigi.
-Liveness is available at `/health/live`; readiness, which checks PostgreSQL and Redis, is
-available at `/health/ready`.
+## Privacy and security boundaries
 
-## Realtime
+- **Client-side encryption:** Matrix Olm/Megolm through `@matrix-org/matrix-sdk-crypto-wasm`,
+  with private state in encrypted IndexedDB. Supported photos are resized/compressed before
+  encryption; the server stores encrypted media without inspecting its contents.
+- **Server-visible metadata:** account/device identifiers, membership, permissions, ordering,
+  and delivery metadata are not hidden by message encryption. Profile images are server-managed;
+  not every piece of account information is end-to-end encrypted.
+- **Authoritative history:** PostgreSQL stores encrypted message envelopes. Redis and WebSocket
+  events are notifications only; reconnecting clients fetch history using cursors.
+- **Remembered unlock:** opt-in on HTTPS or localhost, storing encrypted passphrase material and
+  a non-extractable Web Crypto key in IndexedDB. Anyone with access to that browser profile may
+  then unlock it; use **Forget remembered unlock** on shared devices.
+- **External previews:** third-party requests have privacy costs. The optional X/Twitter preview
+  exception sends a validated public-post ID to configured providers; see the security guide.
+- **Trust limits:** encryption does not protect an unlocked browser from compromised client code
+  or a compromised device. Protect TLS, deployment credentials, backups, and browser profiles.
 
-Authentication responses set an `HttpOnly` `priv_chat_session` cookie. A client can open
-`/v1/realtime` with that cookie and subscribe to authorized conversations:
+Read the [security and privacy guide](docs/SECURITY.md) for the complete boundaries.
 
-```json
-{"type":"subscribe","conversationId":"conversation-uuid"}
+## Host administration
+
+Host operators are separate from space owners and moderators. After migrating, bootstrap an operator:
+
+```bash
+bun run admin-users -- create <username>
 ```
 
-Realtime events contain only message IDs and ordering metadata. A client must fetch the
-encrypted envelope from PostgreSQL using the message history endpoint. Redis is not the
-source of truth; reconnecting clients must always synchronize using a cursor.
+The command prompts for a password without echoing it. Use `enable`, `disable`, or `password`
+to manage an operator; password rotation revokes active sessions. For automation, use
+`--password-stdin` with two newline-separated password entries—never put passwords in arguments.
 
-## Device key directory
+| Console | Purpose |
+| --- | --- |
+| `/instance-admin` | Report review and host moderation |
+| `/instance-admin/users` | Account search, warnings, bans, and installation-wide send timeouts |
+| `/instance-admin/spaces` | Opaque space IDs, reversible access freezes, and audit history |
+| `/instance-admin/operators` | Admin/Moderator identity management |
+| `/instance-admin/operations` | Read-only live operations and resource measurements |
+| `/instance-admin/maintenance` | Guarded filesystem scans, quarantine, restoration, and manual purge |
 
-After authenticating, a client registers its public identity key, signed prekey, and a
-batch of one-time prekeys with `POST /v1/devices`. A sender fetches active device bundles
-from `GET /v1/users/:userId/devices/keys`; one unused prekey is atomically consumed for
-each device. Private keys never reach this API. The client protocol is intentionally not
-implemented by the backend and must use a reviewed E2EE library.
+Operator identities live only in the admin database and cannot sign in to chat or appear in member
+discovery. Moderator operators have restricted permissions; evidence keys, platform controls,
+maintenance, and operator management require Admin access.
 
-## Encryption boundary
+Reporters may opt in to encrypt details or a selected message excerpt to a host report key. The server
+does not decrypt the conversation, and reporter-supplied excerpts are not independently verified.
+Keep passphrase-encrypted evidence-key backups offline; the operator browser unlocks private keys
+only in memory. Losing every backup makes that evidence unrecoverable.
 
-The message endpoint accepts only base64url-encoded ciphertext, protocol identifiers, and
-opaque protocol metadata. Text, URLs, embed previews, media keys, profile-related message content, and other user content
-must be encrypted by a client before they reach this server. No cryptographic protocol is
-implemented in the backend.
+Account blocking prevents direct conversations and their realtime events in both directions,
+but does not hide shared-space activity. Moderation tools and audit logs do not by themselves
+guarantee legal compliance. See [Setup](docs/SETUP.md) and [Security](docs/SECURITY.md) for operator details.
 
-## Photos, videos, and attachments
+## Development
 
-The client must compress and optionally resize a photo before encryption. A recommended
-photo path is a maximum dimension of 2048 pixels and JPEG/WebP quality around 0.8; the
-client may create an encrypted thumbnail at the same time. The backend receives and stores
-only the resulting encrypted bytes, so it never performs image compression, decoding, OCR,
-or content inspection. Users who need the original file can send it as a separate attachment.
-
-Images are resized/recompressed where supported; videos and other files retain their
-client-selected MIME type and extension. All media is encrypted before upload. Create an attachment with
-`POST /v1/conversations/:conversationId/attachments`, upload the encrypted bytes with
-`PUT /v1/attachments/:attachmentId`, and download them with
-`GET /v1/attachments/:attachmentId`.
-
-## Matrix crypto transport
-
-The browser crypto adapter can use the Matrix SDK WASM state machine through these
-transport endpoints:
-
-- `POST /v1/crypto/keys/upload`
-- `POST /v1/crypto/keys/query`
-- `POST /v1/crypto/keys/claim`
-- `POST /v1/crypto/send-to-device/:eventType/:transactionId`
-- `GET /v1/crypto/to-device?deviceId=...`
-- `POST /v1/crypto/to-device/ack`
-- `GET /v1/conversations/:conversationId/members`
-
-These endpoints store public device keys and encrypted to-device payloads. They do not
-decrypt, validate, or log message content. The WASM package is Apache-2.0 licensed and is
-initialized in the browser, with private state kept in its encrypted IndexedDB store.
-
-## Browser client
-
-Build the browser bundle and start the backend:
+Edit browser sources in `client/`, not generated `public/` assets. Rebuild after browser changes:
 
 ```bash
 bun run build:client
 bun run dev
 ```
 
-Then open `http://localhost:3000/`. The browser client uses Matrix Olm/Megolm through
-`@matrix-org/matrix-sdk-crypto-wasm`, keeps private state in an encrypted IndexedDB store,
-compresses supported photos before encrypting them, supports encrypted video attachments,
-and only renders allowlisted YouTube and X previews after an explicit user action. The local
-encryption passphrase is separate from the server password and
-is never sent to the backend. The client is split into separate views instead of loading
-every workflow into one page:
-
-- `/` — sign in
-- `/register` — create an account
-- `/unlock` — unlock the local browser key store
-- `/app` — active encrypted conversations
-- `/new` — create a conversation
-- `/settings` — profile and device management
-
-The generated `public/` bundle is intentionally not tracked.
-
-## Development
-
-To start the development server run:
+### Verification
 
 ```bash
-bun run dev
+bun run typecheck
+bun test
+bun run test:e2ee
 ```
 
-Open http://localhost:3000/ with your browser to see the result.
+Focused checks are also available:
+
+```bash
+bun run test:history-recovery
+bun run test:space-settings
+bun run test:create-room
+bun run test:member-roles
+bun run test:voice-audio
+bun run test:composer-formatting
+```
+
+The full E2E and history-recovery tests require PostgreSQL, Redis/Valkey, and Playwright Chromium;
+they use temporary app/admin schemas. The current full E2E suite still reports two
+`404 /v1/crypto/to-device` errors under investigation; passing focused tests is not a substitute
+for resolving that failure.
+
+### Local cleanup
+
+**Destructive, development-only:** clears application data while preserving schemas and migrations.
+
+```bash
+bun run db:purge -- --yes
+```
+
+The purge refuses to run with `NODE_ENV=production` and does not remove files from `ATTACHMENTS_DIR`.
+
+## Documentation
+
+| Guide | Contents |
+| --- | --- |
+| [Documentation index](docs/README.md) | Guides by role |
+| [Setup](docs/SETUP.md) | Configuration, deployment, upgrades, and backups |
+| [Features](docs/FEATURES.md) | User workflows and current limits |
+| [History recovery](docs/history-recovery.md) | Trusted-device approval, encrypted backups, and recovery keys |
+| [Voice](docs/VOICE.md) | LiveKit deployment and voice encryption |
+| [Security](docs/SECURITY.md) | Privacy boundaries and operator responsibilities |
+| [Architecture](docs/ARCHITECTURE.md) | Browser, API, database, Redis, and relay responsibilities |
+| [API v1](docs/api-v1.md) | HTTP/WebSocket contracts, device keys, and crypto transport |
+| [Changelog](CHANGELOG.md) | Version history and unreleased work |
+| [0.23.0 notes](docs/changelogs/0.23.0.md) | Recovery, audio, and settings improvements |
+
+## License
+
+Naigi's original source code is available under the [MIT License](LICENSE).
+Third-party dependencies and bundled assets retain their own licenses; Twemoji graphics are
+licensed under [CC BY 4.0](client/assets/twemoji/LICENSE-GRAPHICS).

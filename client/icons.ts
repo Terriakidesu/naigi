@@ -7,6 +7,10 @@ import {
   ArrowDown,
   Bell,
   BellOff,
+  Bold,
+  Italic,
+  Strikethrough,
+  EyeOff,
   Boxes,
   CalendarDays,
   ChevronDown,
@@ -71,6 +75,10 @@ import {
 } from "lucide";
 
 const iconSet = {
+  Bold,
+  Italic,
+  Strikethrough,
+  EyeOff,
   Activity,
   AtSign,
   AudioLines,

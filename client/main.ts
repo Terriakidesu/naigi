@@ -38,6 +38,7 @@ import { formatMessageMacrosAsText, freezeNowMessageMacros, refreshRelativeTimeM
 import { roomDropUpdates } from "./room-order";
 import { resolveRoomMessageLink, type RoomMessageReference } from "./room-message-link";
 import { showCreateRoomDialog } from "./create-room-dialog";
+import { setupComposerFormatToolbar } from "./composer-format-toolbar";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { VoiceCallController, type VoiceCallView } from "./voice-calls";
 import type { VoiceSignalBody } from "./voice-protocol";
@@ -7405,7 +7406,9 @@ composer.addEventListener("submit", async (event) => {
   }
 });
 
+setupComposerFormatToolbar(messageInput);
 messageInput.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented) return;
   if (handleSuggestionKeydown(event)) return;
   if (appPreferences.enterToSend && event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();

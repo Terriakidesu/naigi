@@ -31,6 +31,10 @@
 .macro-suggestion-details { overflow: hidden; color: var(--text-faint); font-size: 0.63rem; text-overflow: ellipsis; white-space: nowrap; }
 .composer-box { position: relative; display: flex; align-items: flex-end; gap: 0.55rem; min-height: 48px; padding: 0.6rem 0.7rem; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--bg-input); transition: border-color 120ms ease, box-shadow 120ms ease; }
 .composer-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(146, 170, 165, 0.14); }
+.composer-format-toolbar { position: fixed; z-index: 40; display: flex; gap: 2px; padding: 4px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg-elevated); box-shadow: 0 5px 18px rgba(0, 0, 0, 0.25); }
+.composer-format-toolbar button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 5px; color: var(--text-muted); background: transparent; }
+.composer-format-toolbar button:hover, .composer-format-toolbar button:focus-visible { color: var(--text); background: var(--bg-active); }
+.composer-format-toolbar svg { width: 16px; height: 16px; }
 .composer-input-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
 .message-input-rendered { position: absolute; z-index: 0; inset: 0; overflow: hidden; padding: 0.15rem 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: 1.4; pointer-events: none; user-select: none; }
 .message-input-rendered:empty::before { content: attr(data-placeholder); color: var(--text-placeholder); }

@@ -1,6 +1,7 @@
 {
   "name": "priv-chat",
   "version": "0.23.0",
+  "license": "MIT",
   "description": "Self-hosted, privacy-focused end-to-end encrypted chat app.",
   "scripts": {
     "test": "bun test",
@@ -10,6 +11,7 @@
     "test:member-roles": "bun run build:client && bun run scripts/test-member-role-picker.ts",
     "test:create-room": "bun run build:client && bun run scripts/test-create-room.ts",
     "test:history-recovery": "bun run build:client && bun run scripts/test-history-recovery.ts",
+    "test:composer-formatting": "bun run build:client && bun run scripts/test-composer-formatting.ts",
     "typecheck": "bunx --bun tsc --noEmit",
     "build:client": "bun run scripts/build-client.ts",
     "dev": "bun run --watch src/index.ts",
