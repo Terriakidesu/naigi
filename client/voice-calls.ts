@@ -1,5 +1,5 @@
 import { ExternalE2EEKeyProvider, Room, RoomEvent, Track } from "livekit-client";
-import { waitForLocalVoiceEncryption } from "./voice-e2ee";
+import { assertVoiceSecureContext, waitForLocalVoiceEncryption } from "./voice-e2ee";
 import { parseVoiceCallSignal, type VoiceSignalBody } from "./voice-protocol";
 
 export type VoiceCallView = {
@@ -41,6 +41,8 @@ type VoiceCallOptions = {
   sendSignal: (conversationId: string, ciphertext: string) => boolean;
   onState: (state: VoiceCallView) => void;
   audioOutput: HTMLElement;
+  getAudioInputDeviceId: () => string;
+  getAudioOutputDeviceId: () => string;
 };
 
 function randomMediaKey() {
@@ -83,6 +85,7 @@ export class VoiceCallController {
   }
 
   async start(conversationId: string, peerName: string) {
+    assertVoiceSecureContext();
     if (this.active) throw new Error("voice_call_already_active");
     const active: ActiveCall = {
       conversationId,
@@ -167,6 +170,7 @@ export class VoiceCallController {
   async accept() {
     const active = this.active;
     if (!active || active.direction !== "incoming") return;
+    assertVoiceSecureContext();
     window.clearTimeout(active.timer);
     active.timer = undefined;
     active.acceptedLocally = true;
@@ -210,6 +214,20 @@ export class VoiceCallController {
     this.emitState();
   }
 
+  async switchAudioInputDevice(deviceId: string) {
+    const active = this.active;
+    if (!active?.room) return;
+    const switched = await active.room.switchActiveDevice("audioinput", deviceId || "default");
+    if (!switched) throw new Error("voice_audio_input_unavailable");
+  }
+
+  async switchAudioOutputDevice(deviceId: string) {
+    const active = this.active;
+    if (!active?.room) return;
+    const switched = await active.room.switchActiveDevice("audiooutput", deviceId);
+    if (!switched) throw new Error("voice_audio_output_unavailable");
+  }
+
   toggleDeafen() {
     const active = this.active;
     if (!active?.room) return;
@@ -236,7 +254,13 @@ export class VoiceCallController {
   private async connect(active: ActiveCall, ticket: RoomTicket) {
     const worker = new Worker("/livekit-e2ee-worker.mjs", { type: "module" });
     const keyProvider = new ExternalE2EEKeyProvider();
-    const room = new Room({ encryption: { keyProvider, worker } });
+    const audioInputDeviceId = this.options.getAudioInputDeviceId();
+    const audioOutputDeviceId = this.options.getAudioOutputDeviceId();
+    const room = new Room({
+      encryption: { keyProvider, worker },
+      ...(audioInputDeviceId ? { audioCaptureDefaults: { deviceId: audioInputDeviceId } } : {}),
+      ...(audioOutputDeviceId ? { audioOutput: { deviceId: audioOutputDeviceId } } : {}),
+    });
     active.room = room;
     active.worker = worker;
     room.on(RoomEvent.ParticipantConnected, () => {
@@ -254,12 +278,13 @@ export class VoiceCallController {
     room.on(RoomEvent.Reconnected, () => this.emitStateIfActive(active));
     room.on(RoomEvent.TrackSubscribed, (track) => {
       if (track.kind !== Track.Kind.Audio || !this.isActive(active)) return;
-      const element = track.attach();
+      const element = document.createElement("audio");
       element.autoplay = true;
       element.muted = active.deafened;
       element.setAttribute("playsinline", "");
       element.dataset.voiceCallAudio = "true";
       this.options.audioOutput.append(element);
+      track.attach(element);
     });
     room.on(RoomEvent.TrackUnsubscribed, (track) => {
       for (const element of track.detach()) element.remove();

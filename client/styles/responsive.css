@@ -1,5 +1,6 @@
 @media (max-width: 1120px) {
   .chat-main { grid-template-columns: minmax(0, 1fr); }
+  .chat-main .voice-call-dock:not([data-mode="room"]) { left: 50%; }
   .details-panel { position: absolute; z-index: 6; top: 58px; right: 0; bottom: 0; display: none; width: min(280px, 86vw); box-shadow: -12px 0 28px rgba(0, 0, 0, 0.25); }
   .chat-layout.details-open .details-panel { display: block; }
   .details-close { display: grid; }
@@ -17,12 +18,42 @@
   .workspace-rail { display: none; }
   .chat-header { padding: 0 0.8rem; }
   .chat-actions .icon-button:nth-child(-n+2) { display: grid; }
-  .voice-call-dialog[open] { right: 0.6rem; bottom: calc(0.6rem + env(safe-area-inset-bottom)); width: min(380px, calc(100vw - 1.2rem)); max-height: 68dvh; }
+  .chat-main .voice-call-dock:not([data-mode="room"]) { left: 50%; bottom: calc(0.6rem + env(safe-area-inset-bottom)); gap: 0.4rem; max-width: calc(100% - 1rem); padding: 0.35rem 0.4rem; }
+  .chat-main .voice-call-dock[data-mode="room"] { left: 0.5rem; bottom: calc(0.6rem + env(safe-area-inset-bottom)); width: min(360px, calc(100% - 1rem)); gap: 0.3rem; padding: 0.3rem 0.4rem; }
+  .voice-dock-status-icon { flex-basis: 30px; width: 30px; height: 30px; }
+  .voice-dock-copy { max-width: 105px; }
+  .voice-dock-copy > span { max-width: 105px; }
+  .voice-dock-actions { gap: 0.18rem; padding-left: 0.35rem; }
+  .voice-dock-button, .voice-device-picker { flex-basis: 34px; width: 34px; height: 34px; border-radius: 10px; }
+  .voice-dock-button svg { width: 17px; height: 17px; }
+  .voice-device-picker-icons svg { width: 16px; height: 16px; }
+  .voice-device-picker-icons .voice-device-picker-chevron { width: 9px; height: 9px; }
+  .voice-room-panel { gap: 0.75rem; padding: 0.85rem; }
+  .voice-room-panel-heading { gap: 0.6rem; }
+  .voice-room-panel-icon { flex-basis: 40px; width: 40px; height: 40px; border-radius: 12px; }
+  .voice-room-live-indicator { padding: 0.35rem 0.48rem; font-size: 0.55rem; }
+  .voice-room-participant-grid { grid-template-columns: repeat(auto-fit, minmax(min(145px, 100%), 1fr)); gap: 0.55rem; min-height: 220px; }
+  .voice-room-participant-tile { min-height: 170px; padding: 0.7rem 0.45rem; }
+  .voice-room-tile-avatar { width: 72px; height: 72px; }
+  .voice-room-join-row { flex-direction: column; gap: 0.45rem; }
+  .voice-room-join-row > button { width: min(100%, 300px); }
+  .voice-room-panel-status { max-width: 100%; }
   .chat-moderation-notices { padding: 0.45rem 0.55rem; }
   .chat-moderation-notice { align-items: flex-start; flex-direction: column; gap: 0.55rem; padding: 0.6rem; }
   .chat-moderation-notice > button { align-self: flex-end; }
   .messages { padding: 0.8rem 0.55rem 1rem; }
   .composer { margin: 0 0.55rem 0.65rem; }
+}
+
+@media (max-width: 360px) {
+  .chat-main .voice-call-dock:not([data-mode="room"]) { gap: 0.3rem; padding: 0.3rem; }
+  .chat-main .voice-call-dock[data-mode="room"] { gap: 0.2rem; padding: 0.25rem 0.3rem; }
+  .voice-dock-status-icon { flex-basis: 26px; width: 26px; height: 26px; }
+  .voice-dock-summary { gap: 0.25rem; }
+  .voice-dock-copy { max-width: 50px; }
+  .voice-call-dock:not([data-mode="room"]) .voice-dock-copy > span { display: none; }
+  .voice-dock-actions { gap: 0.08rem; padding-left: 0.25rem; }
+  .voice-dock-button, .voice-device-picker { flex-basis: 30px; width: 30px; height: 30px; border-radius: 9px; }
 }
 
 @media (max-width: 700px) {

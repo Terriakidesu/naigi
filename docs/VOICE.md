@@ -9,8 +9,17 @@ separate service; Naigi does not use a hosted voice provider.
 After the host configures LiveKit, a space owner or member with channel-creation permission can open
 **Space Settings → Rooms**, choose **Voice** as the room type, enter a name, and add the room. Select
 the voice room and choose **Join voice room**. Other members with access can join the same room from
-their browser. A non-blocking in-call dock keeps the rest of Naigi usable and shows the current roster;
-controls can mute your microphone, deafen incoming room audio, or leave. Microphone permission is required.
+their browser. While connected, a compact account strip appears at the bottom-left of the active room
+view with your profile and voice status, microphone/output selection, mute, deafen, leave, and account
+settings controls. Direct-call controls remain in their matching conversation. Microphone permission is
+required.
+The room view shows participant tiles and highlights the active speaker. If your browser blocks incoming
+audio autoplay, choose **Enable audio**; the room status also reports microphone publication, remote audio,
+and playback or encryption problems.
+
+Use the microphone and speaker dropdowns in the in-call dock to choose input and output devices. The
+device names are read from your browser and are not sent to Naigi or LiveKit. Some browsers do not allow
+websites to select an audio output device; in that case, change the output in your operating system.
 
 Voice-room capacity is not capped by Naigi to a fixed participant count. LiveKit's deployment
 configuration, host resources, and network determine how many participants can connect. Direct
@@ -22,6 +31,9 @@ Deploy LiveKit on infrastructure you control and configure a trusted HTTPS/WSS e
 clients. Open the media and TURN ports required by your LiveKit deployment and network topology;
 consult the [LiveKit self-hosting documentation](https://docs.livekit.io/transport/self-hosting/).
 The Naigi server must also be able to reach the LiveKit HTTP API at the configured endpoint.
+Users must open Naigi over HTTPS from a trusted certificate. Plain HTTP on a remote LAN IP (for
+example, `http://192.168.x.x:3001`) is not a secure browser context, so browsers block microphone
+access and the encrypted-media worker. `http://localhost` is only suitable on the same device.
 
 Create a dedicated LiveKit API key and secret, then set all three variables in Naigi's `.env`:
 

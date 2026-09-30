@@ -66,6 +66,26 @@ describe("voice-room signaling", () => {
     }, 10_000)).toBeUndefined();
   });
 
+  it("accepts encrypted roster requests and participant departures", () => {
+    expect(parseVoiceRoomSignal({
+      version: 1,
+      kind: "naigi.voice.room",
+      senderInstanceId,
+      channelId,
+      action: "roster-request",
+      expiresAt: 60_000,
+    }, 10_000)?.action).toBe("roster-request");
+    expect(parseVoiceRoomSignal({
+      version: 1,
+      kind: "naigi.voice.room",
+      senderInstanceId,
+      channelId,
+      action: "participant-left",
+      participantIdentity,
+      expiresAt: 60_000,
+    }, 10_000)?.action).toBe("participant-left");
+  });
+
   it("rejects malformed, unknown, and expired room signals", () => {
     const signal = {
       version: 1,

@@ -3,7 +3,7 @@ export type VoiceRoomSignalBody = {
   kind: "naigi.voice.room";
   senderInstanceId: string;
   channelId: string;
-  action: "join-request" | "room-open" | "room-key" | "participant-presence";
+  action: "join-request" | "room-open" | "room-key" | "participant-presence" | "participant-left" | "roster-request";
   requestId?: string;
   sessionId?: string;
   mediaKey?: string;
@@ -70,13 +70,24 @@ export function parseVoiceRoomSignal(value: unknown, now = Date.now()): VoiceRoo
     };
   }
 
-  if (signal.action === "participant-presence" && isUuid(signal.participantIdentity)) {
+  if (signal.action === "roster-request") {
     return {
       version: 1,
       kind: "naigi.voice.room",
       senderInstanceId: signal.senderInstanceId,
       channelId: signal.channelId,
-      action: "participant-presence",
+      action: "roster-request",
+      expiresAt: signal.expiresAt as number,
+    };
+  }
+
+  if ((signal.action === "participant-presence" || signal.action === "participant-left") && isUuid(signal.participantIdentity)) {
+    return {
+      version: 1,
+      kind: "naigi.voice.room",
+      senderInstanceId: signal.senderInstanceId,
+      channelId: signal.channelId,
+      action: signal.action,
       participantIdentity: signal.participantIdentity,
       expiresAt: signal.expiresAt as number,
     };

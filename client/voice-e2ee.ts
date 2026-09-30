@@ -1,5 +1,11 @@
 import { RoomEvent, type Participant, type Room } from "livekit-client";
 
+export function assertVoiceSecureContext() {
+  if (typeof window !== "undefined" && !window.isSecureContext) {
+    throw new Error("voice_secure_context_required");
+  }
+}
+
 export function waitForLocalVoiceEncryption(room: Room, timeoutMs = 5_000) {
   if (room.isE2EEEnabled) return Promise.resolve();
 

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- Voice calls and rooms let participants choose their microphone and audio output from the in-call dock.
+
+### Changed
+
+- Voice rooms now use an audio-first participant stage with live speaker activity and show connected members under the active voice channel.
+- Voice-room microphone controls live in the left sidebar footer only while viewing the active room; direct-call controls stay in their matching conversation.
+
+### Fixed
+
+- Voice rooms verify microphone publication, surface encrypted-audio subscription and playback failures, and provide an explicit browser audio-unlock action.
+- Voice-room access tokens remain valid long enough for LiveKit to reconnect participants after transient interruptions.
+- Voice calls and rooms explain when a remote HTTP origin prevents secure microphone and media access.
+- Voice-room participant presence now updates the sidebar for other room members and expires cleanly after departure.
+- Voice participant tiles no longer overlap the audio-status banner when the stage overflows vertically.
+
 ## [0.22.0] - 2026-09-30
 
 ### Added

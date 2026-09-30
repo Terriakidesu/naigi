@@ -5495,7 +5495,7 @@ export function createApp() {
         failureStage = "sign_token";
         const accessToken = new AccessToken(config.liveKit.apiKey, config.liveKit.apiSecret, {
           identity: crypto.randomUUID(),
-          ttl: "1m",
+          ttl: "10m",
         });
         accessToken.addGrant({
           roomJoin: true,
