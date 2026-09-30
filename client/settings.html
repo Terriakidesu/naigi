@@ -35,17 +35,13 @@
             </div>
             <div class="settings-nav-group">
               <p class="eyebrow settings-nav-group-title">PREFERENCES</p>
-              <a class="settings-nav-item" data-settings-tab data-title="App preferences" data-description="Appearance, notifications, and chat behavior." href="#app"><i data-lucide="sliders-horizontal"></i><span>App preferences</span></a>
+              <a class="settings-nav-item" data-settings-tab data-title="Appearance" data-description="Themes, colors, and custom presets." href="#appearance"><i data-lucide="sliders-horizontal"></i><span>Appearance</span></a>
+              <a class="settings-nav-item" data-settings-tab data-title="Accessibility" data-description="Interface scale, text size, and reduced motion." href="#accessibility"><i data-lucide="zoom-in"></i><span>Accessibility</span></a>
+              <a class="settings-nav-item" data-settings-tab data-title="Chat & media" data-description="Message behavior and media previews." href="#chat-media"><i data-lucide="message-square"></i><span>Chat &amp; media</span></a>
+              <a class="settings-nav-item" data-settings-tab data-title="Notifications" data-description="Desktop alerts, sounds, and quiet hours." href="#notifications"><i data-lucide="bell"></i><span>Notifications</span></a>
               <a class="settings-nav-item" data-settings-tab data-title="Voice & audio" data-description="Microphone, playback, push-to-talk, and audio devices." href="#audio"><i data-lucide="headphones"></i><span>Voice &amp; audio</span></a>
             </div>
           </nav>
-          <div class="sidebar-user settings-sidebar-user">
-            <a class="self-profile-button" href="/app" title="Back to chat">
-              <span class="user-avatar" aria-hidden="true">N</span>
-              <span class="user-copy"><strong>Naigi account</strong><span>Back to encrypted chat</span></span>
-            </a>
-            <button id="logout-button" class="icon-button" type="button" title="Sign out" aria-label="Sign out"><i data-lucide="log-out"></i></button>
-          </div>
         </aside>
         <button id="settings-mobile-sidebar-backdrop" class="mobile-sidebar-backdrop" type="button" aria-label="Close settings navigation"></button>
 
@@ -57,7 +53,7 @@
               <div class="channel-copy"><h2 id="settings-page-title">Profile</h2><span id="settings-page-description" class="channel-subtitle">Manage your name, avatar, and banner.</span></div>
             </div>
             <div class="chat-actions">
-              <a class="icon-button" href="/app" title="Back to chat" aria-label="Back to chat"><i data-lucide="message-square"></i></a>
+              <a class="icon-button settings-close-button" href="/app" title="Close settings (Esc)" aria-label="Close settings and return to chat" aria-keyshortcuts="Escape"><i data-lucide="x"></i></a>
             </div>
           </header>
           <div class="settings-main-content">
@@ -110,8 +106,12 @@
              <label for="current-password">Current password<input id="current-password" type="password" autocomplete="current-password" required minlength="12"></label>
              <label for="new-password">New password<input id="new-password" type="password" autocomplete="new-password" required minlength="12"></label>
              <label for="confirm-password">Confirm new password<input id="confirm-password" type="password" autocomplete="new-password" required minlength="12"></label>
-             <button type="submit">Change password</button>
-           </form>
+              <button type="submit">Change password</button>
+            </form>
+            <div class="settings-block">
+              <div class="settings-block-heading"><div><h2>Sign out of this browser</h2><p>End your account session on this browser.</p></div></div>
+              <button id="logout-button" class="danger-button" type="button"><i data-lucide="log-out" aria-hidden="true"></i> Sign out</button>
+            </div>
          </section>
           <section id="devices" class="settings-section" data-settings-view hidden>
            <p class="eyebrow">SECURITY</p>
@@ -131,10 +131,47 @@
           </section>
            <section id="recovery" class="settings-section" data-settings-view hidden>
              <p class="eyebrow">RECOVERY</p>
-             <h1>Encrypted room-key backup</h1>
-            <p class="muted">Export an encrypted copy of this browser’s room keys for safekeeping or import one on another browser. The recovery passphrase is used only in this page and is never uploaded or remembered.</p>
+              <h1>Bring your history to another device</h1>
+              <p class="muted">Approve a new device from one that already has your history, or restore an encrypted backup with your recovery key. Your account password alone cannot unlock history.</p>
+              <label class="history-unlock-field" for="recovery-local-passphrase">Unlock this browser first<input id="recovery-local-passphrase" type="password" autocomplete="off" placeholder="Local encryption passphrase"></label>
+              <div class="history-recovery-grid">
+                <section class="history-recovery-card">
+                  <h2>Approve from another device</h2>
+                  <p class="muted small">On the new device, request approval. On your existing device, scan the QR or open the link and compare codes.</p>
+                  <button id="history-request-device" type="button">Request device approval</button>
+                  <div id="history-pairing-panel" hidden>
+                    <canvas id="history-pairing-qr" aria-label="Device approval QR code"></canvas>
+                    <p>Verification code: <strong id="history-pairing-code"></strong></p>
+                    <label>Approval link<textarea id="history-pairing-link" readonly spellcheck="false" aria-label="Device approval link"></textarea></label>
+                    <p class="muted small">Keep this link private. It expires after 10 minutes. Both devices must use the same account.</p>
+                    <button id="history-cancel-device" class="secondary" type="button">Cancel request</button>
+                  </div>
+                  <label>On your trusted device<input id="history-approval-link" type="password" autocomplete="off" placeholder="Paste the new device’s approval link" aria-label="Approval link to review"></label>
+                  <button id="history-review-device" class="secondary" type="button">Review approval</button>
+                  <div id="history-approval-panel" hidden>
+                    <p>Verification code: <strong id="history-approval-code"></strong></p>
+                    <label class="checkbox-label"><input id="history-device-confirm" type="checkbox">Both codes match and I control this new device</label>
+                    <button id="history-approve-device" type="button" disabled>Approve history transfer</button>
+                  </div>
+                </section>
+                <section class="history-recovery-card">
+                  <h2>Automatic encrypted backup</h2>
+                  <p id="history-backup-status" class="muted small" role="status">Checking server backup…</p>
+                  <p class="muted small">While an enabled device is unlocked, its history keys are backed up every minute. The server cannot read them. Save the recovery key in your password manager.</p>
+                  <button id="history-generate-key" type="button">Set up recovery key</button>
+                  <div id="history-generated-key-panel" hidden>
+                    <label>Your recovery key<input id="history-generated-key" type="text" readonly autocomplete="off" spellcheck="false"></label>
+                    <label class="checkbox-label"><input id="history-key-saved" type="checkbox">I saved this key somewhere safe</label>
+                    <button id="history-enable-backup" type="button" disabled>Enable encrypted backup</button>
+                  </div>
+                  <label>Restore an existing backup<input id="history-restore-key" type="password" autocomplete="off" placeholder="NCR1-…" aria-label="Recovery key to restore"></label>
+                  <div class="settings-actions"><button id="history-restore-backup" type="button">Restore history</button><button id="history-backup-now" class="secondary" type="button">Back up now</button><button id="history-delete-backup" class="danger-button" type="button">Delete server backup</button></div>
+                </section>
+              </div>
+              <p id="history-recovery-status" class="muted small" role="status" aria-live="polite"></p>
+              <details class="history-manual-backup"><summary>Manual file backup and import</summary>
+             <p class="muted small">Export an encrypted copy of this browser’s room keys for safekeeping or import one on another browser. The recovery passphrase is never uploaded or remembered.</p>
             <div class="settings-form">
-              <label for="recovery-local-passphrase">This browser’s local passphrase<input id="recovery-local-passphrase" type="password" autocomplete="off"></label>
               <label for="recovery-export-passphrase">New recovery passphrase<input id="recovery-export-passphrase" type="password" autocomplete="new-password" minlength="12"></label>
               <label for="recovery-export-confirm">Confirm recovery passphrase<input id="recovery-export-confirm" type="password" autocomplete="new-password" minlength="12"></label>
               <button id="export-recovery-button" type="button">Download recovery backup</button>
@@ -158,6 +195,7 @@
                <p class="muted">Removes cached encrypted envelopes, queued encrypted messages, local crypto keys, remembered unlock, device identity, and device-only preferences from this browser. It does not delete your account or server history.</p>
                <button id="clear-local-data-button" class="danger-button" type="button">Clear local data</button>
              </div>
+              </details>
            </section>
             <section id="blocked-users" class="settings-section" data-settings-view hidden>
               <p class="eyebrow">PRIVACY</p>
@@ -200,11 +238,11 @@
                 <p id="audio-save-status" class="muted small" role="status" aria-live="polite">Settings save automatically on this browser.</p>
               </form>
             </section>
-            <section id="app" class="settings-section" data-settings-view hidden>
-             <p class="eyebrow">APP SETTINGS</p>
-             <h1>Customize this browser</h1>
-              <p class="muted">Preferences and custom presets stay on this device. They are never uploaded or included in encrypted messages. Theme codes and files contain only validated appearance settings; files can optionally carry an embedded background image.</p>
-              <form id="app-preferences-form" class="settings-form app-preferences-form">
+              <form id="app-preferences-form" class="settings-form app-preferences-form" hidden>
+                <section id="appearance" class="settings-section" data-settings-view hidden>
+                  <p class="eyebrow">APPEARANCE</p>
+                  <h1>Make Naigi your own</h1>
+                  <p class="muted">Themes and custom presets stay on this device. Shared theme codes contain only appearance settings; files can optionally include a background image.</p>
                 <section class="settings-preference-group" aria-labelledby="appearance-heading">
                   <header class="settings-preference-heading"><h2 id="appearance-heading">Appearance</h2><p>Make Naigi feel comfortable to use.</p></header>
                   <div class="theme-choice-field">
@@ -318,6 +356,14 @@
                       </div>
                     </footer>
                   </dialog>
+                </section>
+                </section>
+                <section id="accessibility" class="settings-section" data-settings-view hidden>
+                  <p class="eyebrow">ACCESSIBILITY</p>
+                  <h1>Comfortable reading</h1>
+                  <p class="muted">Adjust scale, text size, and motion for this browser.</p>
+                  <section class="settings-preference-group" aria-label="Reading and motion">
+                  <label class="checkbox-label settings-checkbox"><input id="app-reduced-motion" type="checkbox"><span>Reduce motion</span></label>
                   <div class="settings-preference-row"><label for="app-scale">Interface scale</label><div class="app-scale-control"><div class="app-scale-range app-scale-range-interface"><input id="app-scale" type="range" min="85" max="200" step="5" value="100" aria-label="Interface scale" aria-valuetext="100%"><div class="app-scale-ticks" aria-hidden="true"><span>85%</span><span>100%</span><span>125%</span><span>150%</span><span>175%</span><span>200%</span></div></div><output id="app-scale-value" for="app-scale" aria-live="off">100%</output></div></div>
                   <div class="settings-preference-row"><label for="app-message-text-size">Message text size</label><div class="app-scale-control"><div class="app-scale-range app-scale-range-message"><input id="app-message-text-size" type="range" min="12" max="24" step="1" value="14" aria-label="Message text size" aria-valuetext="14px"><div class="app-scale-ticks" aria-hidden="true"><span>12px</span><span>14px</span><span>16px</span><span>18px</span><span>20px</span><span>22px</span><span>24px</span></div></div><output id="app-message-text-size-value" for="app-message-text-size" aria-live="off">14px</output></div></div>
                   <div id="app-message-size-preview" class="message-size-preview" role="group" aria-label="Chat preview">
@@ -331,14 +377,21 @@
                     </div>
                   </div>
                 </section>
+                </section>
+                <section id="chat-media" class="settings-section" data-settings-view hidden>
+                  <p class="eyebrow">CHAT &amp; MEDIA</p>
+                  <h1>Messages and previews</h1>
                 <section class="settings-preference-group" aria-labelledby="chat-behavior-heading">
                   <header class="settings-preference-heading"><h2 id="chat-behavior-heading">Chat and media</h2><p>Choose what loads and how messages behave.</p></header>
                   <label class="checkbox-label settings-checkbox"><input id="app-auto-load-media" type="checkbox"><span>Automatically load encrypted images and videos<small>Spoiler previews stay blurred until revealed.</small></span></label>
                   <label class="checkbox-label settings-checkbox"><input id="app-external-previews" type="checkbox"><span>Load external link and GIF previews</span></label>
                   <label class="checkbox-label settings-checkbox"><input id="app-enter-to-send" type="checkbox"><span>Enter sends messages <small>Shift + Enter adds a new line</small></span></label>
                   <label class="checkbox-label settings-checkbox"><input id="app-compact-messages" type="checkbox"><span>Compact message spacing</span></label>
-                  <label class="checkbox-label settings-checkbox"><input id="app-reduced-motion" type="checkbox"><span>Reduce motion</span></label>
                 </section>
+                </section>
+                <section id="notifications" class="settings-section" data-settings-view hidden>
+                  <p class="eyebrow">NOTIFICATIONS</p>
+                  <h1>Alerts on your terms</h1>
                 <section class="settings-preference-group" aria-labelledby="notifications-heading">
                   <header class="settings-preference-heading"><h2 id="notifications-heading">Notifications</h2><p>Control when this browser alerts you.</p></header>
                   <label class="checkbox-label settings-checkbox"><input id="app-sounds" type="checkbox"><span>Notification sounds</span></label>
@@ -347,6 +400,7 @@
                   <label class="checkbox-label settings-checkbox"><input id="app-quiet-hours-enabled" type="checkbox"><span>Enable quiet hours<small>Suppress desktop notifications and sounds during the selected local-time window.</small></span></label>
                   <div class="app-quiet-hours"><label for="app-quiet-hours-start">From<input id="app-quiet-hours-start" type="time" value="22:00"></label><label for="app-quiet-hours-end">Until<input id="app-quiet-hours-end" type="time" value="08:00"></label></div>
                 </section>
+                </section>
                 <div class="settings-form-actions app-preferences-actions">
                   <span id="app-preferences-status" class="settings-form-state" role="status" aria-live="polite">No unsaved changes</span>
                   <div>
@@ -354,8 +408,7 @@
                     <button id="save-app-preferences-button" type="submit" disabled>Save preferences</button>
                   </div>
                 </div>
-             </form>
-          </section>
+              </form>
         <p id="settings-status" class="form-status" role="status"></p>
             </section>
           </div>

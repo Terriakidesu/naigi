@@ -29,6 +29,7 @@ import { disableFcmPush, synchronizeFcmPush } from "./push-notifications";
 import { cachedMessageCacheStats, clearCachedMessages } from "./message-cache";
 import { setupProfileSettings } from "./profile-settings";
 import { setupVoiceAudioSettings } from "./voice-audio-settings";
+import { setupHistoryRecovery } from "./history-recovery-settings";
 import { clearSessionPassphrase, forgetRememberedPassphrase, lockLocalSession } from "./unlock-vault";
 
 type Device = {
@@ -238,7 +239,7 @@ function renderDevices(devices: Device[]) {
 }
 
 function currentSettingsHash() {
-  const requestedHash = window.location.hash || "#profile";
+  const requestedHash = window.location.hash === "#app" ? "#appearance" : window.location.hash || "#profile";
   const views = [...document.querySelectorAll<HTMLElement>("[data-settings-view]")];
   return views.some((view) => `#${view.id}` === requestedHash) ? requestedHash : "#profile";
 }
@@ -247,6 +248,7 @@ let lastSettingsHash = currentSettingsHash();
 
 function syncSettingsNav() {
   const hash = currentSettingsHash();
+  appPreferencesForm.hidden = !["#appearance", "#accessibility", "#chat-media", "#notifications"].includes(hash);
   const views = [...document.querySelectorAll<HTMLElement>("[data-settings-view]")];
   for (const view of views) view.hidden = `#${view.id}` !== hash;
   let activeLink: HTMLAnchorElement | undefined;
@@ -267,7 +269,7 @@ for (const link of document.querySelectorAll<HTMLAnchorElement>(".settings-nav-i
   link.addEventListener("click", (event: MouseEvent) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const targetHash = link.hash;
-    if (currentSettingsHash() === "#app" && targetHash !== "#app" && appPreferencesAreDirty()) {
+    if (currentSettingsHash() !== targetHash && appPreferencesAreDirty()) {
       event.preventDefault();
       void (async () => {
         if (!await resolveAppPreferencesBeforeLeave()) return;
@@ -283,7 +285,7 @@ for (const link of document.querySelectorAll<HTMLAnchorElement>(".settings-nav-i
 window.addEventListener("hashchange", () => {
   const nextHash = currentSettingsHash();
   const previousHash = lastSettingsHash;
-  if (previousHash === "#app" && nextHash !== "#app" && appPreferencesAreDirty()) {
+  if (previousHash !== nextHash && appPreferencesAreDirty()) {
     void (async () => {
       if (!await resolveAppPreferencesBeforeLeave()) {
         window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}${previousHash}`);
@@ -299,6 +301,21 @@ window.addEventListener("hashchange", () => {
   syncSettingsNav();
 });
 syncSettingsNav();
+for (const link of document.querySelectorAll<HTMLAnchorElement>('a[href="/app"]')) {
+  link.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || !appPreferencesAreDirty()) return;
+    event.preventDefault();
+    void resolveAppPreferencesBeforeLeave().then((leave) => {
+      if (leave) window.location.assign(link.href);
+    }).catch((error) => setStatus(error instanceof Error ? error.message : "Unable to close settings."));
+  });
+}
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || event.defaultPrevented || event.repeat || event.isComposing
+    || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || document.querySelector("dialog[open]")) return;
+  event.preventDefault();
+  document.querySelector<HTMLAnchorElement>(".settings-close-button")?.click();
+});
 mobileSidebarToggle.addEventListener("click", () => {
   setMobileSidebar(!settingsLayout.classList.contains("mobile-sidebar-open"), true);
 });
@@ -1180,11 +1197,11 @@ function promptToLeaveAppPreferences(): Promise<LeavePreferencesChoice> {
     const dialog = document.createElement("dialog");
     dialog.className = "app-dialog app-preferences-leave-dialog";
     const title = document.createElement("h2");
-    title.textContent = "Unsaved app preferences";
+    title.textContent = "Unsaved changes";
     title.id = "app-preferences-leave-title";
     const description = document.createElement("p");
     description.className = "muted";
-    description.textContent = "Save your changes before leaving App preferences, discard them, or stay here to keep editing.";
+    description.textContent = "Save your preference changes before leaving, discard them, or stay here to keep editing.";
     description.id = "app-preferences-leave-description";
     dialog.setAttribute("aria-labelledby", title.id);
     dialog.setAttribute("aria-describedby", description.id);
@@ -1347,6 +1364,7 @@ async function boot() {
     const result = await api.me();
     currentUserId = result.user.id;
     setupVoiceAudioSettings(currentUserId);
+    setupHistoryRecovery(api, ensureRecoveryCrypto);
     const preferences = loadAppPreferences(currentUserId);
     appPreferencesLoaded = true;
     renderAppPreferences(preferences);

@@ -56,6 +56,7 @@
 .settings-main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; background: var(--bg); }
 .settings-header { flex: 0 0 58px; }
 .settings-header h2 { max-width: 42vw; }
+.settings-close-button { color: var(--text-muted); }
 .settings-main-content { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 0 clamp(1.25rem, 4vw, 4rem) 2rem; scrollbar-color: #24343b transparent; }
 .settings-content { display: grid; gap: 1rem; min-width: 0; }
 .settings-main-content > .settings-content { width: min(920px, 100%); margin: 0 auto; }
@@ -585,6 +586,7 @@
 .settings-view { display: grid; gap: 1rem; min-width: 0; }
 .settings-content > .form-status, .server-settings-content > .form-status { position: fixed; z-index: 10; right: 1rem; bottom: 1rem; max-width: min(420px, calc(100vw - 2rem)); margin: 0; padding: 0.7rem 1rem; border: 1px solid var(--line-soft); border-radius: 8px; color: var(--text); background: var(--bg-elevated); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3); }
 .settings-content > .form-status:empty, .server-settings-content > .form-status:empty { display: none; }
+.account-settings-page #settings-status { position: static; max-width: none; box-shadow: none; margin-top: 0.8rem; }
 .settings-content > .form-status.error, .server-settings-content > .form-status.error { border-color: var(--danger); color: var(--danger-text); }
 .danger-zone { border-color: rgba(242, 63, 66, 0.45); }
 .danger-zone h2 { margin: 0 0 0.45rem; font-size: 1rem; }
@@ -1459,3 +1461,37 @@ html[data-admin-theme="dark"] .instance-admin-page {
   .instance-operator-state { grid-column: 2; grid-row: 2; }
   .instance-operator-row > button { grid-column: 2; grid-row: 1; }
 }
+.create-room-dialog { width: min(440px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); margin: auto; padding: 1.2rem; overflow: auto; border: 1px solid var(--line-soft); border-radius: 12px; color: var(--text); background: var(--bg-elevated); box-shadow: 0 18px 60px #0006; }
+.create-room-dialog::backdrop { background: #0008; }
+.create-room-dialog form { display: grid; gap: 0.85rem; }
+.create-room-dialog header h2 { margin: 0; font-size: 1.1rem; }
+.create-room-dialog header p { margin: 0.25rem 0 0; color: var(--text-muted); font-size: 0.75rem; }
+.create-room-types { display: grid; gap: 0.5rem; min-width: 0; margin: 0; padding: 0; border: 0; }
+.create-room-types legend { margin-bottom: 0.4rem; font-size: 0.72rem; font-weight: 650; }
+.create-room-types label { display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem; border: 1px solid var(--line-soft); border-radius: 7px; cursor: pointer; }
+.create-room-types label:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+.create-room-types svg { width: 20px; height: 20px; color: var(--text-muted); }
+.create-room-types label > span { display: grid; gap: 0.2rem; }
+.create-room-types strong { font-size: 0.8rem; }
+.create-room-types small { color: var(--text-muted); font-size: 0.7rem; }
+.create-room-field { display: grid; gap: 0.4rem; font-size: 0.72rem; font-weight: 650; }
+.create-room-field input, .create-room-field select { min-height: 38px; padding: 0.5rem 0.65rem; font-size: 0.78rem; }
+.create-room-note, .create-room-status { margin: 0; color: var(--text-muted); font-size: 0.68rem; line-height: 1.45; }
+.create-room-status:empty { display: none; }
+.create-room-dialog footer { display: flex; justify-content: flex-end; gap: 0.5rem; padding-top: 0.8rem; border-top: 1px solid var(--line-soft); }
+.create-room-dialog footer button { min-height: 36px; padding: 0.5rem 0.8rem; font-size: 0.75rem; }
+.history-unlock-field { display: grid; gap: 0.4rem; max-width: 420px; margin: 1rem 0; font-size: 0.75rem; }
+.history-recovery-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.history-recovery-card { display: grid; align-content: start; gap: 0.65rem; min-width: 0; padding: 1rem; border: 1px solid var(--line-soft); border-radius: 9px; }
+.history-recovery-card > p { margin: 0; }
+.history-recovery-card label { display: grid; gap: 0.4rem; font-size: 0.72rem; }
+.history-recovery-card .checkbox-label { display: flex; align-items: flex-start; }
+.history-recovery-card button { justify-self: start; font-size: 0.72rem; padding: 0.5rem 0.7rem; }
+.history-recovery-card input, .history-recovery-card textarea { min-width: 0; font-size: 0.75rem; }
+.history-recovery-card textarea { min-height: 80px; resize: vertical; overflow-wrap: anywhere; }
+.history-recovery-card canvas { display: block; max-width: 100%; margin: 0.5rem 0; }
+.history-recovery-card [hidden] { display: none; }
+.history-recovery-card strong { font-family: ui-monospace, monospace; }
+.history-manual-backup { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line-soft); }
+.history-manual-backup > summary { cursor: pointer; color: var(--text-muted); font-size: 0.78rem; }
+@media (max-width: 900px) { .history-recovery-grid { grid-template-columns: 1fr; } }

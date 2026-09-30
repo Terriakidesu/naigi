@@ -358,6 +358,7 @@ try {
   await a.goto(`${origin}/settings#recovery`);
   await a.locator("#recovery").waitFor({ state: "visible", timeout: 20_000 });
   await a.locator("#recovery-local-passphrase").fill("Independent-local-vault-passphrase!");
+  await a.locator(".history-manual-backup > summary").click();
   await a.locator("#recovery-export-passphrase").fill("Recovery-passphrase-for-e2e-test!");
   await a.locator("#recovery-export-confirm").fill("Recovery-passphrase-for-e2e-test!");
   const recoveryDownloadPromise = a.waitForEvent("download");
@@ -680,8 +681,8 @@ try {
   assert.equal(await fullTextViewer.evaluate((text) => getComputedStyle(text).whiteSpace), "pre-wrap");
   await b.locator("#media-viewer-close").click();
   const bobChatUrl = b.url();
-  await b.goto(`${origin}/settings#app`);
-  assert.equal(await b.locator("#settings-page-title").textContent(), "App preferences");
+  await b.goto(`${origin}/settings#accessibility`);
+  assert.equal(await b.locator("#settings-page-title").textContent(), "Accessibility");
   assert.equal(await b.locator("#save-app-preferences-button").isDisabled(), true, "app preference save is disabled without edits");
   assert.deepEqual(await b.locator(".app-scale-range-interface .app-scale-ticks span").allTextContents(), ["85%", "100%", "125%", "150%", "175%", "200%"]);
   assert.deepEqual(await b.locator(".app-scale-range-message .app-scale-ticks span").allTextContents(), ["12px", "14px", "16px", "18px", "20px", "22px", "24px"]);
@@ -701,13 +702,17 @@ try {
     slider.dispatchEvent(new Event("input", { bubbles: true }));
   });
   assert.equal(await b.locator("#app-message-text-size-value").textContent(), "18px");
+  await b.locator('a[href="#chat-media"]').click();
+  await b.locator(".app-preferences-leave-dialog").getByRole("button", { name: "Save changes" }).click();
   await b.locator("#app-auto-load-media").uncheck();
+  await b.locator('a[href="#notifications"]').click();
+  await b.locator(".app-preferences-leave-dialog").getByRole("button", { name: "Save changes" }).click();
   await b.locator("#app-notification-mode").selectOption("off");
   await b.locator("#app-quiet-hours-enabled").check();
   await b.locator("#app-quiet-hours-start").fill("23:00");
   await b.locator("#app-quiet-hours-end").fill("07:00");
   await b.locator("#app-preferences-form button[type=submit]").click();
-  await b.locator("#settings-status").filter({ hasText: "App settings saved on this browser." }).waitFor({ timeout: 20_000 });
+  await b.locator("#app-preferences-status").filter({ hasText: "Changes saved on this browser." }).waitFor({ timeout: 20_000 });
   assert.equal(await b.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--message-text-size").trim()), "18px");
   await b.goto(bobChatUrl);
   const spoilerImageBytes = await a.evaluate(async () => {

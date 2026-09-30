@@ -14,6 +14,30 @@ function createDialog(title: string, description: string) {
 
 let externalDialogId = 0;
 
+export function promptUnsavedChanges() {
+  return new Promise<"save" | "discard" | "stay">((resolve) => {
+    const dialog = createDialog("Unsaved changes", "Save your changes before leaving, discard them, or stay here to keep editing.");
+    const heading = dialog.querySelector("h2")!;
+    heading.id = `unsaved-changes-title-${++externalDialogId}`;
+    dialog.setAttribute("aria-labelledby", heading.id);
+    const actions = document.createElement("div");
+    actions.className = "app-dialog-actions";
+    let choice: "save" | "discard" | "stay" = "stay";
+    for (const [value, label] of [["stay", "Stay here"], ["discard", "Discard changes"], ["save", "Save changes"]] as const) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      if (value !== "save") button.className = "secondary";
+      button.addEventListener("click", () => { choice = value; dialog.close(); });
+      actions.append(button);
+    }
+    dialog.append(actions);
+    dialog.addEventListener("close", () => resolve(choice), { once: true });
+    dialog.showModal();
+    actions.querySelector("button")!.focus();
+  });
+}
+
 export function confirmExternalUrl(url: URL, mode: "link" | "media" = "link") {
   return new Promise<boolean>((resolve) => {
     const dialog = createDialog(

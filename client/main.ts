@@ -36,6 +36,8 @@ import type { EmojiCategory } from "./emoji-data";
 import { appendMarkdown } from "./markdown";
 import { formatMessageMacrosAsText, freezeNowMessageMacros, refreshRelativeTimeMacros } from "./message-macros";
 import { roomDropUpdates } from "./room-order";
+import { resolveRoomMessageLink, type RoomMessageReference } from "./room-message-link";
+import { showCreateRoomDialog } from "./create-room-dialog";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { VoiceCallController, type VoiceCallView } from "./voice-calls";
 import type { VoiceSignalBody } from "./voice-protocol";
@@ -1660,7 +1662,9 @@ function openNavigationContextMenu(target: { kind: "channel"; channel: ServerCha
       else collapsedCategories.add(target.category.id);
       renderChannels();
     }, { icon: collapsed ? "chevron-down" : "chevron-right" });
-    navigationContextAction("Create room in category", () => void createChannel(target.category.id), { icon: "plus" });
+    if (hasActiveServerPermission("manage_channels") || hasActiveServerPermission("create_channels")) {
+      navigationContextAction("Create room in category", () => void createChannel(target.category.id), { icon: "plus" });
+    }
     if (selectedServerId && (hasActiveServerPermission("manage_channels") || hasActiveServerPermission("manage_categories"))) {
       navigationContextAction("Category settings", () => window.location.assign(`/server-settings?server=${encodeURIComponent(target.category.serverId)}#rooms`), { icon: "settings-2" });
     }
@@ -1854,10 +1858,12 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
     mentionRoleNames,
     customEmoji: customEmojiAssets,
     roomReferences: roomReferenceMap(),
+    resolveMessageLink: currentSpaceMessageLink,
+    onMessageReference: (reference) => void openRoomMessageReference(reference),
     hideBareLinks: embeddedImageLinks(embeds),
     onRoomReference: (channelId) => void selectChannel(channelId),
   });
-  for (const embed of embeds) appendSafeEmbed(content, embed, openExternalImageViewer);
+  for (const embed of embeds) if (!currentSpaceMessageLink(embed.url)) appendSafeEmbed(content, embed, openExternalImageViewer);
   article.classList.toggle("message-emoji-only", isEmojiOnlyMessage(body, customEmojiAssets));
   if (reply) article.insertBefore(reply, article.querySelector(".message-avatar") ?? content);
   const editable = isOwnMessage(message);
@@ -4047,6 +4053,19 @@ function roomReferenceMap() {
   return references;
 }
 
+function currentSpaceMessageLink(url: string) {
+  return resolveRoomMessageLink(url, window.location.origin, selectedServerId,
+    channels.map((channel) => ({ id: channel.id, name: channelDisplayName(channel), kind: channel.kind })));
+}
+
+async function openRoomMessageReference(reference: RoomMessageReference) {
+  window.history.pushState(null, "", reference.href);
+  try {
+    if (selectedChannelId === reference.channelId) await scrollToMessage(reference.messageId);
+    else await selectChannel(reference.channelId);
+  } catch (error) { setStatus(readableError(error), true); }
+}
+
 function categoryDisplayName(category: ServerCategory) {
   const index = categories.findIndex((item) => item.id === category.id);
   return categoryLabels.get(category.id) || `Category ${index + 1}`;
@@ -4114,15 +4133,6 @@ function renderServers() {
   workspaceSubtitle.textContent = activeServer?.deactivatedAt
     ? "Space deactivated"
     : selectedServerId ? "Private encrypted space" : "Encrypted home";
-  const canManageChannels = Boolean(activeServer && (
-    activeServer.permissions.manage_channels
-    || activeServer.permissions.create_channels
-    || activeServer.permissions.edit_channels
-    || activeServer.permissions.reorder_channels
-    || activeServer.permissions.archive_channels
-    || activeServer.permissions.manage_categories
-    || activeServer.permissions.manage_channel_access
-  ));
   const canManageInvites = Boolean(activeServer && (
     activeServer.permissions.manage_invites || activeServer.permissions.create_invites
   ));
@@ -4160,7 +4170,7 @@ function renderServers() {
     || activeServer.permissions.manage_custom_emoji
     || activeServer.permissions.view_audit_logs
   ));
-  createChannelButton.hidden = !canManageChannels;
+  createChannelButton.hidden = !activeServer || !(activeServer.permissions.manage_channels || activeServer.permissions.create_channels);
   serverInviteButton.hidden = !canManageInvites;
   serverSettingsButton.hidden = !canManageSettings;
   if (activeServer) serverSettingsButton.href = `/server-settings?server=${encodeURIComponent(activeServer.id)}`;
@@ -5990,8 +6000,13 @@ function appendUnavailableMessage(messageId: string) {
     const heading = document.createElement("strong");
     heading.className = "unavailable-history-title";
     const explanation = document.createElement("p");
-    explanation.textContent = "These messages are still encrypted, but this browser doesn't have the keys to read them. Your passphrase can't restore missing keys. Try the browser you used before.";
-    copy.append(heading, explanation);
+    explanation.textContent = "This browser is missing the history keys. Approve it from an existing device or restore your encrypted backup with its recovery key.";
+    const restore = document.createElement("a");
+    restore.href = "/settings#recovery";
+    restore.target = "_blank";
+    restore.rel = "noopener";
+    restore.textContent = "Restore history";
+    copy.append(heading, explanation, restore);
     notice.append(icon, copy);
     messagesPanel.append(notice);
     renderIcons(notice);
@@ -6596,10 +6611,12 @@ function renderMessage(
       mentionRoleNames,
       customEmoji: customEmojiAssets,
       roomReferences: roomReferenceMap(),
+      resolveMessageLink: currentSpaceMessageLink,
+      onMessageReference: (reference) => void openRoomMessageReference(reference),
       hideBareLinks: embeddedImageLinks(effectiveEmbeds),
       onRoomReference: (channelId) => void selectChannel(channelId),
     });
-    for (const embed of effectiveEmbeds) appendSafeEmbed(messageContent, embed, openExternalImageViewer);
+    for (const embed of effectiveEmbeds) if (!currentSpaceMessageLink(embed.url)) appendSafeEmbed(messageContent, embed, openExternalImageViewer);
   }
   if (edited) {
     const editedLabel = document.createElement("span");
@@ -6710,6 +6727,8 @@ function refreshRenderedMessageMarkdown() {
       mentionRoleNames,
       customEmoji: customEmojiAssets,
       roomReferences: roomReferenceMap(),
+      resolveMessageLink: currentSpaceMessageLink,
+      onMessageReference: (reference) => void openRoomMessageReference(reference),
       hideBareLinks: embeddedImageLinks(embeds),
       onRoomReference: (channelId) => void selectChannel(channelId),
     });
@@ -7096,23 +7115,21 @@ async function createServer() {
 
 async function createChannel(categoryId?: string) {
   const server = selectedServerId ? servers.find((item) => item.id === selectedServerId) : undefined;
-  if (!server || !cryptoClient) return;
-  const name = await askText("Create an encrypted room", "Room names are encrypted. Each room has its own conversation key.", "Room name", "new-room");
-  if (!name) return;
-  createChannelButton.disabled = true;
-  setStatus("Creating encrypted room…");
-  try {
-    const result = await api.createChannel(server.id, "", categoryId ?? null);
-    await encryptAndStoreMetadata(server.id, result.channel, name);
-    await refreshServers();
-    await selectServer(server.id, result.channel.id);
-    setStatus("Encrypted room is ready.");
-  } catch (error) {
-    setStatus(readableError(error), true);
-  } finally {
-    createChannelButton.disabled = false;
-    renderServers();
-  }
+  if (!server || !cryptoClient || server.deactivatedAt || !(server.permissions.manage_channels || server.permissions.create_channels)) return;
+  if (document.querySelector(".create-room-dialog")) return;
+  showCreateRoomDialog({
+    spaceName: serverDisplayName(server),
+    categories: categories.map((category) => ({ id: category.id, name: categoryDisplayName(category) })),
+    initialCategoryId: categoryId,
+    error: readableError,
+    create: async ({ name, kind, categoryId }) => {
+      const result = await api.createChannel(server.id, "", categoryId, kind);
+      await encryptAndStoreMetadata(server.id, result.channel, name);
+      await refreshServers();
+      await selectServer(server.id, result.channel.id);
+      setStatus("Encrypted room is ready.");
+    },
+  });
 }
 
 async function createInvite() {

@@ -37,13 +37,6 @@
               <a class="settings-nav-item server-settings-nav-item" data-settings-tab data-title="Audit log" data-description="Review recorded space-management actions." href="#audit"><i data-lucide="clipboard-list"></i><span>Audit log</span></a>
             </div>
           </nav>
-          <div class="sidebar-user settings-sidebar-user">
-            <a id="back-to-server" class="self-profile-button" href="/app" title="Back to space">
-              <span class="user-avatar" aria-hidden="true">N</span>
-              <span class="user-copy"><strong>Back to space</strong><span>Return to encrypted chat</span></span>
-            </a>
-            <button id="server-logout-button" class="icon-button" type="button" title="Sign out" aria-label="Sign out"><i data-lucide="log-out"></i></button>
-          </div>
         </aside>
         <button id="server-settings-mobile-sidebar-backdrop" class="mobile-sidebar-backdrop" type="button" aria-label="Close settings navigation"></button>
         <main class="settings-main server-settings-main">
@@ -53,6 +46,7 @@
               <span class="channel-icon" aria-hidden="true"><i data-lucide="settings-2"></i></span>
               <div class="channel-copy"><h2 id="server-settings-page-title">Overview</h2><span id="server-settings-page-description" class="channel-subtitle">Space details, appearance, and welcome settings.</span></div>
             </div>
+            <div class="chat-actions"><a id="back-to-server" class="icon-button settings-close-button" href="/app" title="Close settings (Esc)" aria-label="Close settings and return to space" aria-keyshortcuts="Escape"><i data-lucide="x"></i></a></div>
           </header>
           <div class="settings-main-content server-settings-main-content">
             <section class="server-settings-content">
@@ -62,8 +56,8 @@
                   <h1 id="server-settings-title">Loading space…</h1>
                   <p id="server-settings-role" class="muted"></p>
                   <form id="server-form" class="settings-form">
-                    <label for="server-name">Space name<input id="server-name" maxlength="80" required></label>
-                    <label for="server-description">Description<textarea id="server-description" rows="3" maxlength="240"></textarea></label>
+                    <label for="server-name">Space name<input id="server-name" maxlength="80" placeholder="e.g. Design team" required></label>
+                    <label for="server-description">Description<textarea id="server-description" rows="3" maxlength="240" placeholder="What is this space for? A short description for your members."></textarea></label>
                     <label for="onboarding-channel">Join announcements room<select id="onboarding-channel"><option value="">No join announcements</option></select></label>
                     <p class="muted small">A joining member’s browser can publish an end-to-end encrypted notice to this room. The server never creates or reads that message.</p>
                     <label for="landing-channel">Default room on open<select id="landing-channel"><option value="">First visible room</option></select></label>
@@ -95,7 +89,7 @@
                     <label class="checkbox-label settings-checkbox"><input id="welcome-enabled" type="checkbox"><span>Show a welcome panel when a member opens this space</span></label>
                     <label for="welcome-heading">Heading<input id="welcome-heading" maxlength="120" placeholder="Welcome to our private space"></label>
                     <label for="welcome-description">Message<textarea id="welcome-description" rows="3" maxlength="500" placeholder="A short guide for new members"></textarea></label>
-                    <label for="welcome-rules">Rules<textarea id="welcome-rules" rows="4" maxlength="2000" placeholder="Be kind…"></textarea></label>
+                    <label for="welcome-rules">Rules<textarea id="welcome-rules" rows="4" maxlength="2000" placeholder="Be respectful. Keep discussions in the right rooms. Do not share private content outside this space."></textarea></label>
                     <label class="checkbox-label settings-checkbox"><input id="welcome-acknowledgement" type="checkbox"><span>Ask members to acknowledge the rules</span></label>
                   </div>
                 </section>

@@ -68,6 +68,7 @@ import {
 } from "./push/fcm";
 import { createRealtimeConnection, type RealtimeConnection } from "./realtime";
 import { fetchTwitterPreview, parseTwitterStatusUrl } from "./twitter-preview";
+import { historyRecoveryRoutes } from "./history-recovery";
 
 type UserRow = {
   id: string;
@@ -1037,6 +1038,7 @@ export function createApp() {
   }
 
   return new Elysia()
+    .use(historyRecoveryRoutes)
     .onError(({ code, error, request, set }) => {
       if (code === "VALIDATION") return respondError(set, 422, "validation_error");
       const detail = error instanceof Error
@@ -1047,7 +1049,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.22.0" };
+         ?? { name: "Naigi", version: "0.23.0" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");

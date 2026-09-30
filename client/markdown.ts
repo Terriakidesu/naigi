@@ -1,4 +1,6 @@
 import { emojiEntryAt } from "./emoji";
+import { iconElement, renderIcons } from "./icons";
+import type { RoomMessageReference } from "./room-message-link";
 import { guardExternalLink } from "./external-link";
 import { formatMessageMacro, messageMacroTooltip, MAX_MESSAGE_MACROS, parseMessageMacro, type ParsedMessageMacro } from "./message-macros";
 
@@ -18,6 +20,8 @@ export type MarkdownRenderOptions = {
   roomReferences?: Map<string, string>;
   hideBareLinks?: ReadonlySet<string>;
   onRoomReference?: (channelId: string) => void;
+  resolveMessageLink?: (url: string) => RoomMessageReference | undefined;
+  onMessageReference?: (reference: RoomMessageReference) => void;
 };
 
 function safeLinkUrl(value: string) {
@@ -310,6 +314,26 @@ function appendInline(parent: HTMLElement, value: string, options: MarkdownRende
       continue;
     }
     if (token.kind === "link") {
+      const reference = options.resolveMessageLink?.(token.url);
+      if (reference) {
+        const link = document.createElement("a");
+        link.className = "room-reference room-message-reference";
+        link.href = reference.href;
+        link.setAttribute("aria-label", `Jump to message in ${reference.name}`);
+        link.title = `Jump to message in ${reference.name}`;
+        const roomIcon = iconElement(reference.kind === "voice" ? "headphones" : "hash");
+        const name = document.createElement("span");
+        name.textContent = reference.name;
+        link.append(roomIcon, name, iconElement("arrow-right"), iconElement("message-square"));
+        if (options.onMessageReference) link.addEventListener("click", (event) => {
+          if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          options.onMessageReference?.(reference);
+        });
+        parent.append(link);
+        renderIcons(link);
+        continue;
+      }
       if (token.label === token.url && options.hideBareLinks?.has(token.url)) continue;
       const link = document.createElement("a");
       link.href = token.url;

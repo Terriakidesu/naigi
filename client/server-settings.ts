@@ -14,7 +14,7 @@ import {
   type ServerPermissionMap,
 } from "./api";
 import { renderAvatar } from "./avatar";
-import { readableAccentText, type AppTheme } from "./app-preferences";
+import { applyAppPreferences, loadAppPreferences, readableAccentText, type AppTheme } from "./app-preferences";
 import { CryptoClient, LocalCryptoStoreError } from "./crypto";
 import { iconElement, renderIcons } from "./icons";
 import { highestSeparatedRole } from "./member-roles";
@@ -28,11 +28,9 @@ import { showMemberProfile } from "./member-profile";
 
 setupSpaceSettingsLists();
 import { previewChannelCapabilities, previewRoleFeatures } from "./role-preview";
-import { showOneTimeToken } from "./ui-dialog";
+import { showOneTimeToken, promptUnsavedChanges } from "./ui-dialog";
 import {
-  clearSessionPassphrase,
   confirmLocalUnlock,
-  forgetRememberedPassphrase,
   resolveLocalPassphrase,
 } from "./unlock-vault";
 
@@ -40,12 +38,19 @@ const api = new ApiClient();
 
 function currentAppTheme(): AppTheme {
   const theme = document.documentElement.dataset.appTheme;
-  return theme === "light" || theme === "dim" || theme === "momotalk" ? theme : "dark";
+  return theme === "light" || theme === "dim" || theme === "black" || theme === "momotalk" ? theme : "dark";
 }
 
 const serverId = new URLSearchParams(window.location.search).get("server");
 const title = document.getElementById("server-settings-title") as HTMLElement;
 const settingsLayout = document.getElementById("server-settings-layout") as HTMLElement;
+function applySavedTheme() {
+  if (currentUserId) applyAppPreferences(loadAppPreferences(currentUserId), settingsLayout);
+}
+window.addEventListener("focus", applySavedTheme);
+window.addEventListener("storage", (event) => {
+  if (currentUserId && (event.key === null || event.key === `priv-chat.app-preferences.${currentUserId}`)) applySavedTheme();
+});
 const settingsSidebar = document.getElementById("server-settings-sidebar") as HTMLElement;
 const mobileSidebarToggle = document.getElementById("server-settings-mobile-sidebar-toggle") as HTMLButtonElement;
 const mobileSidebarClose = document.getElementById("server-settings-mobile-sidebar-close") as HTMLButtonElement;
@@ -116,7 +121,6 @@ const auditList = document.getElementById("audit-log-list") as HTMLElement;
 const refreshAuditLog = document.getElementById("refresh-audit-log") as HTMLButtonElement;
 const status = document.getElementById("server-settings-status") as HTMLElement;
 const backToServer = document.getElementById("back-to-server") as HTMLAnchorElement;
-const logout = document.getElementById("server-logout-button") as HTMLButtonElement;
 
 let currentUserId: string | undefined;
 let currentServer: Server | undefined;
@@ -253,13 +257,20 @@ function setMobileSidebar(open: boolean, focusNavigation = false) {
 for (const link of document.querySelectorAll<HTMLAnchorElement>(".server-settings-nav-item")) {
   link.addEventListener("click", (event: MouseEvent) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    if (roleEditorOpen && !closeRoleEditor(false)) {
-      event.preventDefault();
-      return;
-    }
-    if (window.matchMedia("(max-width: 760px)").matches) setMobileSidebar(false);
+    event.preventDefault();
+    void resolveSettingsBeforeLeave().then((leave) => {
+      if (!leave) return;
+      if (window.matchMedia("(max-width: 760px)").matches) setMobileSidebar(false);
+      window.location.hash = link.hash;
+    });
   });
 }
+
+backToServer.addEventListener("click", (event) => {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  void resolveSettingsBeforeLeave().then((leave) => { if (leave) window.location.assign(backToServer.href); });
+});
 
 mobileSidebarToggle.addEventListener("click", () => {
   setMobileSidebar(!settingsLayout.classList.contains("mobile-sidebar-open"), true);
@@ -274,15 +285,50 @@ mobileSidebarBackdrop.addEventListener("click", () => {
 });
 window.addEventListener("resize", () => setMobileSidebar(settingsLayout.classList.contains("mobile-sidebar-open")));
 setMobileSidebar(settingsLayout.classList.contains("mobile-sidebar-open"));
-window.addEventListener("hashchange", syncSettingsNav);
+let previousSettingsHash = window.location.hash || "#overview";
+window.addEventListener("hashchange", () => {
+  const nextHash = window.location.hash || "#overview";
+  void resolveSettingsBeforeLeave().then((leave) => {
+    if (!leave) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${previousSettingsHash}`);
+    else previousSettingsHash = nextHash;
+    syncSettingsNav();
+  });
+});
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || !roleEditorOpen
-    || document.querySelector("dialog[open]") || document.getElementById("access")?.hidden) return;
+  if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.repeat
+    || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+    || document.querySelector("dialog[open], [popover]:popover-open")) return;
   event.preventDefault();
-  closeRoleEditor();
+  if (roleEditorOpen && !document.getElementById("access")?.hidden) closeRoleEditor();
+  else backToServer.click();
 });
 syncSettingsNav();
 renderIcons();
+
+const overviewFields = [serverName, serverDescription, onboardingChannel, landingChannel, welcomeEnabled,
+  welcomeHeading, welcomeDescription, welcomeRules, welcomeAcknowledgement];
+let savedOverview: string | undefined;
+let leavingSettings = false;
+function overviewSnapshot() {
+  return JSON.stringify(overviewFields.map((field) => field instanceof HTMLInputElement && field.type === "checkbox" ? field.checked : field.value));
+}
+async function resolveSettingsBeforeLeave() {
+  if (leavingSettings) return false;
+  leavingSettings = true;
+  try {
+    if (roleEditorOpen && !closeRoleEditor(false)) return false;
+    if (!metadataReady || !savedOverview || overviewSnapshot() === savedOverview) return true;
+    const choice = await promptUnsavedChanges();
+    if (choice === "stay") return false;
+    if (choice === "save") return await saveSpaceSettings();
+    const values = JSON.parse(savedOverview) as (string | boolean)[];
+    overviewFields.forEach((field, index) => {
+      if (field instanceof HTMLInputElement && field.type === "checkbox") field.checked = Boolean(values[index]);
+      else field.value = String(values[index]);
+    });
+    return true;
+  } finally { leavingSettings = false; }
+}
 
 function readableError(error: unknown) {
   if (error instanceof ApiError) {
@@ -2452,6 +2498,7 @@ function renderInvites(invites: Awaited<ReturnType<ApiClient["serverInvites"]>>[
 function updateSettingsControls() {
   if (!currentServer) return;
   saveServer.disabled = !currentServer.permissions.manage_server || !metadataReady;
+  for (const control of overviewFields) control.disabled = !currentServer.permissions.manage_server || !metadataReady;
   deleteServer.hidden = currentServer.role !== "owner";
   categoryForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_channels", "manage_categories") || !metadataReady);
   channelForm.querySelector("button")!.toggleAttribute("disabled", !hasAnyPermission("manage_channels", "create_channels"));
@@ -2516,13 +2563,14 @@ async function hydrateMetadata(version: number, channelSnapshot: ServerChannel[]
   try {
     metadataMembers = await prepareConversation(conversationId);
     const [metadata, roleMetadata, categoryMetadata] = await Promise.all([
-      decryptMetadata(conversationId, currentServer!.encryptedMetadata),
+      currentServer!.encryptedMetadata ? cryptoClient.decryptMetadata(conversationId, currentServer!.encryptedMetadata) : Promise.resolve({} as Record<string, unknown>),
       Promise.all(roles.map((role) => decryptMetadata(conversationId, role.encryptedMetadata))),
       Promise.all(categories.map((category) => decryptMetadata(conversationId, category.encryptedMetadata))),
     ]);
     if (version !== metadataHydrationVersion || metadataConversationId !== conversationId) return;
     serverName.value = typeof metadata.name === "string" ? metadata.name : "";
     serverDescription.value = typeof metadata.description === "string" ? metadata.description : "";
+    title.textContent = serverName.value.trim() || "Space settings";
     renderWelcome(metadata);
     for (let index = 0; index < roles.length; index += 1) {
       const name = roleMetadata[index].name;
@@ -2541,13 +2589,14 @@ async function hydrateMetadata(version: number, channelSnapshot: ServerChannel[]
     renderRoles();
     renderMembers();
     renderBranding();
+    savedOverview = overviewSnapshot();
     if (status.textContent === "Loading encrypted settings…") setStatus("");
     void hydrateChannelMetadata(version, channelSnapshot);
     void hydrateCustomEmojiMetadata(version);
   } catch (error) {
     if (version !== metadataHydrationVersion) return;
     updateSettingsControls();
-    setStatus("Encrypted settings are still loading. Try again in a moment.", true);
+    setStatus("Could not unlock this space’s saved settings. Restore history keys in account Settings → Recovery, then reload. Editing is disabled to protect existing settings.", true);
     console.warn("encrypted settings metadata hydration failed", error);
   }
 }
@@ -2665,7 +2714,11 @@ async function loadData() {
 
 serverForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!currentServer || !metadataConversationId || !metadataReady) return;
+  await saveSpaceSettings();
+});
+
+async function saveSpaceSettings() {
+  if (!currentServer || !metadataConversationId || !metadataReady || !currentServer.permissions.manage_server || !serverForm.reportValidity()) return false;
   saveServer.disabled = true;
   try {
     const encryptedMetadata = await encryptMetadata(metadataConversationId, {
@@ -2688,13 +2741,17 @@ serverForm.addEventListener("submit", async (event) => {
     currentServer = updated.server;
     backToServer.href = destination(currentServer.landingChannelId ?? channels[0]?.id);
     renderBranding();
+    title.textContent = serverName.value.trim() || "Space settings";
+    savedOverview = overviewSnapshot();
     setStatus("Space settings saved.");
+    return true;
   } catch (error) {
     setStatus(readableError(error), true);
+    return false;
   } finally {
     saveServer.disabled = !currentServer.permissions.manage_server || !metadataReady;
   }
-});
+}
 
 async function uploadBranding(asset: "icon" | "banner", input: HTMLInputElement) {
   const file = input.files?.[0];
@@ -2940,13 +2997,6 @@ createInvite.addEventListener("click", async () => {
   }
 });
 
-logout.addEventListener("click", async () => {
-  await api.logout().catch(() => undefined);
-  clearSessionPassphrase();
-  if (currentUserId) await forgetRememberedPassphrase(currentUserId).catch(() => undefined);
-  window.location.assign("/");
-});
-
 async function boot() {
   if (!serverId) {
     window.location.assign("/app");
@@ -2955,6 +3005,7 @@ async function boot() {
   try {
     const result = await api.me();
     currentUserId = result.user.id;
+    applySavedTheme();
     await ensureCrypto();
     await loadData();
   } catch (error) {

@@ -444,3 +444,7 @@
 }
 .message-macro { padding: 0.08em 0.28em; border-radius: 4px; background: color-mix(in srgb, currentColor 9%, transparent); box-decoration-break: clone; cursor: help; }
 .message-macro:hover, .message-macro:focus-visible { background: color-mix(in srgb, currentColor 16%, transparent); }
+.room-message-reference { display: inline-flex; align-items: center; gap: 0.3em; max-width: 100%; padding: 0.12em 0.4em; border-radius: 5px; background: color-mix(in srgb, var(--accent) 14%, transparent); vertical-align: middle; text-decoration: none; }
+.room-message-reference > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-message-reference svg { flex: 0 0 auto; width: 0.95em; height: 0.95em; }
+.room-message-reference:hover { background: color-mix(in srgb, var(--accent) 23%, transparent); }

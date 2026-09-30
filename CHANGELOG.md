@@ -2,11 +2,15 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-30
+
 ### Added
 
+- Escape closes account settings and returns to chat, respecting open dialogs and unsaved app preferences.
+- History recovery supports explicit trusted-device approval via QR/link and matching codes, plus automatic encrypted room-key backups restored with a separate generated recovery key. Manual encrypted file export/import remains available.
+- Sidebar room creation uses a styled dialog with text/voice choices, encrypted room names, and category selection; category context menus preselect the group.
 - Grouped member action menus offer shared-member profiles, direct messaging, account-local block/unblock, and a side-opening Roles picker alongside permission-restricted moderation actions.
 - Chat-sidebar rooms can be dragged above/below other rooms or onto category headers, including empty and collapsed categories, with permission-aware automatic saving.
-- Drag rooms by their handles to reorder them or drop them on a group header to change category; category/order fields remain available as alternatives.
 - Space emoji settings show decrypted image previews and support renaming without reuploading the encrypted image.
 - Voice & audio settings provide push-to-talk, input/output volume, a silence threshold, a local microphone test, and remembered default devices using custom-styled controls. Participant context menus offer local mute and volume.
 - Voice rooms automatically rejoin after page reloads or connection recovery, retaining mute/deafen choices within the current tab. Leaving, locking, or losing room access cancels automatic rejoining.
@@ -14,6 +18,9 @@
 
 ### Changed
 
+- Sidebar text and voice rooms use tighter row heights and vertical spacing.
+- App preferences are split into Appearance, Accessibility, Chat & media, and Notifications, with the Save/Discard/Stay guard preserved across categories and when closing settings.
+- Message links to accessible rooms in the current space render as compact room-icon/name → chat-icon references instead of raw URLs and redundant website previews.
 - Members use compact table rows with join dates, role badges, and permission-filtered action menus. Role assignment opens in an anchored searchable checkbox popover instead of a modal.
 - Role management is list-first with default permissions, search, member counts, edit/action controls, and permission- and hierarchy-restricted drag ordering. The full editor opens on demand.
 - Rendered date/time macros have a subtle highlight and a full local date/time tooltip including the timezone.
@@ -26,10 +33,13 @@
 
 ### Fixed
 
+- Space settings remove the account footer and provide a subtle close button and Escape shortcut, retain editor guards, and protect unsaved overview changes with Save/Discard/Stay. Overview fields show saved encrypted values and helpful placeholders; unavailable metadata cannot be saved as an empty form.
+- Account settings omit the redundant account footer, offer a subtle close button, and keep Sign out clearly labeled under Security to prevent accidental sign-outs.
+- Sidebar and in-call settings buttons open in the current tab rather than creating a new tab.
+- Space settings apply the account’s saved theme, custom palette/design, and interface scale, and refresh when preferences change in another tab.
 - Member action menus show role assignment, warn, timeout, kick, and ban consistently; unavailable actions are disabled with permission or protected-member explanations instead of disappearing.
 - Member action buttons use the registered three-dot icon; owner/self menus offer Copy user ID without exposing restricted role or moderation actions.
 - Role editors have a persistent Back to roles action and Escape support; clicking settings navigation exits the editor with an unsaved-change confirmation.
-- Member role assignment uses a compact searchable checkbox dialog with explicit Save/Cancel instead of a native multi-select that expands member rows.
 - Compact audio-device dropdowns no longer overlap the settings button or adjacent controls.
 - In-room device dropdowns show only a chevron beside microphone and headphone buttons, without repeating their icons.
 - Adjacent custom emoji shortcodes now render correctly, and custom emoji-only messages enlarge like Unicode emoji.
@@ -38,6 +48,11 @@
 - Voice calls and rooms explain when a remote HTTP origin prevents secure microphone and media access.
 - Voice-room participant presence now updates the sidebar for other room members and expires cleanly after departure.
 - Voice participant tiles no longer overlap the audio-status banner when the stage overflows vertically.
+
+### Security
+
+- History backups and device-transfer payloads remain encrypted on the server. Pairing secrets are confined to URL fragments and memory; locally remembered backup data keys are encrypted under the browser’s local passphrase. Backup revisions prevent silent concurrent overwrites, and expired requests or revoked participants cannot deliver queued transfers.
+- Space metadata decryption failures disable overview editing rather than permitting existing encrypted settings to be replaced by empty values.
 
 ## [0.22.0] - 2026-09-30
 
@@ -252,6 +267,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.23.0](docs/changelogs/0.23.0.md) — 2026-09-30
 - [0.22.0](docs/changelogs/0.22.0.md) — 2026-09-30
 - [0.21.2](docs/changelogs/0.21.2.md) — 2026-09-30
 - [0.21.1](docs/changelogs/0.21.1.md) — 2026-09-30

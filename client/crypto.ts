@@ -17,6 +17,8 @@ import {
   UserId,
 } from "@matrix-org/matrix-sdk-crypto-wasm";
 import { ApiError, type ApiClient, type ConversationMember, type MessageEnvelope, type UploadOptions } from "./api";
+import { openRecovery, sealRecovery, parseRecoveryKey, randomRecoverySecret, recoverySecretHash, wrapLocalRecovery, unwrapLocalRecovery, type DevicePairing } from "./history-recovery-crypto";
+import { readLocalRecovery, writeLocalRecovery } from "./history-recovery-store";
 import { prepareMedia } from "./media";
 import {
   enqueuePendingMessage,
@@ -190,6 +192,17 @@ function canRetryMessage(error: unknown) {
 }
 
 export class CryptoClient {
+  private historyBackupState?: { id: string; dataKey: string; encryptedKey: string };
+  private historyBackupTimer?: number;
+  private historyBackupInFlight?: Promise<void>;
+  private historyBackupMessage = "Automatic backup is not enabled on this device.";
+  private historyBackupUnlocking = false;
+  private closing = false;
+  private reloadHistoryBackup = () => {
+    if (!this.initialized || this.historyBackupState || this.historyBackupUnlocking) return;
+    this.historyBackupUnlocking = true;
+    void this.loadHistoryBackup().finally(() => { this.historyBackupUnlocking = false; });
+  };
   private readonly api: ApiClient;
   private readonly accountUserId: string;
   private readonly storePassphrase: string;
@@ -213,6 +226,7 @@ export class CryptoClient {
   }
 
   async initialize(options: { syncToDevice?: boolean } = {}) {
+    if (this.closing) throw new Error("crypto_client_closed");
     if (this.initialized) return;
     if (!this.storePassphrase) throw new Error("local_crypto_passphrase_required");
 
@@ -256,6 +270,152 @@ export class CryptoClient {
       await this.close().catch(() => undefined);
       throw error;
     }
+    await this.loadHistoryBackup();
+    window.addEventListener("focus", this.reloadHistoryBackup);
+  }
+
+  private async loadHistoryBackup() {
+    try {
+      const stored = await readLocalRecovery(this.accountUserId);
+      if (stored && this.initialized && !this.closing) {
+        const state = this.parseHistoryBackupState(JSON.parse(await unwrapLocalRecovery(this.storePassphrase, this.accountUserId, stored)));
+        if (!this.initialized || this.closing) return;
+        this.historyBackupState = state;
+        this.startHistoryBackup();
+      }
+    } catch { this.historyBackupMessage = "Could not unlock automatic backup. Restore with your recovery key to re-enable it."; }
+  }
+
+  get historyBackupStatus() { return this.historyBackupMessage; }
+  get hasHistoryBackupKey() { return Boolean(this.historyBackupState); }
+
+  private parseHistoryBackupState(value: unknown) {
+    const state = value as Record<string, unknown> | null;
+    if (!state || typeof state.id !== "string" || !uuidPattern.test(state.id) || typeof state.dataKey !== "string"
+      || typeof state.encryptedKey !== "string" || state.encryptedKey.length > 4096) throw new Error("invalid_history_backup_state");
+    parseRecoveryKey(state.dataKey);
+    return { id: state.id, dataKey: state.dataKey, encryptedKey: state.encryptedKey };
+  }
+
+  private async rememberHistoryBackup(state: { id: string; dataKey: string; encryptedKey: string }) {
+    if (this.closing) throw new Error("crypto_client_closed");
+    await writeLocalRecovery(this.accountUserId, await wrapLocalRecovery(this.storePassphrase, this.accountUserId, JSON.stringify(state)));
+    if (this.closing) return;
+    this.historyBackupState = state;
+    this.startHistoryBackup();
+  }
+
+  private startHistoryBackup() {
+    window.clearInterval(this.historyBackupTimer);
+    this.historyBackupMessage = "Automatic backup enabled on this device.";
+    this.historyBackupTimer = window.setInterval(() => { void this.backupHistoryNow().catch(() => undefined); }, 60_000);
+    void this.backupHistoryNow().catch(() => undefined);
+  }
+
+  async enableHistoryBackup(recoveryKey: string) {
+    const secret = parseRecoveryKey(recoveryKey);
+    if ((await this.api.historyBackup()).backup) throw new Error("A backup already exists. Restore it with its recovery key instead of replacing it.");
+    const id = crypto.randomUUID();
+    const dataKey = randomRecoverySecret();
+    const encryptedKey = await sealRecovery(secret, `backup-key/${this.accountUserId}/${id}`, dataKey);
+    const encryptedExport = await this.exportRecovery(dataKey);
+    await this.api.putHistoryBackup({ id, deviceId: this.deviceId, revision: "0", encryptedKey, encryptedExport });
+    await this.rememberHistoryBackup({ id, dataKey, encryptedKey });
+  }
+
+  async restoreHistoryBackup(recoveryKey: string) {
+    const backup = (await this.api.historyBackup()).backup;
+    if (!backup) throw new Error("No encrypted history backup exists for this account.");
+    const dataKey = await openRecovery(parseRecoveryKey(recoveryKey), `backup-key/${this.accountUserId}/${backup.id}`, backup.encryptedKey);
+    parseRecoveryKey(dataKey);
+    const imported = await this.importRecovery(backup.encryptedExport, dataKey);
+    await this.rememberHistoryBackup({ id: backup.id, dataKey, encryptedKey: backup.encryptedKey });
+    return imported;
+  }
+
+  backupHistoryNow(): Promise<void> {
+    if (this.historyBackupInFlight) return this.historyBackupInFlight;
+    const work = this.backupHistoryWithRetries();
+    this.historyBackupInFlight = work;
+    void work.finally(() => { if (this.historyBackupInFlight === work) this.historyBackupInFlight = undefined; }).catch(() => undefined);
+    return work;
+  }
+
+  private async backupHistoryWithRetries() {
+    for (let attempt = 0; ; attempt += 1) {
+      try { return await this.backupHistoryInternal(); }
+      catch (error) {
+        if (this.closing || !(error instanceof ApiError) || error.code !== "history_backup_conflict" || attempt >= 2) throw error;
+        // Fetch and merge the winning revision again; never reuse a stale export.
+      }
+    }
+  }
+
+  private async backupHistoryInternal() {
+    const state = this.historyBackupState;
+    if (!state || !this.initialized || this.closing) return;
+    try {
+      const backup = (await this.api.historyBackup()).backup;
+      if (!backup || backup.id !== state.id || backup.encryptedKey !== state.encryptedKey) {
+        window.clearInterval(this.historyBackupTimer);
+        this.historyBackupState = undefined;
+        await writeLocalRecovery(this.accountUserId);
+        throw new Error("Backup was removed or changed. Restore with the current recovery key.");
+      }
+      // Merge other devices' keys before publishing. Revision checks reject concurrent overwrites.
+      await this.importRecovery(backup.encryptedExport, state.dataKey);
+      const encryptedExport = await this.exportRecovery(state.dataKey);
+      if (!this.initialized || this.closing || this.historyBackupState !== state) return;
+      await this.api.putHistoryBackup({ id: state.id, deviceId: this.deviceId, revision: backup.revision, encryptedKey: state.encryptedKey, encryptedExport });
+      this.historyBackupMessage = `History backed up at ${new Date().toLocaleTimeString()}.`;
+    } catch (error) {
+      this.historyBackupMessage = error instanceof ApiError && error.code === "history_backup_conflict"
+        ? "Another device updated the backup. Retrying on the next cycle."
+        : "Automatic backup could not complete. Unlock a trusted device or restore your recovery key.";
+      throw error;
+    }
+  }
+
+  async disableHistoryBackup() {
+    await this.historyBackupInFlight?.catch(() => undefined);
+    const backup = (await this.api.historyBackup()).backup;
+    if (backup) await this.api.deleteHistoryBackup({ deviceId: this.deviceId, id: backup.id, revision: backup.revision });
+    window.clearInterval(this.historyBackupTimer);
+    this.historyBackupState = undefined;
+    await writeLocalRecovery(this.accountUserId);
+    this.historyBackupMessage = "Server backup deleted. Local history keys remain on this device.";
+  }
+
+  async requestHistoryDeviceTransfer(): Promise<DevicePairing & { expiresAt: string }> {
+    const pairing = { id: crypto.randomUUID(), deviceId: this.deviceId, secret: randomRecoverySecret() };
+    const result = await this.api.createHistoryTransfer({ id: pairing.id, deviceId: pairing.deviceId, secretHash: await recoverySecretHash(pairing.secret) });
+    return { ...pairing, expiresAt: result.expiresAt };
+  }
+
+  async approveHistoryDeviceTransfer(pairing: DevicePairing) {
+    const { transfer } = await this.api.historyTransfer(pairing.id);
+    if (transfer.deviceId !== pairing.deviceId || transfer.secretHash !== await recoverySecretHash(pairing.secret) || pairing.deviceId === this.deviceId) throw new Error("Device approval does not match this request.");
+    if (this.historyBackupState) await this.backupHistoryNow();
+    const encryptedExport = await this.exportRecovery(pairing.secret);
+    const payload = JSON.stringify({ version: 1, encryptedExport, backup: this.historyBackupState ?? null });
+    const encryptedPayload = await sealRecovery(pairing.secret, `transfer/${this.accountUserId}/${pairing.id}/${pairing.deviceId}`, payload);
+    await this.api.approveHistoryTransfer(pairing.id, { deviceId: this.deviceId, encryptedPayload });
+  }
+
+  async finishHistoryDeviceTransfer(pairing: DevicePairing, isCurrent: () => boolean = () => true) {
+    if (pairing.deviceId !== this.deviceId) throw new Error("This transfer belongs to another device.");
+    const { transfer } = await this.api.historyTransfer(pairing.id);
+    if (!isCurrent()) return null;
+    if (transfer.deviceId !== pairing.deviceId || transfer.secretHash !== await recoverySecretHash(pairing.secret)) throw new Error("Device approval request changed.");
+    if (!transfer.encryptedPayload) return null;
+    const payload = JSON.parse(await openRecovery(pairing.secret, `transfer/${this.accountUserId}/${pairing.id}/${pairing.deviceId}`, transfer.encryptedPayload));
+    if (payload.version !== 1 || typeof payload.encryptedExport !== "string") throw new Error("Invalid device history transfer.");
+    const backup = payload.backup ? this.parseHistoryBackupState(payload.backup) : undefined;
+    if (!isCurrent()) return null;
+    const imported = await this.importRecovery(payload.encryptedExport, pairing.secret);
+    if (backup) await this.rememberHistoryBackup(backup);
+    await this.api.deleteHistoryTransfer(pairing.id).catch(() => undefined);
+    return imported;
   }
 
   async exportRecovery(passphrase: string) {
@@ -281,6 +441,7 @@ export class CryptoClient {
   }
 
   private runCryptoOperation<T>(operation: () => Promise<T>) {
+    if (this.closing) return Promise.reject<T>(new Error("crypto_client_closed"));
     const next = this.cryptoOperation.then(operation, operation);
     this.cryptoOperation = next.then(() => undefined, () => undefined);
     return next;
@@ -801,6 +962,11 @@ export class CryptoClient {
   }
 
   async close() {
+    this.closing = true;
+    window.removeEventListener("focus", this.reloadHistoryBackup);
+    window.clearInterval(this.historyBackupTimer);
+    this.historyBackupState = undefined;
+    await this.historyBackupInFlight?.catch(() => undefined);
     await this.cryptoOperation;
     this.preparingRooms.clear();
     this.machine?.close();

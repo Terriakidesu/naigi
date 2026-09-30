@@ -474,6 +474,9 @@ export type ServerCustomEmoji = {
   uploadedAt: string | null;
 };
 
+export type HistoryBackup = { id: string; revision: string; encryptedKey: string; encryptedExport: string; updatedAt: string };
+export type HistoryTransfer = { id: string; deviceId: string; secretHash: string; encryptedPayload: string | null; expiresAt: string };
+
 export type ServerAuditLog = {
   id: string;
   action: string;
@@ -610,6 +613,23 @@ export class ApiClient {
   get<T>(path: string) {
     return this.request<T>(path);
   }
+
+  historyBackup() { return this.get<{ backup: HistoryBackup | null }>("/v1/crypto/history/backup"); }
+  historyRecoveryStatus() { return this.get<{ backup: { id: string; updatedAt: string } | null; deviceCount: number }>("/v1/crypto/history/status"); }
+  putHistoryBackup(body: { deviceId: string; id: string; revision: string; encryptedKey: string; encryptedExport: string }) {
+    return this.request<{ revision: string }>("/v1/crypto/history/backup", { method: "PUT", body: JSON.stringify(body) });
+  }
+  deleteHistoryBackup(body: { deviceId: string; id: string; revision: string }) {
+    return this.request<{ deleted: boolean }>("/v1/crypto/history/backup", { method: "DELETE", body: JSON.stringify(body) });
+  }
+  createHistoryTransfer(body: { id: string; deviceId: string; secretHash: string }) {
+    return this.post<{ expiresAt: string }>("/v1/crypto/history/transfers", body);
+  }
+  historyTransfer(id: string) { return this.get<{ transfer: HistoryTransfer }>(`/v1/crypto/history/transfers/${encodeURIComponent(id)}`); }
+  approveHistoryTransfer(id: string, body: { deviceId: string; encryptedPayload: string }) {
+    return this.request<{ approved: boolean }>(`/v1/crypto/history/transfers/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) });
+  }
+  deleteHistoryTransfer(id: string) { return this.delete<{ deleted: boolean }>(`/v1/crypto/history/transfers/${encodeURIComponent(id)}`); }
 
   post<T>(path: string, body: unknown) {
     return this.request<T>(path, {
