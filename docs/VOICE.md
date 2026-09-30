@@ -9,17 +9,27 @@ separate service; Naigi does not use a hosted voice provider.
 After the host configures LiveKit, a space owner or member with channel-creation permission can open
 **Space Settings → Rooms**, choose **Voice** as the room type, enter a name, and add the room. Select
 the voice room and choose **Join voice room**. Other members with access can join the same room from
-their browser. While connected, a compact account strip appears at the bottom-left of the active room
-view with your profile and voice status, microphone/output selection, mute, deafen, leave, and account
-settings controls. Direct-call controls remain in their matching conversation. Microphone permission is
-required.
+their browser. The full-width left navigation footer permanently shows your profile, microphone/output
+selection, mute, deafen, and settings. Joining adds a connection-status and room/location panel above
+the profile strip, with a disconnect button there instead of in the profile strip. These sidebar controls
+remain available while browsing other rooms. Mute and deafen choices made before joining carry into
+the next connection. The active room view also has audio controls, including audio unlock and leave.
+Reloading the page returns this tab to its previous voice room after unlocking and reconnecting.
+Temporary network disruptions first use LiveKit's reconnect flow; if that connection ends, Naigi retries
+joining with bounded backoff once chat signaling is available. Leaving, locking the browser, or losing
+room access clears the rejoin intent. Only opaque space/room IDs and mute/deafen choices are saved in
+tab-scoped session storage, never participant names or media keys. Browser permissions and autoplay
+rules still apply; audio playback may need the **Enable audio** button after a reload.
+On narrow layouts the sidebar footer is available in the navigation drawer. Direct-call controls remain
+in their matching conversation. Microphone permission is required.
 The room view shows participant tiles and highlights the active speaker. If your browser blocks incoming
 audio autoplay, choose **Enable audio**; the room status also reports microphone publication, remote audio,
 and playback or encryption problems.
 
-Use the microphone and speaker dropdowns in the in-call dock to choose input and output devices. The
-device names are read from your browser and are not sent to Naigi or LiveKit. Some browsers do not allow
-websites to select an audio output device; in that case, change the output in your operating system.
+Use either set of microphone and speaker dropdowns to choose input and output devices. The selections
+stay in sync and are reused for later connections. Device names are read from your browser and are not
+sent to Naigi or LiveKit. Some browsers do not allow websites to select an audio output device; in that
+case, change the output in your operating system.
 
 Voice-room capacity is not capped by Naigi to a fixed participant count. LiveKit's deployment
 configuration, host resources, and network determine how many participants can connect. Direct

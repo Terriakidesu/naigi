@@ -43,6 +43,8 @@ type VoiceCallOptions = {
   audioOutput: HTMLElement;
   getAudioInputDeviceId: () => string;
   getAudioOutputDeviceId: () => string;
+  getInitialMuted?: () => boolean;
+  getInitialDeafened?: () => boolean;
 };
 
 function randomMediaKey() {
@@ -93,8 +95,8 @@ export class VoiceCallController {
       peerName,
       mediaKey: randomMediaKey(),
       direction: "outgoing",
-      muted: false,
-      deafened: false,
+      muted: this.options.getInitialMuted?.() ?? false,
+      deafened: this.options.getInitialDeafened?.() ?? false,
       accessCheckInFlight: false,
       accessFailures: 0,
       cleaningUp: false,
@@ -138,8 +140,8 @@ export class VoiceCallController {
         mediaKey: signal.mediaKey!,
         direction: "incoming",
         acceptedLocally: false,
-        muted: false,
-        deafened: false,
+        muted: this.options.getInitialMuted?.() ?? false,
+        deafened: this.options.getInitialDeafened?.() ?? false,
         accessCheckInFlight: false,
         accessFailures: 0,
         cleaningUp: false,
@@ -300,7 +302,7 @@ export class VoiceCallController {
     if (!this.isActive(active)) return;
     await waitForLocalVoiceEncryption(room);
     if (!this.isActive(active)) return;
-    await room.localParticipant.setMicrophoneEnabled(true);
+    await room.localParticipant.setMicrophoneEnabled(!active.muted);
     if (!this.isActive(active)) return;
     this.beginAccessChecks(active);
     this.emitState();

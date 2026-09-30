@@ -44,6 +44,7 @@
 .voice-room-live-indicator > span { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 9px color-mix(in srgb, var(--green) 75%, transparent); }
 .voice-room-panel-description { max-width: 680px; margin: 0; color: var(--text-muted); font-size: 0.76rem; line-height: 1.5; }
 .voice-room-audio-status { display: flex; align-items: center; min-height: 38px; padding: 0.55rem 0.75rem; border: 1px solid var(--line-soft); border-radius: 9px; color: var(--text-muted); background: color-mix(in srgb, var(--bg-elevated) 74%, transparent); font-size: 0.68rem; line-height: 1.4; }
+.voice-room-audio-status[hidden] { display: none; }
 .voice-room-audio-status[data-state="ready"] { border-color: color-mix(in srgb, var(--green) 40%, var(--line-soft)); color: var(--green-text); }
 .voice-room-audio-status[data-state="warning"] { border-color: color-mix(in srgb, var(--danger) 48%, var(--line-soft)); color: var(--danger-text); }
 .voice-room-audio-status[data-state="connecting"] { color: var(--accent-text); }
@@ -59,6 +60,12 @@
 .voice-room-empty-state { display: grid; justify-items: center; gap: 0.75rem; color: var(--text-faint); font-size: 0.7rem; text-align: center; }
 .voice-room-empty-icon { display: grid; place-items: center; width: 72px; height: 72px; border: 1px solid var(--line-soft); border-radius: 22px; color: var(--accent-text); background: color-mix(in srgb, var(--bg-elevated) 78%, transparent); }
 .voice-room-empty-icon svg { width: 31px; height: 31px; }
+.voice-room-controls { position: sticky; z-index: 5; bottom: 0.65rem; display: flex; align-items: center; justify-content: center; align-self: center; flex: 0 0 auto; gap: 0.35rem; width: max-content; max-width: 100%; padding: 0.35rem; border: 1px solid color-mix(in srgb, var(--line-soft) 90%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--bg-elevated) 94%, transparent); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32); backdrop-filter: blur(16px); }
+.voice-room-controls[hidden] { display: none; }
+.voice-room-controls .voice-device-control { min-height: 44px; }
+.voice-room-controls .voice-device-control .voice-dock-button { flex-basis: 44px; width: 44px; height: 44px; }
+.voice-room-controls .voice-device-control .voice-device-picker { flex-basis: 25px; width: 25px; height: 44px; }
+.voice-room-controls > .voice-dock-button { flex-basis: 44px; width: 44px; height: 44px; }
 .voice-room-join-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0.65rem 1rem; padding-top: 0.35rem; }
 .voice-room-panel[data-connection-active="true"] .voice-room-join-row { display: none; }
 .voice-room-join-row > button { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; min-height: 42px; padding: 0.65rem 1.15rem; border-radius: 8px; font-weight: 750; }

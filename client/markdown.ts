@@ -39,26 +39,27 @@ function pushText(tokens: MarkdownInline[], value: string) {
 
 export function parseInlineMarkdown(value: string): MarkdownInline[] {
   const tokens: MarkdownInline[] = [];
-  const pattern = /(\*\*|__)(.+?)\1|(\*|_)([^*_\n]+?)\3|~~([^~\n]+?)~~|\|\|([^|\n]+?)\|\||`([^`\n]+)`|\[([^\]\n]+)\]\((\S+?)\)|((?:https?:\/\/)[^\s<]+)/gi;
+  const pattern = /(:[A-Za-z0-9_+-]{1,32}:)|(\*\*|__)(.+?)\2|(\*|_)([^*_\n]+?)\4|~~([^~\n]+?)~~|\|\|([^|\n]+?)\|\||`([^`\n]+)`|\[([^\]\n]+)\]\((\S+?)\)|((?:https?:\/\/)[^\s<]+)/gi;
   let offset = 0;
   for (const match of value.matchAll(pattern)) {
     const index = match.index ?? offset;
     pushText(tokens, value.slice(offset, index));
-    if (match[2] !== undefined) tokens.push({ kind: "strong", value: match[2] });
-    else if (match[4] !== undefined) tokens.push({ kind: "emphasis", value: match[4] });
-    else if (match[5] !== undefined) tokens.push({ kind: "strike", value: match[5] });
-    else if (match[6] !== undefined) tokens.push({ kind: "spoiler", value: match[6] });
-    else if (match[7] !== undefined) tokens.push({ kind: "code", value: match[7] });
-    else if (match[8] !== undefined && match[9] !== undefined) {
-      const url = safeLinkUrl(match[9].replace(/[),.!?:;]+$/g, ""));
-      if (url) tokens.push({ kind: "link", label: match[8], url });
+    if (match[1] !== undefined) pushText(tokens, match[1]);
+    else if (match[3] !== undefined) tokens.push({ kind: "strong", value: match[3] });
+    else if (match[5] !== undefined) tokens.push({ kind: "emphasis", value: match[5] });
+    else if (match[6] !== undefined) tokens.push({ kind: "strike", value: match[6] });
+    else if (match[7] !== undefined) tokens.push({ kind: "spoiler", value: match[7] });
+    else if (match[8] !== undefined) tokens.push({ kind: "code", value: match[8] });
+    else if (match[9] !== undefined && match[10] !== undefined) {
+      const url = safeLinkUrl(match[10].replace(/[),.!?:;]+$/g, ""));
+      if (url) tokens.push({ kind: "link", label: match[9], url });
       else pushText(tokens, match[0]);
-    } else if (match[10] !== undefined) {
-      const raw = match[10].replace(/[),.!?:;]+$/g, "");
+    } else if (match[11] !== undefined) {
+      const raw = match[11].replace(/[),.!?:;]+$/g, "");
       const url = safeLinkUrl(raw);
       if (url) {
         tokens.push({ kind: "link", label: raw, url });
-        pushText(tokens, match[10].slice(raw.length));
+        pushText(tokens, match[11].slice(raw.length));
       }
       else pushText(tokens, match[0]);
     } else {

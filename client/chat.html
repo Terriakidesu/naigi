@@ -41,13 +41,27 @@
           <div id="direct-messages-heading" class="section-heading"><span>PRIVATE THREADS</span><span class="section-count">inbox</span></div>
           <div id="conversation-list" class="conversation-list"></div>
            <a id="create-conversation-button" class="create-button secondary" href="/new"><i data-lucide="message-square-plus"></i> Create conversation</a>
+          <div class="sidebar-account">
+           <div id="sidebar-voice-connection" class="sidebar-voice-connection" hidden>
+             <span class="sidebar-voice-connection-icon" aria-hidden="true"><i data-lucide="radio"></i></span>
+             <span class="sidebar-voice-connection-copy"><strong id="sidebar-voice-state">Voice connected</strong><span id="sidebar-voice-location"></span></span>
+             <button id="sidebar-voice-leave" class="icon-button" type="button" title="Disconnect voice" aria-label="Disconnect voice"><i data-lucide="phone-off"></i></button>
+           </div>
           <div class="sidebar-user">
            <button id="self-profile-button" class="self-profile-button" type="button" title="View your profile" aria-label="View your profile">
              <span id="self-avatar" class="user-avatar" aria-hidden="true">N</span>
-             <span class="user-copy"><strong id="user-label">Loading…</strong><span>Profile and account</span></span>
-           </button>
-            <a class="icon-button" href="/settings" title="Account settings" aria-label="Account settings"><i data-lucide="settings"></i></a>
-            <button id="lock-button" class="icon-button" type="button" title="Lock this browser" aria-label="Lock this browser"><i data-lucide="lock-keyhole"></i></button>
+              <span class="user-copy"><strong id="user-label">Loading…</strong><span id="sidebar-user-status">Online</span></span>
+            </button>
+            <span class="voice-device-control" data-toggle-visible="true">
+              <button id="sidebar-voice-mute" class="voice-dock-button" type="button" aria-label="Mute microphone" title="Mute microphone" aria-pressed="false"><i data-lucide="mic"></i></button>
+              <label class="voice-device-picker" title="Select microphone"><span class="voice-device-picker-icons" aria-hidden="true"><i class="voice-device-picker-chevron" data-lucide="chevron-down"></i></span><select id="sidebar-voice-input-device" aria-label="Microphone input device"><option value="">System default microphone</option></select></label>
+            </span>
+            <span class="voice-device-control" data-toggle-visible="true">
+              <button id="sidebar-voice-deafen" class="voice-dock-button" type="button" aria-label="Deafen audio" title="Deafen audio" aria-pressed="false"><i data-lucide="headphones"></i></button>
+              <label class="voice-device-picker" title="Select audio output"><span class="voice-device-picker-icons" aria-hidden="true"><i class="voice-device-picker-chevron" data-lucide="chevron-down"></i></span><select id="sidebar-voice-output-device" aria-label="Audio output device"><option value="">System default output</option></select></label>
+            </span>
+             <a class="icon-button" href="/settings" title="Account settings" aria-label="Account settings"><i data-lucide="settings"></i></a>
+           </div>
           </div>
         </aside>
         <button id="mobile-sidebar-backdrop" class="mobile-sidebar-backdrop" type="button" aria-label="Close conversation list"></button>
@@ -81,23 +95,34 @@
                  <button id="message-search-toggle" class="icon-button" type="button" title="Search messages" aria-label="Search messages" aria-expanded="false"><i data-lucide="search"></i></button>
                   <button id="voice-call-button" class="icon-button" type="button" title="Start end-to-end encrypted voice call" aria-label="Start end-to-end encrypted voice call" hidden><i data-lucide="phone"></i></button>
                   <button id="notification-toggle" class="icon-button" type="button" title="Enable desktop notifications" aria-label="Enable desktop notifications" aria-pressed="false"><i data-lucide="bell"></i></button>
-                 <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true"><i data-lucide="info"></i></button>
+                  <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true"><i data-lucide="info"></i></button>
+                  <button id="lock-button" class="icon-button" type="button" title="Lock this browser" aria-label="Lock this browser"><i data-lucide="lock-keyhole"></i></button>
             </div>
           </header>
            <div id="chat-content" class="chat-content">
                <div id="moderation-notices" class="chat-moderation-notices" role="region" aria-label="Moderation notices" hidden></div>
                 <section id="voice-room-panel" class="voice-room-panel" hidden aria-labelledby="voice-room-panel-title">
-                  <div class="voice-room-panel-heading">
-                    <div class="voice-room-panel-icon" aria-hidden="true"><i data-lucide="headphones"></i></div>
-                    <div class="voice-room-panel-title-copy">
-                      <p class="eyebrow">END-TO-END ENCRYPTED AUDIO</p>
-                      <h2 id="voice-room-panel-title">Voice room</h2>
-                    </div>
-                    <span class="voice-room-live-indicator"><span aria-hidden="true"></span> Voice channel</span>
-                  </div>
-                  <p class="voice-room-panel-description">Join to talk with members here. Audio is encrypted in your browser before it reaches the self-hosted relay.</p>
-                  <div id="voice-room-audio-status" class="voice-room-audio-status" role="status" aria-live="polite">Room capacity depends on the host’s LiveKit deployment.</div>
+                  <h2 id="voice-room-panel-title" class="sr-only">Voice room</h2>
+                  <div id="voice-room-audio-status" class="voice-room-audio-status" role="status" aria-live="polite" hidden></div>
                   <div id="voice-room-participant-grid" class="voice-room-participant-grid" role="list" aria-label="Voice room participants"></div>
+                  <div id="voice-room-controls" class="voice-room-controls" role="group" aria-label="Voice room controls" hidden>
+                    <span class="voice-device-control voice-device-control-input">
+                      <button id="voice-room-mute" class="voice-dock-button" type="button" title="Mute microphone" aria-label="Mute microphone" aria-pressed="false" hidden></button>
+                      <label class="voice-device-picker" title="Select microphone" aria-label="Microphone input device">
+                        <span class="voice-device-picker-icons" aria-hidden="true"><i class="voice-device-picker-primary-icon" data-lucide="mic"></i><i class="voice-device-picker-chevron" data-lucide="chevron-down"></i></span>
+                        <select id="voice-room-input-device" aria-label="Microphone input device"><option value="">System default microphone</option></select>
+                      </label>
+                    </span>
+                    <span class="voice-device-control voice-device-control-output">
+                      <button id="voice-room-deafen" class="voice-dock-button" type="button" title="Deafen audio" aria-label="Deafen audio" aria-pressed="false" hidden></button>
+                      <label class="voice-device-picker" title="Select audio output" aria-label="Audio output device">
+                        <span class="voice-device-picker-icons" aria-hidden="true"><i class="voice-device-picker-primary-icon" data-lucide="headphones"></i><i class="voice-device-picker-chevron" data-lucide="chevron-down"></i></span>
+                        <select id="voice-room-output-device" aria-label="Audio output device"><option value="">System default output</option></select>
+                      </label>
+                    </span>
+                    <button id="voice-room-enable-audio" class="voice-dock-button voice-dock-enable-audio" type="button" title="Enable audio playback" aria-label="Enable audio playback" hidden></button>
+                    <button id="voice-room-leave" class="voice-dock-button voice-dock-danger" type="button" title="Leave voice room" aria-label="Leave voice room" hidden></button>
+                  </div>
                   <div class="voice-room-join-row">
                     <button id="voice-room-join-button" type="button"><i data-lucide="headphones" aria-hidden="true"></i><span id="voice-room-join-label">Join voice room</span></button>
                     <p id="voice-room-panel-status" class="voice-room-panel-status" role="status" aria-live="polite">Room capacity depends on the host’s LiveKit deployment.</p>

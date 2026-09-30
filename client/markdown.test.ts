@@ -15,6 +15,12 @@ test("markdown parser keeps supported formatting as safe tokens", () => {
   ]);
 });
 
+test("markdown parser keeps adjacent custom emoji shortcodes intact", () => {
+  expect(parseInlineMarkdown(":raora_laugh::raora_laugh:")).toEqual([
+    { kind: "text", value: ":raora_laugh::raora_laugh:" },
+  ]);
+});
+
 test("markdown parser does not allow unsafe links", () => {
   expect(parseInlineMarkdown("[bad](javascript:alert(1))")).toEqual([
     { kind: "text", value: "[bad](javascript:alert(1))" },

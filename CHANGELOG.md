@@ -4,15 +4,21 @@
 
 ### Added
 
+- Voice rooms automatically rejoin after page reloads or connection recovery, retaining mute/deafen choices within the current tab. Leaving, locking, or losing room access cancels automatic rejoining.
 - Voice calls and rooms let participants choose their microphone and audio output from the in-call dock.
 
 ### Changed
 
+- Voice-room views omit duplicate headings, explanatory banners, and routine audio status to leave more space for participants; actionable audio errors remain visible.
 - Voice rooms now use an audio-first participant stage with live speaker activity and show connected members under the active voice channel.
-- Voice-room microphone controls live in the left sidebar footer only while viewing the active room; direct-call controls stay in their matching conversation.
+- A permanent profile, microphone, audio-output, and settings strip spans the full left navigation area. Active voice connections add a status/location panel above it with disconnect separate from the profile strip.
+- Active voice rooms also show microphone, device, deafen, and leave controls in the room view; direct-call controls stay in their matching conversation. Mute and deafen choices made before joining carry into the next connection.
+- The Add reaction button opens only the available reaction choices, and custom emoji picker sections use the space name.
 
 ### Fixed
 
+- In-room device dropdowns show only a chevron beside microphone and headphone buttons, without repeating their icons.
+- Adjacent custom emoji shortcodes now render correctly, and custom emoji-only messages enlarge like Unicode emoji.
 - Voice rooms verify microphone publication, surface encrypted-audio subscription and playback failures, and provide an explicit browser audio-unlock action.
 - Voice-room access tokens remain valid long enough for LiveKit to reconnect participants after transient interruptions.
 - Voice calls and rooms explain when a remote HTTP origin prevents secure microphone and media access.

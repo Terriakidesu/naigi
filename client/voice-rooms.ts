@@ -1,4 +1,4 @@
-import { ExternalE2EEKeyProvider, Room, RoomEvent, Track, TrackEvent } from "livekit-client";
+import { DisconnectReason, ExternalE2EEKeyProvider, Room, RoomEvent, Track, TrackEvent } from "livekit-client";
 import { parseVoiceRoomSignal, type VoiceRoomSignalBody } from "./voice-room-protocol";
 import { assertVoiceSecureContext, waitForLocalVoiceEncryption } from "./voice-e2ee";
 
@@ -63,9 +63,12 @@ type VoiceRoomOptions = {
   decryptSignal: (conversationId: string, ciphertext: string) => Promise<Record<string, unknown>>;
   sendSignal: (conversationId: string, ciphertext: string) => boolean;
   onState: (state: VoiceRoomView) => void;
+  onAccessRevoked?: () => void;
   audioOutput: HTMLElement;
   getAudioInputDeviceId: () => string;
   getAudioOutputDeviceId: () => string;
+  getInitialMuted?: () => boolean;
+  getInitialDeafened?: () => boolean;
 };
 
 function randomMediaKey() {
@@ -177,8 +180,8 @@ export class VoiceRoomController {
       conversationId: channel.conversationId,
       channelId: channel.id,
       roomName: channel.name,
-      muted: false,
-      deafened: false,
+      muted: this.options.getInitialMuted?.() ?? false,
+      deafened: this.options.getInitialDeafened?.() ?? false,
       participantUserIds: new Map(),
       microphonePublished: false,
       remoteAudioTrackSids: new Set(),
@@ -471,8 +474,11 @@ export class VoiceRoomController {
       for (const element of track.detach()) element.remove();
       this.emitStateIfActive(active);
     });
-    room.on(RoomEvent.Disconnected, () => {
-      if (this.isActive(active) && !active.cleaningUp) void this.finish();
+    room.on(RoomEvent.Disconnected, (reason) => {
+      if (!this.isActive(active) || active.cleaningUp) return;
+      if (reason === DisconnectReason.PARTICIPANT_REMOVED || reason === DisconnectReason.ROOM_DELETED
+        || reason === DisconnectReason.DUPLICATE_IDENTITY) this.options.onAccessRevoked?.();
+      void this.finish();
     });
 
     await keyProvider.setKey(active.mediaKey);
@@ -491,18 +497,18 @@ export class VoiceRoomController {
     }, 20_000);
     let microphone;
     try {
-      microphone = await room.localParticipant.setMicrophoneEnabled(true);
+      microphone = await room.localParticipant.setMicrophoneEnabled(!active.muted);
     } catch (error) {
       if (error instanceof Error && ["NotAllowedError", "PermissionDeniedError", "NotFoundError"].includes(error.name)) throw error;
       console.warn("[voice-room] microphone publication failed", error instanceof Error ? error.name : "unknown");
       throw new Error("voice_microphone_publish_failed");
     }
     if (!this.isActive(active)) return;
-    if (!microphone?.track) {
+    if (!active.muted && !microphone?.track) {
       console.warn("[voice-room] microphone publication returned no track");
       throw new Error("voice_microphone_publish_failed");
     }
-    active.microphonePublished = true;
+    active.microphonePublished = Boolean(microphone?.track);
     active.audioIssue = undefined;
     this.beginAccessChecks(active);
     this.emitState();
@@ -513,6 +519,7 @@ export class VoiceRoomController {
       if (!this.isActive(active) || active.accessCheckInFlight) return;
       active.accessCheckInFlight = true;
       void this.options.checkAccess(active.channelId).then((authorized) => {
+        if (!authorized && this.isActive(active)) this.options.onAccessRevoked?.();
         active.accessFailures = authorized ? 0 : active.accessFailures + 3;
       }).catch(() => {
         active.accessFailures += 1;

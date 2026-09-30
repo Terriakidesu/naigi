@@ -40,6 +40,7 @@ import { VoiceCallController, type VoiceCallView } from "./voice-calls";
 import type { VoiceSignalBody } from "./voice-protocol";
 import { VoiceRoomController, type VoiceRoomView } from "./voice-rooms";
 import type { VoiceRoomSignalBody } from "./voice-room-protocol";
+import { parseVoiceRoomResume, voiceRoomResumeDelay, type VoiceRoomResume } from "./voice-room-resume";
 import { isEmojiOnlyMessage } from "./message-format";
 import { renderHighlightedCode } from "./code-highlight";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
@@ -62,6 +63,12 @@ function setRoleTextColor(element: HTMLElement, color: string) {
 let cryptoClient: CryptoClient | undefined;
 let voiceCalls: VoiceCallController | undefined;
 let voiceRooms: VoiceRoomController | undefined;
+let voiceRoomResume: VoiceRoomResume | undefined;
+let voiceRoomResumeTimer: number | undefined;
+let voiceRoomResumeAttempt = 0;
+let voiceRoomResumeInFlight = false;
+let voiceRoomResumeReady = false;
+let voicePageClosing = false;
 const voiceMemberCache = new Map<string, ConversationMember[]>();
 const voiceMemberLoads = new Map<string, Promise<ConversationMember[]>>();
 let voiceAudioInputDeviceId = "";
@@ -220,7 +227,7 @@ function renderCustomEmojiPickerSection(query: string) {
   section.className = "emoji-category-section custom-emoji-category-section";
   const heading = document.createElement("h3");
   heading.className = "emoji-category-heading";
-  heading.textContent = "Custom emoji";
+  heading.textContent = selectedServerId ? serverNameForId(selectedServerId) : "Space";
   const items = document.createElement("div");
   items.className = "emoji-category-items";
   for (const [name, asset] of candidates) {
@@ -295,6 +302,24 @@ const voiceRoomJoinButton = byId<HTMLButtonElement>("voice-room-join-button");
 const voiceRoomJoinLabel = byId<HTMLElement>("voice-room-join-label");
 const voiceRoomAudioStatus = byId<HTMLElement>("voice-room-audio-status");
 const voiceRoomParticipantGrid = byId<HTMLElement>("voice-room-participant-grid");
+const voiceRoomControls = byId<HTMLElement>("voice-room-controls");
+const voiceRoomMute = byId<HTMLButtonElement>("voice-room-mute");
+const voiceRoomDeafen = byId<HTMLButtonElement>("voice-room-deafen");
+const voiceRoomEnableAudio = byId<HTMLButtonElement>("voice-room-enable-audio");
+const voiceRoomLeave = byId<HTMLButtonElement>("voice-room-leave");
+const voiceRoomInputDevice = byId<HTMLSelectElement>("voice-room-input-device");
+const voiceRoomOutputDevice = byId<HTMLSelectElement>("voice-room-output-device");
+const sidebarVoiceConnection = byId<HTMLElement>("sidebar-voice-connection");
+const sidebarVoiceState = byId<HTMLElement>("sidebar-voice-state");
+const sidebarVoiceLocation = byId<HTMLElement>("sidebar-voice-location");
+const sidebarUserStatus = byId<HTMLElement>("sidebar-user-status");
+const sidebarVoiceMute = byId<HTMLButtonElement>("sidebar-voice-mute");
+const sidebarVoiceDeafen = byId<HTMLButtonElement>("sidebar-voice-deafen");
+const sidebarVoiceLeave = byId<HTMLButtonElement>("sidebar-voice-leave");
+const sidebarVoiceInputDevice = byId<HTMLSelectElement>("sidebar-voice-input-device");
+const sidebarVoiceOutputDevice = byId<HTMLSelectElement>("sidebar-voice-output-device");
+let preferredVoiceMuted = false;
+let preferredVoiceDeafened = false;
 const voiceCallDock = byId<HTMLElement>("voice-call-dock");
 const voiceDockAvatarWrap = byId<HTMLElement>("voice-dock-avatar-wrap");
 const voiceDockAvatar = byId<HTMLElement>("voice-dock-avatar");
@@ -713,6 +738,7 @@ function updateVoiceRoomPanel() {
   const callBusy = Boolean(callState && callState.status !== "idle");
   const activeHere = roomState.channelId === channel.id;
   voiceRoomPanel.dataset.connectionActive = String(roomState.status !== "idle" || callBusy);
+  voiceRoomControls.hidden = !activeHere;
   voiceRoomJoinButton.disabled = !conversationReady || callBusy || roomState.status !== "idle";
   if (activeHere && roomState.status === "joining") {
     voiceRoomJoinLabel.textContent = "Joining…";
@@ -741,6 +767,7 @@ function updateVoiceRoomPanel() {
     ? voiceRoomAudioStatusText(roomState)
     : "Join the room to connect your encrypted microphone and hear other members.";
   voiceRoomAudioStatus.dataset.state = activeHere ? roomAudioStatusTone(roomState) : "idle";
+  voiceRoomAudioStatus.hidden = !activeHere || (!roomState.audioIssue && !roomState.audioPlaybackBlocked);
   renderVoiceRoomParticipantGrid(activeHere ? roomState : { status: "idle" });
 }
 
@@ -805,6 +832,7 @@ function voiceRoomAudioStatusText(state: VoiceRoomView) {
   if (state.audioIssue === "encryption") return "Encrypted audio could not be verified. Leave and rejoin the room.";
   if (state.audioIssue === "subscription") return "Could not receive a member’s audio track. Check the voice relay connection.";
   if (state.audioIssue === "playback" || state.audioPlaybackBlocked) return "Audio arrived, but your browser blocked playback. Enable audio to hear the room.";
+  if (state.status === "connected" && state.muted) return "Connected securely. Your microphone is muted.";
   if ((state.remoteAudioCount ?? 0) > 0) return "Receiving encrypted audio. Speak to see the active-speaker indicator.";
   if ((state.participantCount ?? 0) > 1) return "Other members are connected, but no remote microphone track has arrived yet. Check their mic and publishing status.";
   if (state.microphonePublished) return "Microphone is published securely. Waiting for another member to join…";
@@ -831,15 +859,8 @@ function setVoiceDockButton(button: HTMLButtonElement, visible: boolean, icon: s
 }
 
 function updateVoiceDockVisibility() {
-  const roomState = voiceRooms?.currentState;
   const callState = voiceCalls?.currentState;
   const viewingVoiceRoom = chatContent.dataset.voiceRoom === "true";
-  const activeRoomHere = Boolean(
-    viewingVoiceRoom
-    && roomState
-    && roomState.status !== "idle"
-    && roomState.channelId === selectedChannelId,
-  );
   const incomingCall = callState?.status === "incoming" && !viewingVoiceRoom;
   const activeCallHere = Boolean(
     !viewingVoiceRoom
@@ -847,14 +868,39 @@ function updateVoiceDockVisibility() {
     && callState.status !== "idle"
     && callState.conversationId === selectedConversationId,
   );
-  const visible = activeRoomHere || activeCallHere || incomingCall;
-  const roomDockInSidebar = activeRoomHere && !window.matchMedia("(max-width: 760px)").matches;
-  const targetParent = roomDockInSidebar ? sidebar : chatMain;
-  if (voiceCallDock.parentElement !== targetParent) targetParent.append(voiceCallDock);
-  sidebar.dataset.voiceRoomControls = String(roomDockInSidebar);
-  chatMain.dataset.voiceRoomDockInMain = String(activeRoomHere && !roomDockInSidebar);
+  const visible = activeCallHere || incomingCall;
+  if (voiceCallDock.parentElement !== chatMain) chatMain.append(voiceCallDock);
+  sidebar.dataset.voiceRoomControls = "false";
+  chatMain.dataset.voiceRoomDockInMain = "false";
   voiceCallDock.hidden = !visible;
   chatMain.dataset.voiceDockActive = String(visible);
+  updateSidebarVoiceControls();
+}
+
+function updateSidebarVoiceControls() {
+  const room = voiceRooms?.currentState;
+  const call = voiceCalls?.currentState;
+  const state = room && room.status !== "idle" ? room : call && call.status !== "idle" ? call : undefined;
+  if (state) {
+    preferredVoiceMuted = Boolean(state.muted);
+    preferredVoiceDeafened = Boolean(state.deafened);
+  }
+  const connected = state?.status === "connected";
+  sidebarVoiceConnection.hidden = !state && !voiceRoomResume;
+  sidebarVoiceState.textContent = connected ? "Voice connected" : state?.status === "reconnecting" || (!state && voiceRoomResume) ? "Reconnecting…" : state?.status === "incoming" ? "Incoming call" : "Connecting…";
+  sidebarVoiceConnection.dataset.state = connected ? "connected" : "connecting";
+  sidebarVoiceLocation.textContent = room?.status !== "idle" && room?.channelId
+    ? `${room.roomName ?? "Voice room"} / ${selectedServerId && channels.some((channel) => channel.id === room.channelId) ? serverNameForId(selectedServerId) : "Voice"}`
+    : call?.peerName ?? (voiceRoomResume ? "Returning to voice room" : "");
+  sidebarUserStatus.textContent = state || voiceRoomResume ? connected ? "In voice" : sidebarVoiceState.textContent : "Online";
+  setVoiceDockButton(sidebarVoiceMute, true, preferredVoiceMuted ? "mic-off" : "mic", preferredVoiceMuted ? "Unmute microphone" : "Mute microphone", preferredVoiceMuted);
+  setVoiceDockButton(sidebarVoiceDeafen, true, preferredVoiceDeafened ? "volume-x" : "headphones", preferredVoiceDeafened ? "Undeafen audio" : "Deafen audio", preferredVoiceDeafened);
+  const busy = Boolean(state && state.status !== "connected" && state.status !== "reconnecting");
+  sidebarVoiceMute.disabled = busy;
+  sidebarVoiceDeafen.disabled = busy;
+  renderIcons(sidebarVoiceConnection);
+  renderIcons(sidebarVoiceMute);
+  renderIcons(sidebarVoiceDeafen);
 }
 
 function updateVoiceRoomDockProfile(state = voiceRooms?.currentState) {
@@ -911,6 +957,10 @@ function renderVoiceDevicePicker(select: HTMLSelectElement, devices: MediaDevice
 function renderVoiceDevicePickers() {
   renderVoiceDevicePicker(voiceCallInputDevice, voiceAudioInputs, voiceAudioInputDeviceId, "audioinput");
   renderVoiceDevicePicker(voiceCallOutputDevice, voiceAudioOutputs, voiceAudioOutputDeviceId, "audiooutput");
+  renderVoiceDevicePicker(voiceRoomInputDevice, voiceAudioInputs, voiceAudioInputDeviceId, "audioinput");
+  renderVoiceDevicePicker(voiceRoomOutputDevice, voiceAudioOutputs, voiceAudioOutputDeviceId, "audiooutput");
+  renderVoiceDevicePicker(sidebarVoiceInputDevice, voiceAudioInputs, voiceAudioInputDeviceId, "audioinput");
+  renderVoiceDevicePicker(sidebarVoiceOutputDevice, voiceAudioOutputs, voiceAudioOutputDeviceId, "audiooutput");
 }
 
 async function refreshVoiceAudioDevices() {
@@ -951,25 +1001,29 @@ async function switchActiveVoiceDevice(kind: "audioinput" | "audiooutput", devic
   }
 }
 
-voiceCallInputDevice.addEventListener("change", () => {
-  const previousDeviceId = voiceAudioInputDeviceId;
-  voiceAudioInputDeviceId = voiceCallInputDevice.value;
-  void switchActiveVoiceDevice("audioinput", voiceAudioInputDeviceId).catch((error) => {
-    voiceAudioInputDeviceId = previousDeviceId;
+function handleVoiceDeviceChange(select: HTMLSelectElement, kind: "audioinput" | "audiooutput") {
+  const previousDeviceId = kind === "audioinput" ? voiceAudioInputDeviceId : voiceAudioOutputDeviceId;
+  const deviceId = select.value;
+  if (kind === "audioinput") voiceAudioInputDeviceId = deviceId;
+  else voiceAudioOutputDeviceId = deviceId;
+  renderVoiceDevicePickers();
+  void switchActiveVoiceDevice(kind, deviceId).catch((error) => {
+    if (kind === "audioinput") voiceAudioInputDeviceId = previousDeviceId;
+    else voiceAudioOutputDeviceId = previousDeviceId;
     renderVoiceDevicePickers();
     setStatus(readableError(error), true);
   });
-});
+}
 
-voiceCallOutputDevice.addEventListener("change", () => {
-  const previousDeviceId = voiceAudioOutputDeviceId;
-  voiceAudioOutputDeviceId = voiceCallOutputDevice.value;
-  void switchActiveVoiceDevice("audiooutput", voiceAudioOutputDeviceId).catch((error) => {
-    voiceAudioOutputDeviceId = previousDeviceId;
-    renderVoiceDevicePickers();
-    setStatus(readableError(error), true);
-  });
-});
+voiceCallInputDevice.addEventListener("change", () => handleVoiceDeviceChange(voiceCallInputDevice, "audioinput"));
+voiceRoomInputDevice.addEventListener("change", () => handleVoiceDeviceChange(voiceRoomInputDevice, "audioinput"));
+voiceCallOutputDevice.addEventListener("change", () => handleVoiceDeviceChange(voiceCallOutputDevice, "audiooutput"));
+voiceRoomOutputDevice.addEventListener("change", () => handleVoiceDeviceChange(voiceRoomOutputDevice, "audiooutput"));
+sidebarVoiceInputDevice.addEventListener("change", () => handleVoiceDeviceChange(sidebarVoiceInputDevice, "audioinput"));
+sidebarVoiceOutputDevice.addEventListener("change", () => handleVoiceDeviceChange(sidebarVoiceOutputDevice, "audiooutput"));
+for (const select of [sidebarVoiceInputDevice, sidebarVoiceOutputDevice]) {
+  select.addEventListener("focus", () => void refreshVoiceAudioDevices());
+}
 
 navigator.mediaDevices?.addEventListener("devicechange", () => {
   voiceDeviceRefreshAt = 0;
@@ -1026,7 +1080,14 @@ function renderVoiceRoom(state: VoiceRoomView) {
   if (state.status === "idle") {
     updateVoiceCallButton();
     renderChannels();
+    scheduleVoiceRoomResume();
     return;
+  }
+  if (state.status === "connected" && voiceRoomResume && voiceRoomResume.channelId === state.channelId) {
+    voiceRoomResume.muted = Boolean(state.muted);
+    voiceRoomResume.deafened = Boolean(state.deafened);
+    voiceRoomResumeAttempt = 0;
+    persistVoiceRoomResume();
   }
   renderVoiceDevicePickers();
   void refreshVoiceAudioDevices();
@@ -1055,8 +1116,15 @@ function renderVoiceRoom(state: VoiceRoomView) {
   setVoiceDockButton(voiceCallMute, connected, state.muted ? "mic-off" : "mic", state.muted ? "Unmute microphone" : "Mute microphone", state.muted);
   setVoiceDockButton(voiceCallDeafen, connected, state.deafened ? "volume-x" : "headphones", state.deafened ? "Undeafen audio" : "Deafen audio", state.deafened);
   setVoiceDockButton(voiceCallEnd, true, "phone-off", state.status === "joining" || state.status === "connecting" ? "Cancel joining voice room" : "Leave voice room");
+  setVoiceDockButton(voiceRoomEnableAudio, Boolean(state.audioPlaybackBlocked), "volume-2", "Enable audio playback");
+  setVoiceDockButton(voiceRoomMute, connected, state.muted ? "mic-off" : "mic", state.muted ? "Unmute microphone" : "Mute microphone", state.muted);
+  setVoiceDockButton(voiceRoomDeafen, connected, state.deafened ? "volume-x" : "headphones", state.deafened ? "Undeafen audio" : "Deafen audio", state.deafened);
+  voiceRoomMute.closest<HTMLElement>(".voice-device-control")!.dataset.toggleVisible = String(connected);
+  voiceRoomDeafen.closest<HTMLElement>(".voice-device-control")!.dataset.toggleVisible = String(connected);
+  setVoiceDockButton(voiceRoomLeave, true, "phone-off", state.status === "joining" || state.status === "connecting" ? "Cancel joining voice room" : "Leave voice room");
   updateVoiceCallButton();
   renderIcons(voiceCallDock);
+  renderIcons(voiceRoomControls);
   renderChannels();
 }
 
@@ -1126,6 +1194,8 @@ function initializeVoiceCalls(userId: string) {
     audioOutput: voiceCallAudioOutput,
     getAudioInputDeviceId: () => voiceAudioInputDeviceId,
     getAudioOutputDeviceId: () => voiceAudioOutputDeviceId,
+    getInitialMuted: () => preferredVoiceMuted,
+    getInitialDeafened: () => preferredVoiceDeafened,
   });
   voiceRooms = new VoiceRoomController({
     currentUserId: userId,
@@ -1142,15 +1212,25 @@ function initializeVoiceCalls(userId: string) {
     decryptSignal: decryptVoiceSignal,
     sendSignal: (conversationId, ciphertext) => sendRealtimeCommand({ type: "voice.signal", conversationId, ciphertext }),
     onState: renderVoiceRoom,
+    onAccessRevoked: clearVoiceRoomResume,
     audioOutput: voiceCallAudioOutput,
     getAudioInputDeviceId: () => voiceAudioInputDeviceId,
     getAudioOutputDeviceId: () => voiceAudioOutputDeviceId,
+    getInitialMuted: () => preferredVoiceMuted,
+    getInitialDeafened: () => preferredVoiceDeafened,
   });
+  renderVoiceDevicePickers();
   updateVoiceCallButton();
 }
 
 async function joinVoiceRoom(channel: ServerChannel) {
   if (channel.kind !== "voice" || !voiceRooms) return;
+  if (voiceRooms.currentState.status !== "idle") return;
+  clearVoiceRoomResume();
+  if (selectedServerId) {
+    voiceRoomResume = { serverId: selectedServerId, channelId: channel.id, muted: preferredVoiceMuted, deafened: preferredVoiceDeafened };
+    persistVoiceRoomResume();
+  }
   voiceRoomPanelStatus.textContent = "Connecting to the voice room…";
   try {
     await voiceRooms.join({
@@ -1159,8 +1239,95 @@ async function joinVoiceRoom(channel: ServerChannel) {
       name: channelDisplayName(channel),
     });
   } catch (error) {
+    if (isTerminalVoiceRoomResumeError(error)) clearVoiceRoomResume();
     voiceRoomPanelStatus.textContent = readableError(error);
     setStatus(readableError(error), true);
+  }
+}
+
+function persistVoiceRoomResume() {
+  if (!currentUser) return;
+  try {
+    const key = `naigi.voice-room-resume.${currentUser.id}`;
+    if (voiceRoomResume) sessionStorage.setItem(key, JSON.stringify(voiceRoomResume));
+    else sessionStorage.removeItem(key);
+  } catch {
+    // Recovery still works in memory when browser storage is unavailable.
+  }
+}
+
+function clearVoiceRoomResume() {
+  voiceRoomResume = undefined;
+  window.clearTimeout(voiceRoomResumeTimer);
+  voiceRoomResumeTimer = undefined;
+  persistVoiceRoomResume();
+  updateSidebarVoiceControls();
+}
+
+function isTerminalVoiceRoomResumeError(error: unknown) {
+  return (error instanceof ApiError && [401, 403, 404].includes(error.status))
+    || (error instanceof Error && ["NotAllowedError", "PermissionDeniedError", "NotFoundError", "SecurityError"].includes(error.name))
+    || (error instanceof Error && ["voice_microphone_unavailable", "voice_microphone_publish_failed", "voice_secure_context_required"].includes(error.message));
+}
+
+function scheduleVoiceRoomResume(delay = voiceRoomResumeDelay(voiceRoomResumeAttempt)) {
+  if (!voiceRoomResume || !voiceRoomResumeReady || voicePageClosing || voiceRoomResumeInFlight) return;
+  if (voiceRoomResumeTimer !== undefined) {
+    if (delay !== 0) return;
+    window.clearTimeout(voiceRoomResumeTimer);
+  }
+  voiceRoomResumeTimer = window.setTimeout(() => {
+    voiceRoomResumeTimer = undefined;
+    void resumeVoiceRoom();
+  }, delay);
+}
+
+async function resumeVoiceRoom() {
+  const intent = voiceRoomResume;
+  const controller = voiceRooms;
+  const activeCrypto = cryptoClient;
+  if (!intent || !controller || !activeCrypto || !voiceRoomResumeReady || voicePageClosing || voiceRoomResumeInFlight) return;
+  // LiveKit already reconnects an active room. Only recreate it after that recovery ends.
+  if (controller.currentState.status !== "idle") return;
+  if (!navigator.onLine || !realtimeReadySocket || realtimeReadySocket.readyState !== WebSocket.OPEN
+    || (voiceCalls && voiceCalls.currentState.status !== "idle")) {
+    scheduleVoiceRoomResume();
+    return;
+  }
+  voiceRoomResumeInFlight = true;
+  try {
+    const server = servers.find((item) => item.id === intent.serverId);
+    if (!server || server.deactivatedAt) {
+      clearVoiceRoomResume();
+      return;
+    }
+    const result = await api.serverChannels(intent.serverId);
+    if (voiceRoomResume !== intent || voicePageClosing) return;
+    const channel = result.channels.find((item) => item.id === intent.channelId && item.kind === "voice");
+    if (!channel) {
+      clearVoiceRoomResume();
+      return;
+    }
+    channelsByServer.set(intent.serverId, result.channels);
+    subscribeKnownConversations();
+    const members = await voiceConversationMembers(channel.conversationId);
+    await activeCrypto.prepareConversation(channel.conversationId, members);
+    await activeCrypto.syncToDevice();
+    if (voiceRoomResume !== intent || voicePageClosing || controller.currentState.status !== "idle") return;
+    if (voiceCalls && voiceCalls.currentState.status !== "idle") return;
+    preferredVoiceMuted = intent.muted;
+    preferredVoiceDeafened = intent.deafened;
+    await controller.join({ id: channel.id, conversationId: channel.conversationId, name: channelDisplayName(channel) });
+  } catch (error) {
+    if (voiceRoomResume === intent) {
+      if (isTerminalVoiceRoomResumeError(error)) {
+        clearVoiceRoomResume();
+        setStatus(`Voice room could not be restored: ${readableError(error)}`, true);
+      } else voiceRoomResumeAttempt += 1;
+    }
+  } finally {
+    voiceRoomResumeInFlight = false;
+    if (controller.currentState.status === "idle") scheduleVoiceRoomResume();
   }
 }
 
@@ -1425,6 +1592,41 @@ function currentReactionSenders(messageId: string, key: string) {
   return messageReactions.get(messageId)?.get(key) ?? new Set<string>();
 }
 
+function createMessageReactionPicker(target: ContextMessage) {
+  const reactions = document.createElement("div");
+  reactions.className = "message-context-reactions";
+  for (const option of reactionOptions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "message-context-reaction";
+    button.setAttribute("role", "menuitem");
+    button.title = option.label;
+    button.setAttribute("aria-label", option.label);
+    button.setAttribute("aria-pressed", String(Boolean(currentUser?.id && currentReactionSenders(target.message.id, option.emoji).has(currentUser.id))));
+    appendTwemoji(button, option);
+    button.addEventListener("click", () => {
+      closeMessageContextMenu();
+      void toggleReaction(target.message.id, option.emoji);
+    });
+    reactions.append(button);
+  }
+  return reactions;
+}
+
+function openReactionPicker(target: ContextMessage, x: number, y: number) {
+  closeMessageContextMenu();
+  contextMessage = target;
+  messageContextMenu.setAttribute("aria-label", "Add reaction");
+  messageContextMenu.replaceChildren();
+  const title = document.createElement("div");
+  title.className = "message-context-title";
+  title.textContent = "Add reaction";
+  messageContextMenu.append(title, createMessageReactionPicker(target));
+  renderIcons(messageContextMenu);
+  placeContextMenu(messageContextMenu, x, y);
+  messageContextMenu.querySelector<HTMLButtonElement>(".message-context-reaction")?.focus();
+}
+
 function renderMessageReactions(messageId: string) {
   const article = findMessageArticle(messageId);
   if (!article) return;
@@ -1550,7 +1752,7 @@ function applyEditedBody(messageId: string, body: string, embeds: SafeEmbed[], m
     onRoomReference: (channelId) => void selectChannel(channelId),
   });
   for (const embed of embeds) appendSafeEmbed(content, embed, openExternalImageViewer);
-  article.classList.toggle("message-emoji-only", isEmojiOnlyMessage(body));
+  article.classList.toggle("message-emoji-only", isEmojiOnlyMessage(body, customEmojiAssets));
   if (reply) article.insertBefore(reply, article.querySelector(".message-avatar") ?? content);
   const editable = isOwnMessage(message);
   appendMessageActions(article, message, article.querySelector(".message-sender-link")?.textContent ?? "Member", body, editable);
@@ -1674,30 +1876,14 @@ async function moderateDeleteMessage(message: MessageEnvelope) {
 
 function openMessageContextMenu(target: ContextMessage, x: number, y: number) {
   contextMessage = target;
+  messageContextMenu.setAttribute("aria-label", "Message actions");
   messageContextMenu.replaceChildren();
   const title = document.createElement("div");
   title.className = "message-context-title";
   title.textContent = "Message actions";
   messageContextMenu.append(title);
 
-  const reactions = document.createElement("div");
-  reactions.className = "message-context-reactions";
-  for (const option of reactionOptions) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "message-context-reaction";
-    button.setAttribute("role", "menuitem");
-    button.title = option.label;
-    button.setAttribute("aria-label", option.label);
-    button.setAttribute("aria-pressed", String(Boolean(currentUser?.id && currentReactionSenders(target.message.id, option.emoji).has(currentUser.id))));
-    appendTwemoji(button, option);
-    button.addEventListener("click", () => {
-      closeMessageContextMenu();
-      void toggleReaction(target.message.id, option.emoji);
-    });
-    reactions.append(button);
-  }
-  messageContextMenu.append(reactions);
+  messageContextMenu.append(createMessageReactionPicker(target));
 
   contextMenuAction("Reply", () => setReplyTarget(replyReferenceForMessage(target.message, target.sender, target.body || "Encrypted message")), { shortcut: "R", icon: "corner-up-left" });
   if (target.editable) contextMenuAction("Edit message", () => setEditTarget({ messageId: target.message.id, sender: target.sender, body: target.body }), { shortcut: "E", icon: "pencil" });
@@ -3502,7 +3688,7 @@ async function startCrypto() {
   confirmLocalUnlock();
   initializeVoiceCalls(currentUser.id);
   connectRealtime();
-  userLabel.textContent = `${currentUser.displayName} (@${currentUser.username})`;
+  userLabel.textContent = currentUser.displayName;
   renderAvatar(selfAvatar, currentUser.displayName, currentUser.id, currentUser.avatarUrl);
   renderAvatar(voiceDockAvatar, currentUser.displayName, currentUser.id, currentUser.avatarUrl);
   void cryptoClient.flushPendingMessages().then(async (outbox) => {
@@ -3513,6 +3699,18 @@ async function startCrypto() {
   await refreshServers();
   await refreshConversations();
   await refreshOutboxNotice().catch(() => undefined);
+  try {
+    voiceRoomResume = parseVoiceRoomResume(sessionStorage.getItem(`naigi.voice-room-resume.${currentUser.id}`));
+  } catch {
+    // Browser storage may be disabled.
+  }
+  if (voiceRoomResume) {
+    preferredVoiceMuted = voiceRoomResume.muted;
+    preferredVoiceDeafened = voiceRoomResume.deafened;
+  }
+  voiceRoomResumeReady = true;
+  updateSidebarVoiceControls();
+  scheduleVoiceRoomResume(0);
 }
 
 async function flushOutbox() {
@@ -3571,6 +3769,7 @@ function connectRealtime() {
         window.clearTimeout(realtimeHandshakeTimer);
         realtimeHandshakeTimer = undefined;
         realtimeReadySocket = socket;
+        scheduleVoiceRoomResume(0);
         setConnectionStatus("Connected", "connected");
         subscribeKnownConversations();
         publishPresence(document.visibilityState === "hidden" ? "idle" : "online");
@@ -5293,6 +5492,7 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
         const metadata = await cryptoClient.decryptMetadata(metadataConversationId, activeServer.encryptedMetadata);
         if (typeof metadata.name === "string" && metadata.name.trim()) {
           serverLabels.set(activeServer.id, metadata.name.trim().slice(0, 80));
+          if (!emojiPicker.hidden) renderEmojiPicker();
         }
         const welcome = metadata.welcome && typeof metadata.welcome === "object" && !Array.isArray(metadata.welcome)
           ? metadata.welcome as Record<string, unknown>
@@ -5476,7 +5676,7 @@ function appendMessageActions(parent: HTMLElement, message: MessageEnvelope, sen
     const article = parent.closest<HTMLElement>(".message");
     if (!article) return;
     const rect = reaction.getBoundingClientRect();
-    openMessageContextMenu({ message, article, sender, body, editable }, rect.left, rect.bottom + 4);
+    openReactionPicker({ message, article, sender, body, editable }, rect.left, rect.bottom + 4);
   });
   controls.append(reaction);
 
@@ -6159,7 +6359,7 @@ function renderMessage(
   const mediaAttachments = mediaAttachmentsFromContent(content);
   const mediaMessage = mediaAttachments.length > 0;
   const mediaAlbum = mediaMessage ? mediaAlbumFromContent(content) : undefined;
-  article.classList.toggle("message-emoji-only", !mediaMessage && isEmojiOnlyMessage(body));
+  article.classList.toggle("message-emoji-only", !mediaMessage && isEmojiOnlyMessage(body, customEmojiAssets));
   const mentionNames = new Set(selectedMembers.filter((member) => effectiveMentions.includes(member.userId)).map((member) => member.username.toLowerCase()));
   const mentionRoleNames = new Set(effectiveRoleMentions
     .map((roleId) => serverRoles.find((role) => role.id === roleId))
@@ -6278,6 +6478,7 @@ function refreshRenderedMessageMarkdown() {
     const edited = editedMessageBodies.get(message.id);
     const body = edited?.body ?? (typeof content.body === "string" ? content.body : "");
     const mediaMessage = mediaAttachmentsFromContent(content).length > 0;
+    article.classList.toggle("message-emoji-only", !mediaMessage && isEmojiOnlyMessage(body, customEmojiAssets));
     if ((mediaMessage && !body) || (content.msgtype !== "m.text" && content.msgtype !== "m.notice" && !body)) continue;
 
     const storedEmbeds = normalizeStoredEmbeds(content.embeds);
@@ -7239,6 +7440,8 @@ messagesPanel.addEventListener("scroll", () => {
 });
 window.addEventListener("resize", renderUnreadButton);
 lockButton.addEventListener("click", () => {
+  clearVoiceRoomResume();
+  void voiceRooms?.leave();
   void voiceCalls?.end();
   lockLocalSession();
   optimisticDecryptedMessages.clear();
@@ -7313,11 +7516,19 @@ window.addEventListener("focus", () => {
   void refreshMessages().catch((error) => setStatus(readableError(error), true));
 });
 window.addEventListener("pagehide", () => {
+  voicePageClosing = true;
+  window.clearTimeout(voiceRoomResumeTimer);
+  voiceRoomResumeTimer = undefined;
   stopLocalTyping();
   publishPresence("offline");
   void voiceCalls?.end();
   void voiceRooms?.leave();
 });
+window.addEventListener("pageshow", () => {
+  voicePageClosing = false;
+  scheduleVoiceRoomResume(0);
+});
+window.addEventListener("online", () => scheduleVoiceRoomResume(0));
 
 voiceCallButton.addEventListener("click", () => {
   const channel = selectedChannelId ? channels.find((item) => item.id === selectedChannelId) : undefined;
@@ -7348,6 +7559,7 @@ voiceCallDeafen.addEventListener("click", () => {
   else voiceCalls?.toggleDeafen();
 });
 voiceCallEnd.addEventListener("click", () => {
+  clearVoiceRoomResume();
   const activeVoiceRooms = voiceRooms;
   if (activeVoiceRooms && activeVoiceRooms.currentState.status !== "idle") void activeVoiceRooms.leave();
   else void voiceCalls?.end();
@@ -7359,6 +7571,33 @@ voiceRoomJoinButton.addEventListener("click", () => {
 voiceCallEnableAudio.addEventListener("click", () => {
   void voiceRooms?.enableAudioPlayback().catch((error) => setStatus(readableError(error), true));
 });
+voiceRoomMute.addEventListener("click", () => voiceCallMute.click());
+voiceRoomDeafen.addEventListener("click", () => voiceCallDeafen.click());
+voiceRoomEnableAudio.addEventListener("click", () => voiceCallEnableAudio.click());
+voiceRoomLeave.addEventListener("click", () => voiceCallEnd.click());
+sidebarVoiceLeave.addEventListener("click", () => voiceCallEnd.click());
+sidebarVoiceMute.addEventListener("click", () => {
+  if ((voiceRooms && voiceRooms.currentState.status !== "idle") || (voiceCalls && voiceCalls.currentState.status !== "idle")) voiceCallMute.click();
+  else {
+    preferredVoiceMuted = !preferredVoiceMuted;
+    if (voiceRoomResume) {
+      voiceRoomResume.muted = preferredVoiceMuted;
+      persistVoiceRoomResume();
+    }
+    updateSidebarVoiceControls();
+  }
+});
+sidebarVoiceDeafen.addEventListener("click", () => {
+  if ((voiceRooms && voiceRooms.currentState.status !== "idle") || (voiceCalls && voiceCalls.currentState.status !== "idle")) voiceCallDeafen.click();
+  else {
+    preferredVoiceDeafened = !preferredVoiceDeafened;
+    if (voiceRoomResume) {
+      voiceRoomResume.deafened = preferredVoiceDeafened;
+      persistVoiceRoomResume();
+    }
+    updateSidebarVoiceControls();
+  }
+});
 
 updateComposerState();
 resizeMessageInput();
@@ -7366,7 +7605,7 @@ renderIcons();
 
 async function boot() {
   try {
-    currentUser = (await api.me()).user;
+  currentUser = (await api.me()).user;
     void refreshModerationNotices(undefined);
     window.setInterval(() => {
       if (!document.hidden) void refreshModerationNotices(selectedServerId);
