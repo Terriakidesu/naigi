@@ -95,7 +95,7 @@ The first host operator must sign in at `/instance-admin`; regular users registe
 
 | Integration | Configuration | Notes |
 | --- | --- | --- |
-| Encrypted direct voice | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | All required together; use WSS in production. See [Voice calls](VOICE.md). |
+| Encrypted voice calls and rooms | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | All required together; use WSS in production. See [Voice calls](VOICE.md). |
 | GIF search | `KLIPY_API_KEY`, `GIPHY_API_KEY` | These are public browser keys. Restrict them to your site origin; browsers contact the provider directly. |
 | Web push | `FCM_SERVICE_ACCOUNT_JSON`, `FCM_WEB_CONFIG_JSON`, `FCM_VAPID_KEY` | All required together; needs HTTPS and browser permission. Push payloads are generic and cannot apply per-room mutes. |
 | X/Twitter previews | `TWITTER_PREVIEW_PROVIDERS`, `TWITTER_PREVIEW_API_URL` | The default provider list includes `syndication`; configure an explicit provider list to control the exception. |

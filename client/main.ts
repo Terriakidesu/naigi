@@ -38,6 +38,8 @@ import { formatMessageMacrosAsText, freezeNowMessageMacros, refreshRelativeTimeM
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { VoiceCallController, type VoiceCallView } from "./voice-calls";
 import type { VoiceSignalBody } from "./voice-protocol";
+import { VoiceRoomController, type VoiceRoomView } from "./voice-rooms";
+import type { VoiceRoomSignalBody } from "./voice-room-protocol";
 import { isEmojiOnlyMessage } from "./message-format";
 import { renderHighlightedCode } from "./code-highlight";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
@@ -59,6 +61,7 @@ function setRoleTextColor(element: HTMLElement, color: string) {
 }
 let cryptoClient: CryptoClient | undefined;
 let voiceCalls: VoiceCallController | undefined;
+let voiceRooms: VoiceRoomController | undefined;
 let selectedConversationId: string | undefined;
 let selectedMembers: ConversationMember[] = [];
 let conversations: Conversation[] = [];
@@ -277,6 +280,10 @@ const sidebar = byId<HTMLElement>("workspace-sidebar");
 const statusLine = byId<HTMLElement>("status-line");
 const connectionIndicator = byId<HTMLElement>("connection-indicator");
 const voiceCallButton = byId<HTMLButtonElement>("voice-call-button");
+const voiceRoomPanel = byId<HTMLElement>("voice-room-panel");
+const voiceRoomPanelTitle = byId<HTMLElement>("voice-room-panel-title");
+const voiceRoomPanelStatus = byId<HTMLElement>("voice-room-panel-status");
+const voiceRoomJoinButton = byId<HTMLButtonElement>("voice-room-join-button");
 const voiceCallDialog = byId<HTMLDialogElement>("voice-call-dialog");
 const voiceCallTitle = byId<HTMLElement>("voice-call-title");
 const voiceCallStatus = byId<HTMLElement>("voice-call-status");
@@ -659,13 +666,59 @@ function updateVoiceCallButton() {
   const conversation = selectedConversationId
     ? conversations.find((item) => item.id === selectedConversationId)
     : undefined;
-  voiceCallButton.hidden = Boolean(selectedServerId) || conversation?.kind !== "dm";
-  voiceCallButton.disabled = !conversationReady || voiceCalls?.currentState.status !== "idle";
+  const channel = selectedChannelId ? channels.find((item) => item.id === selectedChannelId) : undefined;
+  const voiceChannel = channel?.kind === "voice" ? channel : undefined;
+  voiceCallButton.hidden = voiceChannel ? false : Boolean(selectedServerId) || conversation?.kind !== "dm";
+  voiceCallButton.title = voiceChannel ? "Join voice room" : "Start end-to-end encrypted voice call";
+  voiceCallButton.setAttribute("aria-label", voiceCallButton.title);
+  voiceCallButton.replaceChildren(iconElement(voiceChannel ? "headphones" : "phone"));
+  renderIcons(voiceCallButton);
+  const roomState = voiceRooms?.currentState;
+  const callState = voiceCalls?.currentState;
+  const roomBusy = Boolean(roomState && roomState.status !== "idle");
+  const callBusy = Boolean(callState && callState.status !== "idle");
+  voiceCallButton.disabled = !conversationReady || roomBusy || callBusy;
+  updateVoiceRoomPanel();
+}
+
+function updateVoiceRoomPanel() {
+  const channel = selectedChannelId ? channels.find((item) => item.id === selectedChannelId && item.kind === "voice") : undefined;
+  voiceRoomPanel.hidden = !channel;
+  if (!channel) return;
+  voiceRoomPanelTitle.textContent = channelDisplayName(channel);
+  const roomState = voiceRooms?.currentState ?? { status: "idle" as const };
+  const callState = voiceCalls?.currentState;
+  const callBusy = Boolean(callState && callState.status !== "idle");
+  const activeHere = roomState.channelId === channel.id;
+  voiceRoomJoinButton.disabled = !conversationReady || callBusy || roomState.status !== "idle";
+  if (activeHere && roomState.status === "joining") {
+    voiceRoomJoinButton.textContent = "Joining…";
+    voiceRoomPanelStatus.textContent = "Finding the active room and sharing its encrypted media key…";
+  } else if (activeHere && roomState.status === "connecting") {
+    voiceRoomJoinButton.textContent = "Connecting…";
+    voiceRoomPanelStatus.textContent = "Connecting to the encrypted voice relay…";
+  } else if (activeHere && roomState.status === "reconnecting") {
+    voiceRoomJoinButton.textContent = "Reconnecting…";
+    voiceRoomPanelStatus.textContent = "Trying to restore your encrypted audio connection…";
+  } else if (activeHere && roomState.status === "connected") {
+    voiceRoomJoinButton.textContent = "In voice room";
+    const count = roomState.participantCount ?? 1;
+    voiceRoomPanelStatus.textContent = `Connected · ${count} participant${count === 1 ? "" : "s"}`;
+  } else if (roomState.status !== "idle") {
+    voiceRoomJoinButton.textContent = "Leave the other room first";
+    voiceRoomPanelStatus.textContent = "You can only join one voice room at a time.";
+  } else if (callBusy) {
+    voiceRoomJoinButton.textContent = "Finish your direct call first";
+    voiceRoomPanelStatus.textContent = "You can only use one voice connection at a time.";
+  } else {
+    voiceRoomJoinButton.textContent = "Join voice room";
+    voiceRoomPanelStatus.textContent = "Audio is end-to-end encrypted. Room capacity is determined by the host’s LiveKit deployment.";
+  }
 }
 
 function renderVoiceCall(state: VoiceCallView) {
   if (state.status === "idle") {
-    if (voiceCallDialog.open) voiceCallDialog.close();
+    if (voiceRooms?.currentState.status === "idle" && voiceCallDialog.open) voiceCallDialog.close();
     updateVoiceCallButton();
     return;
   }
@@ -689,12 +742,42 @@ function renderVoiceCall(state: VoiceCallView) {
   updateVoiceCallButton();
 }
 
+function renderVoiceRoom(state: VoiceRoomView) {
+  if (state.status === "idle") {
+    if (voiceCalls?.currentState.status === "idle" && voiceCallDialog.open) voiceCallDialog.close();
+    updateVoiceCallButton();
+    return;
+  }
+  if (!voiceCallDialog.open) voiceCallDialog.showModal();
+  voiceCallTitle.textContent = "Voice room";
+  if (state.status === "joining") voiceCallStatus.textContent = `Joining ${state.roomName ?? "voice room"}…`;
+  else if (state.status === "connecting") voiceCallStatus.textContent = `Connecting to ${state.roomName ?? "voice room"}…`;
+  else if (state.status === "reconnecting") voiceCallStatus.textContent = `Reconnecting to ${state.roomName ?? "voice room"}…`;
+  else {
+    const count = state.participantCount ?? 1;
+    voiceCallStatus.textContent = `Connected to ${state.roomName ?? "voice room"} · ${count} participant${count === 1 ? "" : "s"}.`;
+  }
+  voiceCallAccept.hidden = true;
+  voiceCallDecline.hidden = true;
+  voiceCallMute.hidden = state.status !== "connected" && state.status !== "reconnecting";
+  voiceCallEnd.hidden = false;
+  voiceCallEnd.textContent = state.status === "joining" || state.status === "connecting" ? "Cancel join" : "Leave room";
+  voiceCallMute.textContent = state.muted ? "Unmute microphone" : "Mute microphone";
+  updateVoiceCallButton();
+}
+
 async function voiceConversationMembers(conversationId: string) {
   const result = await api.conversationMembers(conversationId);
   return result.members.map((member) => ({ ...member, roleIds: normalizeRoleIds(member.roleIds) }));
 }
 
 async function encryptVoiceSignal(conversationId: string, value: VoiceSignalBody) {
+  if (!cryptoClient) throw new Error("crypto_not_initialized");
+  const members = await voiceConversationMembers(conversationId);
+  return cryptoClient.encryptMetadata(conversationId, members, value);
+}
+
+async function encryptVoiceRoomSignal(conversationId: string, value: VoiceRoomSignalBody) {
   if (!cryptoClient) throw new Error("crypto_not_initialized");
   const members = await voiceConversationMembers(conversationId);
   return cryptoClient.encryptMetadata(conversationId, members, value);
@@ -739,7 +822,38 @@ function initializeVoiceCalls(userId: string) {
     onState: renderVoiceCall,
     audioOutput: voiceCallAudioOutput,
   });
+  voiceRooms = new VoiceRoomController({
+    requestToken: (channelId) => api.voiceRoomToken(channelId),
+    checkAccess: async (channelId) => {
+      try {
+        return (await api.voiceRoomAuthorized(channelId)).authorized;
+      } catch (error) {
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return false;
+        throw error;
+      }
+    },
+    encryptSignal: encryptVoiceRoomSignal,
+    decryptSignal: decryptVoiceSignal,
+    sendSignal: (conversationId, ciphertext) => sendRealtimeCommand({ type: "voice.signal", conversationId, ciphertext }),
+    onState: renderVoiceRoom,
+    audioOutput: voiceCallAudioOutput,
+  });
   updateVoiceCallButton();
+}
+
+async function joinVoiceRoom(channel: ServerChannel) {
+  if (channel.kind !== "voice" || !voiceRooms) return;
+  voiceRoomPanelStatus.textContent = "Connecting to the voice room…";
+  try {
+    await voiceRooms.join({
+      id: channel.id,
+      conversationId: channel.conversationId,
+      name: channelDisplayName(channel),
+    });
+  } catch (error) {
+    voiceRoomPanelStatus.textContent = readableError(error);
+    setStatus(readableError(error), true);
+  }
 }
 
 function sendRealtimeCommand(command: Record<string, unknown>) {
@@ -2970,16 +3084,22 @@ function restoreScrollAnchor(anchor: ScrollAnchor | undefined) {
 
 function readableError(error: unknown) {
   if (error instanceof Error && error.name === "AbortError") return "Upload canceled.";
-  if (error instanceof Error && (error.name === "NotAllowedError" || error.name === "PermissionDeniedError")) return "Allow microphone access in your browser to join the voice call.";
+  if (error instanceof Error && (error.name === "NotAllowedError" || error.name === "PermissionDeniedError")) return "Allow microphone access in your browser to join voice.";
+  if (error instanceof Error && error.name === "NotFoundError") return "No microphone was found for voice.";
+  if (error instanceof Error && error.message === "voice_microphone_unavailable") return "This browser does not have microphone access available.";
   if (error instanceof Error && error.message === "message_too_long") return "Messages are limited to 4,000 characters. Long pasted text is sent as a text file.";
-  if (error instanceof Error && error.message === "voice_signaling_unavailable") return "Realtime is unavailable. Reconnect before starting or answering a voice call.";
-  if (error instanceof Error && error.message === "voice_media_encryption_unavailable") return "This browser could not enable encrypted audio, so the call was not connected.";
+  if (error instanceof Error && error.message === "voice_signaling_unavailable") return "Realtime is unavailable. Reconnect before starting or joining voice.";
+  if (error instanceof Error && error.message === "voice_media_encryption_unavailable") return "This browser could not enable encrypted audio, so voice was not connected.";
+  if (error instanceof Error && error.message === "voice_room_key_unavailable") return "Could not get the active room’s encrypted media key. Try joining again.";
   if (error instanceof ApiError) {
     if (error.code === "voice_service_not_configured") return "Voice calls are not configured by this server's host.";
-    if (error.code === "voice_token_rate_limited") return "Too many voice call attempts. Wait a minute and try again.";
+    if (error.code === "voice_token_rate_limited") return "Too many voice call or join attempts. Wait a minute and try again.";
     if (error.code === "voice_token_service_unavailable") return "The voice service is temporarily unavailable. Try again shortly.";
+    if (error.code === "voice_room_service_unavailable") return "The voice room service is temporarily unavailable. Try again shortly.";
+    if (error.code === "voice_room_not_found" || error.code === "not_a_voice_room_member") return "You no longer have access to that voice room.";
+    if (error.code === "voice_room_key_unavailable") return "Could not get the active room’s encrypted media key. Try joining again.";
     if (error.code === "blocked_user") return "Voice calls are unavailable because this direct conversation is blocked.";
-    if (error.code === "account_suspended") return "This account cannot join voice calls while suspended.";
+    if (error.code === "account_suspended") return "This account cannot use voice calls or rooms while suspended.";
     if (error.code === "invalid_credentials") return "The username or password is incorrect.";
     if (error.code === "username_taken") return "That username is already in use.";
     if (error.code === "server_owner_must_transfer_ownership") return "The server owner must transfer ownership before leaving.";
@@ -3151,8 +3271,15 @@ function connectRealtime() {
         return;
       }
       if (payload.type === "voice.signal" && payload.conversationId && payload.userId && payload.ciphertext) {
-        const peerName = voicePeerName(payload.conversationId, payload.userId);
-        void voiceCalls?.receiveSignal(payload.conversationId, payload.userId, payload.ciphertext, peerName).catch(() => undefined);
+        const conversation = conversations.find((item) => item.id === payload.conversationId);
+        if (conversation?.kind === "dm" && voiceRooms?.currentState.status === "idle") {
+          const peerName = voicePeerName(payload.conversationId, payload.userId);
+          void voiceCalls?.receiveSignal(payload.conversationId, payload.userId, payload.ciphertext, peerName).catch(() => undefined);
+        }
+        const voiceChannel = channels.some((channel) => channel.kind === "voice" && channel.conversationId === payload.conversationId);
+        if (voiceChannel || voiceRooms?.currentState.conversationId === payload.conversationId) {
+          void voiceRooms?.receiveSignal(payload.conversationId, payload.ciphertext).catch(() => undefined);
+        }
         return;
       }
       if (payload.type === "message.deleted" && payload.conversationId) {
@@ -3453,7 +3580,7 @@ function renderChannels() {
     button.setAttribute("aria-label", [channelName, muted ? "muted on this browser" : "", unread > 0 ? `${unread} unread messages` : ""].filter(Boolean).join(", "));
     const icon = document.createElement("span");
     icon.className = "channel-item-icon";
-    icon.append(iconElement("hash"));
+    icon.append(iconElement(channel.kind === "voice" ? "headphones" : "hash"));
     const name = document.createElement("span");
     name.className = "channel-item-name";
     name.textContent = channelName;
@@ -3799,6 +3926,10 @@ async function selectServer(serverId: string, requestedChannelId?: string) {
   const token = ++serverSelectionToken;
   clearDeactivatedSpaceView();
   selectedServerId = serverId;
+  chatContent.dataset.voiceRoom = "false";
+  voiceRoomPanel.hidden = true;
+  messageSearchToggle.hidden = false;
+  messageSearchContainer.hidden = false;
   void refreshModerationNotices(serverId);
   selectedChannelId = undefined;
   activeServerWelcome = undefined;
@@ -3970,6 +4101,10 @@ async function showDirectMessages() {
   clearDeactivatedSpaceView();
   selectedServerId = undefined;
   selectedChannelId = undefined;
+  chatContent.dataset.voiceRoom = "false";
+  voiceRoomPanel.hidden = true;
+  messageSearchToggle.hidden = false;
+  messageSearchContainer.hidden = false;
   clearCustomEmojiAssets();
   channels = [];
   categories = [];
@@ -4109,6 +4244,9 @@ function renderConversationWelcome(title: string, description: string) {
 function renderDeactivatedSpace(serverId: string) {
   selectedChannelId = undefined;
   selectedConversationId = undefined;
+  chatContent.dataset.voiceRoom = "false";
+  voiceRoomPanel.hidden = true;
+  messageSearchToggle.hidden = true;
   selectedMembers = [];
   conversationReady = false;
   channels = [];
@@ -4521,7 +4659,8 @@ function setComposerAttachmentProgress(attachment: ComposerAttachment, loadedByt
 }
 
 function updateComposerState() {
-  const enabled = Boolean(selectedConversationId && cryptoClient && conversationReady);
+  const selectedChannel = selectedChannelId ? channels.find((channel) => channel.id === selectedChannelId) : undefined;
+  const enabled = Boolean(selectedConversationId && cryptoClient && conversationReady && selectedChannel?.kind !== "voice");
   const channelPermissions = activeChannelPermissions();
   messageInput.disabled = !enabled || sendInProgress || !channelPermissions.canSend;
   photoInput.disabled = !enabled || sendInProgress || Boolean(editTarget) || !channelPermissions.canUpload;
@@ -4644,10 +4783,15 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   uploadAbortController?.abort();
   stopLocalTyping();
   const token = ++selectionToken;
+  const isVoiceRoom = channel?.kind === "voice";
   selectedConversationId = conversationId;
   conversationReady = false;
   lastRoomKeyRefreshAt = 0;
   if (channel) selectedChannelId = channel.id;
+  chatContent.dataset.voiceRoom = channel?.kind === "voice" ? "true" : "false";
+  voiceRoomPanel.hidden = channel?.kind !== "voice";
+  messageSearchToggle.hidden = channel?.kind === "voice";
+  messageSearchContainer.hidden = channel?.kind === "voice";
   setDetailsForConversation(Boolean(channel));
   lastMessagesKey = "__not-rendered__";
   loadedMessages = [];
@@ -4679,9 +4823,10 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   resizeMessageInput();
   const conversation = conversations.find((item) => item.id === conversationId);
   conversationTitle.textContent = channel ? channelDisplayName(channel) : conversation ? conversationDisplayName(conversation) : "Conversation";
-  conversationSubtitle.textContent = "Loading encrypted conversation…";
-  renderMessageSkeletons();
-  setChannelIcon(channel ? "message-square" : conversation?.kind === "group" ? "users-round" : "user-round");
+  conversationSubtitle.textContent = isVoiceRoom ? "End-to-end encrypted voice room" : "Loading encrypted conversation…";
+  if (isVoiceRoom) messagesPanel.replaceChildren();
+  else renderMessageSkeletons();
+  setChannelIcon(channel ? channel.kind === "voice" ? "headphones" : "message-square" : conversation?.kind === "group" ? "users-round" : "user-round");
   updateComposerState();
   renderConversations();
   renderChannels();
@@ -4705,9 +4850,11 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
   try {
     // Start the network requests together, but don't make the local cache wait
     // for the member list or device-key exchange before rendering.
-    const initialHistoryPromise = api.messages(conversationId, { limit: MESSAGE_PAGE_SIZE }).catch(() => undefined);
+    const initialHistoryPromise = isVoiceRoom
+      ? Promise.resolve(undefined)
+      : api.messages(conversationId, { limit: MESSAGE_PAGE_SIZE }).catch(() => undefined);
     const membersPromise = api.conversationMembers(conversationId);
-    const cached = currentUser
+    const cached = currentUser && !isVoiceRoom
       ? await readCachedMessages(currentUser.id, conversationId)
       : [];
     if (token !== selectionToken) return;
@@ -4728,7 +4875,9 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
     if (token !== selectionToken) return;
     selectedMembers = members.members.map((member) => ({ ...member, roleIds: normalizeRoleIds(member.roleIds) }));
     renderMembers(selectedMembers);
-    conversationSubtitle.textContent = `${selectedMembers.length} member${selectedMembers.length === 1 ? "" : "s"} · end-to-end encrypted`;
+    conversationSubtitle.textContent = isVoiceRoom
+      ? `${selectedMembers.length} member${selectedMembers.length === 1 ? "" : "s"} · voice room · end-to-end encrypted`
+      : `${selectedMembers.length} member${selectedMembers.length === 1 ? "" : "s"} · end-to-end encrypted`;
     await cryptoClient.prepareConversation(conversationId, selectedMembers);
     if (token !== selectionToken) return;
     const [initialHistory] = await Promise.all([
@@ -4813,10 +4962,13 @@ async function selectConversation(conversationId: string, channel?: ServerChanne
     renderChannels();
     updateComposerState();
     renderConversations();
-    await refreshMessages({ forceScrollToBottom: true, initialPage: initialHistory });
+    if (!isVoiceRoom) await refreshMessages({ forceScrollToBottom: true, initialPage: initialHistory });
     if (token !== selectionToken) return;
     if (messageTarget) await scrollToMessage(messageTarget);
-    if (wasSidebarOpen) messageInput.focus();
+    if (wasSidebarOpen) {
+      if (isVoiceRoom) voiceRoomJoinButton.focus();
+      else messageInput.focus();
+    }
   } catch (error) {
     if (token !== selectionToken) return;
     const canSend = conversationReady;
@@ -5978,6 +6130,7 @@ async function fetchNewerMessages(conversationId: string, activeCryptoClient: Cr
 }
 
 async function refreshMessages(options: { forceScrollToBottom?: boolean; initialPage?: MessagePage } = {}) {
+  if (selectedChannelId && channels.some((channel) => channel.id === selectedChannelId && channel.kind === "voice")) return;
   if (!selectedConversationId || !cryptoClient || messagesLoading || olderMessagesLoading) return;
   const conversationId = selectedConversationId;
   const activeCryptoClient = cryptoClient;
@@ -6130,7 +6283,7 @@ async function encryptAndStoreMetadata(serverId: string, channel: ServerChannel,
   const normalizedChannelName = channelName.trim().slice(0, 80);
   const channelCiphertext = await cryptoClient.encryptMetadata(channel.conversationId, members, {
     name: normalizedChannelName,
-    kind: "text",
+    kind: channel.kind,
   });
   await api.updateChannel(serverId, channel.id, { encryptedMetadata: channelCiphertext });
   channelLabels.set(channel.id, normalizedChannelName);
@@ -6792,9 +6945,15 @@ window.addEventListener("pagehide", () => {
   stopLocalTyping();
   publishPresence("offline");
   void voiceCalls?.end();
+  void voiceRooms?.leave();
 });
 
 voiceCallButton.addEventListener("click", () => {
+  const channel = selectedChannelId ? channels.find((item) => item.id === selectedChannelId) : undefined;
+  if (channel?.kind === "voice") {
+    void joinVoiceRoom(channel);
+    return;
+  }
   const conversation = conversations.find((item) => item.id === selectedConversationId);
   if (!selectedConversationId || conversation?.kind !== "dm" || !voiceCalls) return;
   void voiceCalls.start(selectedConversationId, conversationDisplayName(conversation))
@@ -6805,12 +6964,24 @@ voiceCallAccept.addEventListener("click", () => {
 });
 voiceCallDecline.addEventListener("click", () => void voiceCalls?.decline());
 voiceCallMute.addEventListener("click", () => {
-  void voiceCalls?.toggleMute().catch((error) => setStatus(readableError(error), true));
+  if (voiceRooms?.currentState.status !== undefined && voiceRooms.currentState.status !== "idle") {
+    void voiceRooms.toggleMute().catch((error) => setStatus(readableError(error), true));
+  } else {
+    void voiceCalls?.toggleMute().catch((error) => setStatus(readableError(error), true));
+  }
 });
-voiceCallEnd.addEventListener("click", () => void voiceCalls?.end());
+voiceCallEnd.addEventListener("click", () => {
+  if (voiceRooms?.currentState.status !== undefined && voiceRooms.currentState.status !== "idle") void voiceRooms.leave();
+  else void voiceCalls?.end();
+});
+voiceRoomJoinButton.addEventListener("click", () => {
+  const channel = selectedChannelId ? channels.find((item) => item.id === selectedChannelId && item.kind === "voice") : undefined;
+  if (channel) void joinVoiceRoom(channel);
+});
 voiceCallDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
-  void voiceCalls?.end();
+  if (voiceRooms?.currentState.status !== undefined && voiceRooms.currentState.status !== "idle") void voiceRooms.leave();
+  else void voiceCalls?.end();
 });
 
 updateComposerState();

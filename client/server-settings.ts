@@ -67,6 +67,7 @@ const newCategoryName = document.getElementById("new-category-name") as HTMLInpu
 const categoryList = document.getElementById("category-settings-list") as HTMLElement;
 const channelForm = document.getElementById("channel-form") as HTMLFormElement;
 const newChannelName = document.getElementById("new-channel-name") as HTMLInputElement;
+const newChannelKind = document.getElementById("new-channel-kind") as HTMLSelectElement;
 const newChannelCategory = document.getElementById("new-channel-category") as HTMLSelectElement;
 const channelList = document.getElementById("channel-settings-list") as HTMLElement;
 const roleForm = document.getElementById("role-form") as HTMLFormElement;
@@ -497,7 +498,7 @@ function renderRolePreview() {
     button.classList.toggle("selected", channel.id === selectedChannel?.id);
     button.setAttribute("aria-pressed", String(channel.id === selectedChannel?.id));
     if (channel.id === selectedChannel?.id) button.setAttribute("aria-current", "page");
-    button.append(rolePreviewIcon("hash"));
+    button.append(rolePreviewIcon(channel.kind === "voice" ? "headphones" : "hash"));
     const name = document.createElement("span");
     name.textContent = channelName(channel);
     button.append(name);
@@ -1131,7 +1132,7 @@ async function saveChannel(channel: ServerChannel, name: HTMLInputElement, categ
     const updates: Parameters<ApiClient["updateChannel"]>[2] = {};
     if (hasAnyPermission("manage_channels", "edit_channels")) {
       const channelMembers = await prepareConversation(channel.conversationId);
-      updates.encryptedMetadata = await cryptoClient!.encryptMetadata(channel.conversationId, channelMembers, { name: normalized, kind: "text" });
+      updates.encryptedMetadata = await cryptoClient!.encryptMetadata(channel.conversationId, channelMembers, { name: normalized, kind: channel.kind });
       updates.categoryId = category.value || null;
     }
     if (hasAnyPermission("manage_channels", "reorder_channels")) {
@@ -1164,6 +1165,9 @@ function renderChannels() {
     const category = document.createElement("select");
     category.setAttribute("aria-label", "Channel category");
     category.append(categoryOptions(channel.categoryId));
+    const kind = document.createElement("span");
+    kind.className = "channel-kind-badge";
+    kind.textContent = channel.kind === "voice" ? "Voice" : "Text";
     const position = document.createElement("input");
     position.type = "number";
     position.min = "0";
@@ -1195,7 +1199,7 @@ function renderChannels() {
         archive.disabled = false;
       }
     });
-    row.append(name, category, position, save, archive);
+    row.append(name, kind, category, position, save, archive);
     channelList.append(row);
   }
   if (channels.length === 0) {
@@ -2380,11 +2384,12 @@ channelForm.addEventListener("submit", async (event) => {
   const button = channelForm.querySelector<HTMLButtonElement>("button");
   if (button) button.disabled = true;
   try {
-    const result = await api.createChannel(currentServer.id, "", newChannelCategory.value || null);
+    const kind = newChannelKind.value === "voice" ? "voice" : "text";
+    const result = await api.createChannel(currentServer.id, "", newChannelCategory.value || null, kind);
     const channelMembers = await prepareConversation(result.channel.conversationId);
     const encryptedMetadata = await cryptoClient!.encryptMetadata(result.channel.conversationId, channelMembers, {
       name: newChannelName.value.trim(),
-      kind: "text",
+      kind,
     });
     await api.updateChannel(currentServer.id, result.channel.id, { encryptedMetadata });
     newChannelName.value = "";

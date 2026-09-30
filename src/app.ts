@@ -197,6 +197,44 @@ async function directVoiceCallAccessError(conversationId: string, userId: string
   return undefined;
 }
 
+async function voiceRoomAccessError(channelId: string, userId: string) {
+  const [suspension] = await db<{ user_id: string }[]>`
+    select user_id from instance_user_suspensions where user_id = ${userId}
+  `;
+  if (suspension) return { error: "account_suspended" as const };
+  const [channel] = await db<{
+    id: string;
+    server_id: string;
+    conversation_id: string;
+    kind: string;
+    archived_at: Date | null;
+  }[]>`
+    select id, server_id, conversation_id, kind, archived_at
+    from channels where id = ${channelId}
+  `;
+  if (!channel || channel.kind !== "voice" || channel.archived_at) return { error: "voice_room_not_found" as const };
+  const access = await channelAuthorization(channel.server_id, userId, channel.id);
+  if (!access?.canView) return { error: "not_a_voice_room_member" as const };
+  const [conversationMember] = await db<{ user_id: string }[]>`
+    select user_id from conversation_members
+    where conversation_id = ${channel.conversation_id} and user_id = ${userId} and left_at is null
+  `;
+  if (!conversationMember) return { error: "not_a_voice_room_member" as const };
+  return { channel };
+}
+
+async function voiceSignalAccessError(conversationId: string, userId: string) {
+  const [channel] = await db<{ id: string; kind: string }[]>`
+    select id, kind from channels
+    where conversation_id = ${conversationId} and archived_at is null
+  `;
+  if (channel?.kind === "voice") {
+    const access = await voiceRoomAccessError(channel.id, userId);
+    return "error" in access ? access.error : undefined;
+  }
+  return directVoiceCallAccessError(conversationId, userId);
+}
+
 function toPublicUser(user: Pick<UserRow, "id" | "username" | "display_name" | "created_at"> & Partial<Pick<UserRow, "profile_image_storage_key" | "profile_banner_storage_key">>) {
   return {
     id: user.id,
@@ -665,8 +703,8 @@ async function channelAuthorization(serverId: string, userId: string, channelId:
 }
 
 async function conversationChannelAuthorization(conversationId: string, userId: string) {
-  const [channel] = await db<{ id: string; server_id: string; archived_at: Date | null }[]>`
-    select id, server_id, archived_at from channels
+  const [channel] = await db<{ id: string; server_id: string; kind: string; archived_at: Date | null }[]>`
+    select id, server_id, kind, archived_at from channels
     where conversation_id = ${conversationId}
   `;
   if (!channel) return undefined;
@@ -1010,7 +1048,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.20.1" };
+         ?? { name: "Naigi", version: "0.21.0" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -3724,10 +3762,11 @@ export function createApp() {
           values ('channel', ${user.id})
           returning id
         `;
-        const [channel] = await transaction<{ id: string; position: number; created_at: Date }[]>`
-          insert into channels (server_id, conversation_id, created_by, encrypted_metadata, category_id, position)
-          values (${params.serverId}, ${conversation.id}, ${user.id}, ${metadata}, ${body.categoryId ?? null}, ${body.position ?? position.next_position})
-          returning id, position, created_at
+        const channelKind = body.kind ?? "text";
+        const [channel] = await transaction<{ id: string; kind: string; position: number; created_at: Date }[]>`
+          insert into channels (server_id, conversation_id, created_by, encrypted_metadata, category_id, kind, position)
+          values (${params.serverId}, ${conversation.id}, ${user.id}, ${metadata}, ${body.categoryId ?? null}, ${channelKind}, ${body.position ?? position.next_position})
+          returning id, kind, position, created_at
         `;
         await transaction`
           insert into conversation_members (conversation_id, user_id, role)
@@ -3778,7 +3817,7 @@ export function createApp() {
           conversationId: created.conversationId,
           encryptedMetadata: encodeBase64(metadata),
           categoryId: body.categoryId ?? null,
-          kind: "text",
+          kind: created.channel.kind,
           position: created.channel.position,
           canView: true,
           canUpload: true,
@@ -3791,6 +3830,7 @@ export function createApp() {
       body: t.Object({
         encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
         categoryId: t.Optional(t.Union([t.String({ format: "uuid" }), t.Null()])),
+        kind: t.Optional(t.Union([t.Literal("text"), t.Literal("voice")])),
         position: t.Optional(t.Integer({ minimum: 0, maximum: 1_000_000 })),
       }),
     })
@@ -5400,6 +5440,84 @@ export function createApp() {
         callId: t.String({ format: "uuid" }),
       }),
     })
+    .post("/v1/voice/room-token", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const access = await voiceRoomAccessError(body.channelId, user.id);
+      if ("error" in access) return respondError(set, 403, access.error ?? "voice_room_not_found");
+      if (!config.liveKit) return respondError(set, 503, "voice_service_not_configured");
+      try {
+        if (await voiceTokenRateLimited(user.id)) return respondError(set, 429, "voice_token_rate_limited");
+      } catch {
+        return respondError(set, 503, "voice_token_service_unavailable");
+      }
+
+      const roomDigest = Buffer.from(await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(`naigi-voice-channel:${access.channel.id}`),
+      )).toString("base64url");
+      const roomName = `naigi-voice-room-${roomDigest}`;
+      const roomService = liveKitRoomService();
+      if (!roomService) return respondError(set, 503, "voice_service_not_configured");
+      try {
+        let rooms = await roomService.listRooms([roomName]);
+        if (!rooms.some((room) => room.name === roomName)) {
+          try {
+            // Do not impose an application-wide participant count. LiveKit and
+            // the host's deployment resources determine how many can join.
+            await roomService.createRoom({ name: roomName, emptyTimeout: 60, departureTimeout: 30 });
+          } catch {
+            rooms = await roomService.listRooms([roomName]);
+            if (!rooms.some((room) => room.name === roomName)) throw new Error("voice_room_creation_failed");
+          }
+          rooms = await roomService.listRooms([roomName]);
+        }
+        const activeParticipants = rooms.find((room) => room.name === roomName)?.numParticipants ?? 0;
+        const bootstrapKey = `naigi:voice-room-bootstrap:${access.channel.id}`;
+        let canStart = false;
+        await connectRedis();
+        if (activeParticipants > 0) {
+          await redis.eval("return redis.call('DEL', KEYS[1])", 1, bootstrapKey);
+        } else {
+          const acquired = await redis.eval(
+            "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2]); return 1; end; return 0",
+            1,
+            bootstrapKey,
+            crypto.randomUUID(),
+            30,
+          );
+          canStart = Number(acquired) === 1;
+        }
+
+        const accessToken = new AccessToken(config.liveKit.apiKey, config.liveKit.apiSecret, {
+          identity: crypto.randomUUID(),
+          ttl: "1m",
+        });
+        accessToken.addGrant({
+          roomJoin: true,
+          room: roomName,
+          canPublishSources: [TrackSource.MICROPHONE],
+          canSubscribe: true,
+          canPublishData: false,
+        });
+        set.headers["cache-control"] = "no-store";
+        return { url: config.liveKit.webSocketUrl, token: await accessToken.toJwt(), canStart };
+      } catch {
+        return respondError(set, 503, "voice_room_service_unavailable");
+      }
+    }, {
+      body: t.Object({ channelId: t.String({ format: "uuid" }) }),
+    })
+    .post("/v1/voice/room-check", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const access = await voiceRoomAccessError(body.channelId, user.id);
+      if ("error" in access) return respondError(set, 403, access.error ?? "voice_room_not_found");
+      set.headers["cache-control"] = "no-store";
+      return { authorized: true };
+    }, {
+      body: t.Object({ channelId: t.String({ format: "uuid" }) }),
+    })
     .post("/v1/crypto/keys/upload", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
@@ -6164,6 +6282,7 @@ export function createApp() {
       const channelContext = await conversationChannelAuthorization(params.conversationId, user.id);
       if (channelContext) {
         if (!channelContext.access?.canView) return respondError(set, 403, "channel_not_visible");
+        if (channelContext.channel.kind === "voice") return respondError(set, 403, "voice_channel_messages_unsupported");
         const canSendText = hasServerPermission(channelContext.access.authorization, "send_messages");
         if (!canSendText && !hasAttachments) {
           return respondError(set, 403, "insufficient_channel_permissions");
@@ -6289,6 +6408,7 @@ export function createApp() {
       if (await directConversationIsBlocked(params.conversationId, user.id)) return respondError(set, 403, "blocked_user");
       const channelContext = await conversationChannelAuthorization(params.conversationId, user.id);
       if (channelContext && !channelContext.access?.canView) return respondError(set, 403, "channel_not_visible");
+      if (channelContext?.channel.kind === "voice") return respondError(set, 403, "voice_channel_messages_unsupported");
 
       const [membership] = await db<{ user_id: string }[]>`
         select user_id from conversation_members
@@ -6460,7 +6580,7 @@ export function createApp() {
         }
 
         if (command.type === "voice.signal") {
-          const accessError = await directVoiceCallAccessError(command.conversationId, active.userId);
+          const accessError = await voiceSignalAccessError(command.conversationId, active.userId);
           if (accessError) {
             ws.send(JSON.stringify({ type: "error", error: accessError, conversationId: command.conversationId }));
             return;

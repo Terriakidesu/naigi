@@ -15,7 +15,7 @@ best-effort notification bus.
 | `src/admin-db/` | Separate host-operator database | Host operator accounts and sessions |
 | Redis/Valkey | Cross-instance pub/sub and realtime support | Short-lived notifications and connection state; not authoritative history |
 | `ATTACHMENTS_DIR`, `PROFILE_IMAGES_DIR` | Persistent filesystem-backed media storage | Encrypted chat attachments and server-managed profile images respectively |
-| Optional LiveKit | Self-hosted WebRTC SFU/relay for direct audio calls | Encrypted media frames and connection metadata; never the call media key |
+| Optional LiveKit | Self-hosted WebRTC SFU/relay for direct calls and joinable voice rooms | Encrypted media frames and connection metadata; never the call/room media key |
 
 ## Message flow
 
@@ -47,11 +47,13 @@ for known trust limits.
 
 ## Voice flow
 
-Voice signaling is encrypted inside the direct conversation and relayed through the existing
-realtime channel. The caller generates the media key locally and sends it only inside that encrypted
-signal. The Naigi server authorizes the direct conversation, creates a two-participant LiveKit room,
-and returns a short-lived token restricted to microphone publishing. Both browser clients enable
-LiveKit E2EE before connecting; the LiveKit service sees encrypted media and connection metadata.
+Direct-call signaling is encrypted inside the direct conversation; voice-room join requests and
+media keys use the encrypted voice-channel conversation. Redis relays ciphertext only. A browser
+generates the room key and shares it only through that encrypted conversation. Naigi authorizes
+voice-channel access and returns short-lived tokens restricted to microphone publishing. Direct-call
+rooms have two participants; voice rooms omit an application-wide participant limit and let the
+self-hosted LiveKit deployment enforce its available capacity. Browser clients enable LiveKit E2EE
+before connecting; the LiveKit service sees encrypted media and connection metadata.
 
 ## Operational implications
 

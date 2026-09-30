@@ -260,6 +260,15 @@ try {
   const createdServer = await request(a, "/v1/servers", {});
   assert.equal(createdServer.status, 201, JSON.stringify(createdServer.body));
   assert.equal(createdServer.body.server.landingChannelId, createdServer.body.channel.id);
+  const createdVoiceChannel = await request(a, `/v1/servers/${createdServer.body.server.id}/channels`, {
+    kind: "voice",
+    encryptedMetadata: "",
+  });
+  assert.equal(createdVoiceChannel.status, 201, JSON.stringify(createdVoiceChannel.body));
+  assert.equal(createdVoiceChannel.body.channel.kind, "voice");
+  const listedChannels = await request(a, `/v1/servers/${createdServer.body.server.id}/channels`);
+  assert.ok(listedChannels.body.channels.some((channel: { id: string; kind: string }) =>
+    channel.id === createdVoiceChannel.body.channel.id && channel.kind === "voice"));
   const bannerUpload = await binaryRequest(a, "/v1/me/banner", onePixelPng, "image/png");
   assert.equal(bannerUpload.status, 200);
   const bannerProfile = await request(a, "/v1/me");
@@ -313,6 +322,23 @@ try {
   assert.equal(invite.status, 201, JSON.stringify(invite.body));
   const joined = await request(b, `/v1/invites/${encodeURIComponent(invite.body.invite.token)}/accept`, {});
   assert.equal(joined.status, 200, JSON.stringify(joined.body));
+  const ownerVoiceAccess = await request(a, "/v1/voice/room-check", { channelId: createdVoiceChannel.body.channel.id });
+  assert.equal(ownerVoiceAccess.status, 200, JSON.stringify(ownerVoiceAccess.body));
+  assert.equal(ownerVoiceAccess.body.authorized, true);
+  const voiceHistory = await request(a, `/v1/conversations/${createdVoiceChannel.body.channel.conversationId}/messages`, undefined, "GET");
+  assert.equal(voiceHistory.status, 403, JSON.stringify(voiceHistory.body));
+  const voiceMessage = await request(a, `/v1/conversations/${createdVoiceChannel.body.channel.conversationId}/messages`, {
+    senderDeviceId: "00000000-0000-4000-8000-000000000001",
+    clientMessageId: "00000000-0000-4000-8000-000000000002",
+    protocol: "test",
+    ciphertext: "AA",
+  });
+  assert.equal(voiceMessage.status, 403, JSON.stringify(voiceMessage.body));
+  const memberVoiceAccess = await request(b, "/v1/voice/room-check", { channelId: createdVoiceChannel.body.channel.id });
+  assert.equal(memberVoiceAccess.status, 200, JSON.stringify(memberVoiceAccess.body));
+  assert.equal(memberVoiceAccess.body.authorized, true);
+  const outsiderVoiceAccess = await request(outsider, "/v1/voice/room-check", { channelId: createdVoiceChannel.body.channel.id });
+  assert.equal(outsiderVoiceAccess.status, 403, JSON.stringify(outsiderVoiceAccess.body));
   const leftServer = await request(b, `/v1/servers/${createdServer.body.server.id}/leave`, {});
   assert.equal(leftServer.status, 200, JSON.stringify(leftServer.body));
   const blockedConversation = await request(a, "/v1/conversations", {

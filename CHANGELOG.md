@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-30
+
+### Added
+
+- Joinable end-to-end encrypted voice rooms in spaces. Members with channel-creation permission can create voice channels; room capacity is controlled by the self-hosted LiveKit deployment rather than a fixed Naigi limit.
+
 ## [0.20.1] - 2026-09-30
 
 ### Fixed
@@ -191,6 +197,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.21.0](docs/changelogs/0.21.0.md) — 2026-09-30
 - [0.20.1](docs/changelogs/0.20.1.md) — 2026-09-30
 - [0.20.0](docs/changelogs/0.20.0.md) — 2026-09-30
 - [0.19.1](docs/changelogs/0.19.1.md) — 2026-09-30

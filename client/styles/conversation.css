@@ -31,6 +31,19 @@
 .message-search input:focus { border: 0; box-shadow: none; }
 .message-search .icon-button { width: 22px; height: 22px; }
 .chat-content { position: relative; display: flex; grid-column: 1; grid-row: 2; flex-direction: column; min-width: 0; min-height: 0; }
+.voice-room-panel { display: grid; flex: 1 1 auto; align-content: center; justify-items: center; gap: 0.7rem; min-width: 0; min-height: 0; padding: 2rem; text-align: center; }
+.voice-room-panel[hidden] { display: none; }
+.voice-room-panel-icon { display: grid; place-items: center; width: 64px; height: 64px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line-soft)); border-radius: 20px; color: var(--accent-text); background: color-mix(in srgb, var(--accent) 13%, var(--bg-elevated)); }
+.voice-room-panel-icon svg { width: 29px; height: 29px; }
+.voice-room-panel > .eyebrow { margin: 0; color: var(--text-faint); font-size: 0.65rem; font-weight: 800; letter-spacing: 0.13em; }
+.voice-room-panel h2 { max-width: min(100%, 620px); margin: 0; overflow-wrap: anywhere; font-size: clamp(1.25rem, 3vw, 1.8rem); }
+.voice-room-panel-description { max-width: 470px; margin: 0; color: var(--text-muted); font-size: 0.82rem; line-height: 1.55; }
+.voice-room-panel > button { min-height: 42px; margin-top: 0.35rem; padding: 0.65rem 1.15rem; border-radius: 8px; font-weight: 750; }
+.voice-room-panel-status { min-height: 1.1em; margin: 0; color: var(--text-faint); font-size: 0.7rem; }
+.chat-content[data-voice-room="true"] #messages,
+.chat-content[data-voice-room="true"] #composer,
+.chat-content[data-voice-room="true"] #outbox-notice,
+.chat-content[data-voice-room="true"] #typing-indicator { display: none !important; }
 .chat-moderation-notices { display: grid; flex: 0 0 auto; gap: 0.45rem; max-height: 32vh; overflow: auto; padding: 0.55rem 1rem; border-bottom: 1px solid rgba(216, 173, 104, 0.24); background: color-mix(in srgb, rgba(216, 173, 104, 0.08) 62%, var(--bg)); }
 .chat-moderation-notices[hidden] { display: none; }
 .chat-moderation-notice { display: flex; align-items: center; justify-content: space-between; gap: 0.85rem; padding: 0.65rem 0.75rem; border: 1px solid rgba(216, 173, 104, 0.34); border-radius: 9px; background: color-mix(in srgb, rgba(216, 173, 104, 0.08) 55%, var(--bg-sidebar)); }

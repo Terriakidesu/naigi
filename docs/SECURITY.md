@@ -55,8 +55,9 @@ Optional integrations add their own visibility:
   available.
 - Host report-evidence private keys are separate from chat keys. Keep their encrypted backup and
   passphrase offline and separate; losing the private key prevents evidence recovery.
-- Voice calls currently cover direct one-to-one audio only. They do not support space voice rooms,
-  video calls, or host-tuned adaptive quality.
+- Voice supports direct one-to-one calls and joinable space audio rooms. It does not include video
+  calls or host-tuned adaptive quality. A room key is shared with members who can access the voice
+  channel; removing a member cannot revoke keys already obtained by that member.
 
 ## Operator checklist
 

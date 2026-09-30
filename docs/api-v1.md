@@ -265,14 +265,13 @@ the backend does not depend on that representation.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/servers/:serverId/channels` | List ordered active text channels |
-| `POST` | `/v1/servers/:serverId/channels` | Create a text channel (owner/admin) |
+| `GET` | `/v1/servers/:serverId/channels` | List ordered active text and voice channels, including each channel's `kind` |
+| `POST` | `/v1/servers/:serverId/channels` | Create a channel (owner/admin); `kind` is `text` by default or `voice` |
 | `PATCH` | `/v1/servers/:serverId/channels/:channelId` | Replace metadata, category, or `position` |
 | `DELETE` | `/v1/servers/:serverId/channels/:channelId` | Archive a channel |
 
-The original channel created with a server is retained as the reference client's encrypted
-metadata anchor; it cannot be archived. The server also always retains at least one active
-text channel.
+The original text channel created with a server is retained as the reference client's encrypted
+metadata anchor; it cannot be archived. The server also always retains at least one active channel.
 
 Every channel includes a `conversationId`. This is the E2EE room identity and is used with
 the generic conversation endpoints below. It is distinct from the channel ID so a future
@@ -281,6 +280,11 @@ frontend can keep navigation and cryptographic room state separate.
 Category IDs and channel ordering are server-visible for navigation. Category names and
 descriptions remain inside `encryptedMetadata`; the reference browser client encrypts
 category metadata in the first active channel room.
+
+Voice channels use the same channel authorization and conversation membership as text channels.
+They are selected and opened like rooms but do not expose a message composer in the reference UI.
+Message history and sends are disabled for voice channels. The LiveKit room and access tokens are
+created only when a member joins.
 
 Roles may receive category-level view/upload grants. Active channels in that category inherit
 those grants in addition to any channel-specific grants. `PATCH /v1/servers/:serverId` accepts
@@ -341,6 +345,24 @@ Open `GET /v1/realtime` as a WebSocket with the authenticated cookie/token, then
 Realtime payloads are notifications only. Fetch the encrypted message envelope from
 PostgreSQL after receiving `message.created`. Reconnect and synchronize with the history
 cursor; Redis is not the source of truth.
+
+The browser may send `{"type":"voice.signal","conversationId":"…","ciphertext":"…"}` for
+direct-call signaling or voice-room key exchange. `ciphertext` is encrypted by the client inside the
+conversation before it reaches the server or Redis; the server checks direct-call membership or
+active voice-channel access before publishing it.
+
+## Voice
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/voice/token` | Issue a short-lived, microphone-only token for an authorized two-person direct call |
+| `POST` | `/v1/voice/check` | Recheck direct-call access during a call |
+| `POST` | `/v1/voice/room-token` | Issue a short-lived, microphone-only token for an accessible voice channel; `canStart` elects one client to initialize an empty room |
+| `POST` | `/v1/voice/room-check` | Recheck voice-channel access during a room session |
+
+Voice-room tokens do not contain the end-to-end encryption key. The client shares that key only in
+encrypted channel signaling. Naigi does not impose a voice-room participant limit; LiveKit deployment
+capacity applies. The server receives no room media key and cannot decrypt audio.
 
 ## Crypto transport
 

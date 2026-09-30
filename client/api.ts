@@ -84,7 +84,7 @@ export type ServerChannel = {
   conversationId: string;
   encryptedMetadata: string;
   categoryId: string | null;
-  kind: "text";
+  kind: "text" | "voice";
   position: number;
   canView?: boolean;
   canUpload?: boolean;
@@ -1027,6 +1027,14 @@ export class ApiClient {
     return this.post<{ authorized: boolean }>("/v1/voice/check", { conversationId, callId });
   }
 
+  voiceRoomToken(channelId: string) {
+    return this.post<{ url: string; token: string; canStart: boolean }>("/v1/voice/room-token", { channelId });
+  }
+
+  voiceRoomAuthorized(channelId: string) {
+    return this.post<{ authorized: boolean }>("/v1/voice/room-check", { channelId });
+  }
+
   servers() {
     return this.get<{ servers: Server[] }>("/v1/servers");
   }
@@ -1191,8 +1199,8 @@ export class ApiClient {
     return this.delete<{ deleted: boolean }>(`/v1/servers/${serverId}`);
   }
 
-  createChannel(serverId: string, encryptedMetadata = "", categoryId: string | null = null) {
-    return this.post<{ channel: ServerChannel }>(`/v1/servers/${serverId}/channels`, { encryptedMetadata, categoryId });
+  createChannel(serverId: string, encryptedMetadata = "", categoryId: string | null = null, kind: ServerChannel["kind"] = "text") {
+    return this.post<{ channel: ServerChannel }>(`/v1/servers/${serverId}/channels`, { encryptedMetadata, categoryId, kind });
   }
 
   updateChannel(serverId: string, channelId: string, changes: { encryptedMetadata?: string; position?: number; categoryId?: string | null }) {

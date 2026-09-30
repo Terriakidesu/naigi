@@ -119,12 +119,12 @@ belongs to. Naigi does not provide a global account directory or global user sea
 
 ### End-to-end encrypted voice calls
 
-Naigi supports one-to-one audio calls in direct conversations through a self-hosted LiveKit relay.
-The client encrypts audio frames before publishing; Naigi signaling carries only encrypted call
-control, and the relay receives no media keys. Configure `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and
-`LIVEKIT_API_SECRET` together to enable calls. See [`docs/VOICE.md`](docs/VOICE.md) for deployment
-and security details. Joinable space voice rooms and host-tuned adaptive quality are planned for
-subsequent releases.
+Naigi supports one-to-one audio calls in direct conversations and joinable space voice rooms through
+a self-hosted LiveKit relay. The client encrypts audio frames before publishing; Naigi signaling
+carries only encrypted call control and room keys, and the relay receives no media keys. Configure
+`LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` together to enable voice. Room capacity is
+determined by the LiveKit deployment; host-tuned adaptive quality is planned for a later release. See
+[`docs/VOICE.md`](docs/VOICE.md) for deployment and security details.
 
 The browser client supports safe Markdown rendering, cursor-based older-message loading, draft
 preservation while navigating, server/category management, profile/password settings, and an

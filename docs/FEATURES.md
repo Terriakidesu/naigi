@@ -48,10 +48,11 @@ and connected services can observe.
 ## Voice
 
 When the host configures a self-hosted LiveKit service, users can make one-to-one audio calls in direct
-conversations. Call signaling and the media key use the existing encrypted conversation; audio is
-frame-encrypted in the browser before the LiveKit relay receives it. The relay cannot decrypt the
-media. Calls currently do **not** include space voice rooms, video calls, or host-tuned adaptive
-quality. See [Voice calls](VOICE.md).
+conversations and joinable audio rooms in spaces. Voice-room creation is available under Space
+Settings → Rooms by choosing the Voice room type. Call signaling and media keys use the existing
+encrypted conversation; audio is frame-encrypted in the browser before the LiveKit relay receives it.
+The relay cannot decrypt media, and Naigi does not impose an app-wide participant cap on voice rooms.
+Video calls and host-tuned adaptive quality are not yet available. See [Voice calls](VOICE.md).
 
 ## Personalization and notifications
 

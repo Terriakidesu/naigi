@@ -84,9 +84,17 @@
                  <button id="details-toggle" class="icon-button" type="button" title="Toggle conversation details" aria-label="Toggle conversation details" aria-expanded="true"><i data-lucide="info"></i></button>
             </div>
           </header>
-          <div id="chat-content" class="chat-content">
-              <div id="moderation-notices" class="chat-moderation-notices" role="region" aria-label="Moderation notices" hidden></div>
-              <div id="messages" class="messages" aria-label="Messages"><button id="load-older-button" class="load-older-button" type="button" hidden>Load older messages</button><div class="message-skeleton-list" role="status" aria-label="Loading encrypted messages" aria-busy="true"><div class="message-skeleton" aria-hidden="true"><div class="message-skeleton-avatar"></div><div class="message-skeleton-copy"><div class="message-skeleton-line short"></div><div class="message-skeleton-line medium"></div></div></div><div class="message-skeleton" aria-hidden="true"><div class="message-skeleton-avatar"></div><div class="message-skeleton-copy"><div class="message-skeleton-line medium"></div><div class="message-skeleton-line short"></div></div></div><div class="message-skeleton" aria-hidden="true"><div class="message-skeleton-avatar"></div><div class="message-skeleton-copy"><div class="message-skeleton-line short"></div><div class="message-skeleton-line medium"></div></div></div></div></div>
+           <div id="chat-content" class="chat-content">
+               <div id="moderation-notices" class="chat-moderation-notices" role="region" aria-label="Moderation notices" hidden></div>
+               <section id="voice-room-panel" class="voice-room-panel" hidden aria-labelledby="voice-room-panel-title">
+                 <div class="voice-room-panel-icon" aria-hidden="true"><i data-lucide="headphones"></i></div>
+                 <p class="eyebrow">END-TO-END ENCRYPTED AUDIO</p>
+                 <h2 id="voice-room-panel-title">Voice room</h2>
+                 <p class="voice-room-panel-description">Join to talk with other members. Your browser encrypts audio before it reaches the self-hosted relay.</p>
+                 <button id="voice-room-join-button" type="button">Join voice room</button>
+                 <p id="voice-room-panel-status" class="voice-room-panel-status" role="status" aria-live="polite">Room capacity depends on the host’s LiveKit deployment.</p>
+               </section>
+               <div id="messages" class="messages" aria-label="Messages"><button id="load-older-button" class="load-older-button" type="button" hidden>Load older messages</button><div class="message-skeleton-list" role="status" aria-label="Loading encrypted messages" aria-busy="true"><div class="message-skeleton" aria-hidden="true"><div class="message-skeleton-avatar"></div><div class="message-skeleton-copy"><div class="message-skeleton-line short"></div><div class="message-skeleton-line medium"></div></div></div><div class="message-skeleton" aria-hidden="true"><div class="message-skeleton-avatar"></div><div class="message-skeleton-copy"><div class="message-skeleton-line medium"></div><div class="message-skeleton-line short"></div></div></div><div class="message-skeleton" aria-hidden="true"><div class="message-skeleton-avatar"></div><div class="message-skeleton-copy"><div class="message-skeleton-line short"></div><div class="message-skeleton-line medium"></div></div></div></div></div>
             <div id="outbox-notice" class="outbox-notice" hidden><span id="outbox-label"></span><button id="outbox-retry" class="secondary" type="button">Retry now</button></div>
             <div id="typing-indicator" class="typing-indicator" hidden role="status" aria-live="polite"></div>
           <form id="composer" class="composer">

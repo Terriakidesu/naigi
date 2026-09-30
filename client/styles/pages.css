@@ -363,6 +363,7 @@
 .settings-list-row { display: flex; align-items: center; gap: 0.5rem; min-width: 0; padding: 0.6rem; border: 1px solid color-mix(in srgb, var(--line-soft) 68%, transparent); border-radius: 10px; background: var(--bg-sidebar); }
 .settings-list-row > input:first-child { flex: 1 1 180px; min-width: 0; padding: 0.5rem; font-size: 0.74rem; }
 .settings-list-row select { min-width: 110px; width: auto; padding: 0.5rem; font-size: 0.7rem; }
+.channel-kind-badge { flex: 0 0 auto; padding: 0.32rem 0.45rem; border: 1px solid var(--line-soft); border-radius: 999px; color: var(--text-muted); font-size: 0.62rem; font-weight: 750; }
 .settings-list-row button { flex: 0 0 auto; padding: 0.45rem 0.6rem; font-size: 0.68rem; }
 .position-input { flex: 0 0 62px !important; width: 62px !important; padding: 0.5rem !important; font-size: 0.72rem !important; }
 .settings-row-copy { min-width: 0; margin-right: auto; }
