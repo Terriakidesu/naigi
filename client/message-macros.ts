@@ -261,6 +261,11 @@ export function formatMessageMacro(macro: ParsedMessageMacro, nowMs = Date.now()
   return dateFormatter(options).format(date);
 }
 
+export function messageMacroTooltip(timestampMs: number) {
+  const formatter = dateFormatter({ year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "long" });
+  return `${formatter.format(new Date(timestampMs))} (${formatter.resolvedOptions().timeZone})`;
+}
+
 function formatNumber(value: number, format: string) {
   const width = format === "2" || format === "2-digit" ? 2 : format === "3" ? 3 : 0;
   return String(value).padStart(width, "0");
@@ -371,6 +376,7 @@ export function refreshRelativeTimeMacros(root: ParentNode = document, nowMs = D
       usesNow: false,
     };
     element.textContent = formatMessageMacro(macro, nowMs);
-    element.title = new Date(timestampMs).toLocaleString();
+    element.title = messageMacroTooltip(timestampMs);
+    element.setAttribute("aria-label", `${element.textContent} · ${element.title}`);
   }
 }

@@ -4,11 +4,20 @@
 
 ### Added
 
+- Grouped member action menus offer shared-member profiles, direct messaging, account-local block/unblock, and a side-opening Roles picker alongside permission-restricted moderation actions.
+- Chat-sidebar rooms can be dragged above/below other rooms or onto category headers, including empty and collapsed categories, with permission-aware automatic saving.
+- Drag rooms by their handles to reorder them or drop them on a group header to change category; category/order fields remain available as alternatives.
+- Space emoji settings show decrypted image previews and support renaming without reuploading the encrypted image.
+- Voice & audio settings provide push-to-talk, input/output volume, a silence threshold, a local microphone test, and remembered default devices using custom-styled controls. Participant context menus offer local mute and volume.
 - Voice rooms automatically rejoin after page reloads or connection recovery, retaining mute/deafen choices within the current tab. Leaving, locking, or losing room access cancels automatic rejoining.
 - Voice calls and rooms let participants choose their microphone and audio output from the in-call dock.
 
 ### Changed
 
+- Members use compact table rows with join dates, role badges, and permission-filtered action menus. Role assignment opens in an anchored searchable checkbox popover instead of a modal.
+- Role management is list-first with default permissions, search, member counts, edit/action controls, and permission- and hierarchy-restricted drag ordering. The full editor opens on demand.
+- Rendered date/time macros have a subtle highlight and a full local date/time tooltip including the timezone.
+- Space settings use a compact management workspace, searchable room/member/activity lists, collapsible member-role selectors, and a denser two-column permission editor.
 - Voice-room views omit duplicate headings, explanatory banners, and routine audio status to leave more space for participants; actionable audio errors remain visible.
 - Voice rooms now use an audio-first participant stage with live speaker activity and show connected members under the active voice channel.
 - A permanent profile, microphone, audio-output, and settings strip spans the full left navigation area. Active voice connections add a status/location panel above it with disconnect separate from the profile strip.
@@ -17,6 +26,11 @@
 
 ### Fixed
 
+- Member action menus show role assignment, warn, timeout, kick, and ban consistently; unavailable actions are disabled with permission or protected-member explanations instead of disappearing.
+- Member action buttons use the registered three-dot icon; owner/self menus offer Copy user ID without exposing restricted role or moderation actions.
+- Role editors have a persistent Back to roles action and Escape support; clicking settings navigation exits the editor with an unsaved-change confirmation.
+- Member role assignment uses a compact searchable checkbox dialog with explicit Save/Cancel instead of a native multi-select that expands member rows.
+- Compact audio-device dropdowns no longer overlap the settings button or adjacent controls.
 - In-room device dropdowns show only a chevron beside microphone and headphone buttons, without repeating their icons.
 - Adjacent custom emoji shortcodes now render correctly, and custom emoji-only messages enlarge like Unicode emoji.
 - Voice rooms verify microphone publication, surface encrypted-audio subscription and playback failures, and provide an explicit browser audio-unlock action.

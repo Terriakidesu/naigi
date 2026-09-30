@@ -1191,6 +1191,10 @@ export class ApiClient {
     return this.delete<{ deleted: boolean }>(`/v1/servers/${serverId}/emojis/${emojiId}`);
   }
 
+  updateServerCustomEmoji(serverId: string, emojiId: string, encryptedMetadata: string) {
+    return this.patch<{ updated: boolean }>(`/v1/servers/${serverId}/emojis/${emojiId}`, { encryptedMetadata });
+  }
+
   serverAuditLogs(serverId: string, limit = 100) {
     return this.get<{ logs: ServerAuditLog[] }>(`/v1/servers/${serverId}/audit-logs?limit=${Math.min(100, Math.max(1, limit))}`);
   }

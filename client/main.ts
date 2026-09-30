@@ -35,12 +35,14 @@ import { renderAvatar, setAvatarStyle } from "./avatar";
 import type { EmojiCategory } from "./emoji-data";
 import { appendMarkdown } from "./markdown";
 import { formatMessageMacrosAsText, freezeNowMessageMacros, refreshRelativeTimeMacros } from "./message-macros";
+import { roomDropUpdates } from "./room-order";
 import { deleteCachedMessages, readCachedMessages, writeCachedMessages } from "./message-cache";
 import { VoiceCallController, type VoiceCallView } from "./voice-calls";
 import type { VoiceSignalBody } from "./voice-protocol";
 import { VoiceRoomController, type VoiceRoomView } from "./voice-rooms";
 import type { VoiceRoomSignalBody } from "./voice-room-protocol";
 import { parseVoiceRoomResume, voiceRoomResumeDelay, type VoiceRoomResume } from "./voice-room-resume";
+import { loadVoiceAudioPreferences, normalizeVoiceAudioPreferences, saveVoiceAudioPreferences, voiceAudioStorageKey, type VoiceAudioPreferences } from "./voice-audio-preferences";
 import { isEmojiOnlyMessage } from "./message-format";
 import { renderHighlightedCode } from "./code-highlight";
 import { messageGroupState, shouldGroupMessage, type MessageGroupState } from "./message-grouping";
@@ -73,6 +75,7 @@ const voiceMemberCache = new Map<string, ConversationMember[]>();
 const voiceMemberLoads = new Map<string, Promise<ConversationMember[]>>();
 let voiceAudioInputDeviceId = "";
 let voiceAudioOutputDeviceId = "";
+let voiceAudioPreferences: VoiceAudioPreferences = normalizeVoiceAudioPreferences(undefined);
 let voiceAudioInputs: MediaDeviceInfo[] = [];
 let voiceAudioOutputs: MediaDeviceInfo[] = [];
 let voiceDeviceRefreshAt = 0;
@@ -318,6 +321,7 @@ const sidebarVoiceDeafen = byId<HTMLButtonElement>("sidebar-voice-deafen");
 const sidebarVoiceLeave = byId<HTMLButtonElement>("sidebar-voice-leave");
 const sidebarVoiceInputDevice = byId<HTMLSelectElement>("sidebar-voice-input-device");
 const sidebarVoiceOutputDevice = byId<HTMLSelectElement>("sidebar-voice-output-device");
+const voiceHoldButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-voice-ptt]")];
 let preferredVoiceMuted = false;
 let preferredVoiceDeafened = false;
 const voiceCallDock = byId<HTMLElement>("voice-call-dock");
@@ -808,6 +812,7 @@ function renderVoiceRoomParticipantGrid(state: VoiceRoomView) {
     tile.classList.toggle("is-speaking", Boolean(participant.speaking));
     tile.classList.toggle("is-muted", Boolean(participant.muted));
     tile.setAttribute("role", "listitem");
+    if (participant.userId && !participant.local) bindVoiceUserContextMenu(tile, participant.userId, name);
     const avatar = document.createElement("span");
     avatar.className = "voice-room-tile-avatar";
     renderAvatar(avatar, name, participant.userId ?? participant.identity ?? name, isCurrentUser ? currentUser?.avatarUrl : undefined);
@@ -875,6 +880,39 @@ function updateVoiceDockVisibility() {
   voiceCallDock.hidden = !visible;
   chatMain.dataset.voiceDockActive = String(visible);
   updateSidebarVoiceControls();
+  updateVoiceHoldButtons();
+}
+
+function updateVoiceHoldButtons() {
+  const room = voiceRooms?.currentState;
+  const call = voiceCalls?.currentState;
+  const state = room && room.status !== "idle" ? room : call;
+  const connected = state?.status === "connected" || state?.status === "reconnecting";
+  for (const button of voiceHoldButtons) {
+    button.hidden = !connected || voiceAudioPreferences.mode !== "push-to-talk";
+    button.disabled = Boolean(state?.muted);
+    button.title = `Hold to talk (${voiceAudioPreferences.pushToTalkKey})`;
+    button.setAttribute("aria-label", button.title);
+  }
+}
+
+function refreshStoredVoiceAudioPreferences() {
+  if (!currentUser) return;
+  const previousInput = voiceAudioPreferences.inputDeviceId;
+  const previousOutput = voiceAudioPreferences.outputDeviceId;
+  voiceAudioPreferences = loadVoiceAudioPreferences(currentUser.id);
+  if (voiceAudioPreferences.inputDeviceId !== previousInput) {
+    voiceAudioInputDeviceId = voiceAudioPreferences.inputDeviceId;
+    void switchActiveVoiceDevice("audioinput", voiceAudioInputDeviceId).catch((error) => setStatus(readableError(error), true));
+  }
+  if (voiceAudioPreferences.outputDeviceId !== previousOutput) {
+    voiceAudioOutputDeviceId = voiceAudioPreferences.outputDeviceId;
+    void switchActiveVoiceDevice("audiooutput", voiceAudioOutputDeviceId).catch((error) => setStatus(readableError(error), true));
+  }
+  voiceRooms?.refreshAudioPreferences();
+  voiceCalls?.refreshAudioPreferences();
+  renderVoiceDevicePickers();
+  updateVoiceHoldButtons();
 }
 
 function updateSidebarVoiceControls() {
@@ -971,11 +1009,13 @@ async function refreshVoiceAudioDevices() {
   const refresh = mediaDevices.enumerateDevices().then((devices) => {
     voiceAudioInputs = devices.filter((device) => device.kind === "audioinput");
     voiceAudioOutputs = devices.filter((device) => device.kind === "audiooutput");
-    if (voiceAudioInputDeviceId && !voiceAudioInputs.some((device) => device.deviceId === voiceAudioInputDeviceId)) {
+    if (voiceAudioInputDeviceId && voiceAudioInputs.some((device) => device.deviceId && device.label)
+      && !voiceAudioInputs.some((device) => device.deviceId === voiceAudioInputDeviceId)) {
       voiceAudioInputDeviceId = "";
       void switchActiveVoiceDevice("audioinput", "").catch(() => undefined);
     }
-    if (voiceAudioOutputDeviceId && !voiceAudioOutputs.some((device) => device.deviceId === voiceAudioOutputDeviceId)) {
+    if (voiceAudioOutputDeviceId && voiceAudioOutputs.some((device) => device.deviceId && device.label)
+      && !voiceAudioOutputs.some((device) => device.deviceId === voiceAudioOutputDeviceId)) {
       voiceAudioOutputDeviceId = "";
       void switchActiveVoiceDevice("audiooutput", "").catch(() => undefined);
     }
@@ -1007,7 +1047,14 @@ function handleVoiceDeviceChange(select: HTMLSelectElement, kind: "audioinput" |
   if (kind === "audioinput") voiceAudioInputDeviceId = deviceId;
   else voiceAudioOutputDeviceId = deviceId;
   renderVoiceDevicePickers();
-  void switchActiveVoiceDevice(kind, deviceId).catch((error) => {
+  void switchActiveVoiceDevice(kind, deviceId).then(() => {
+    if (!currentUser) return;
+    if ((kind === "audioinput" ? voiceAudioInputDeviceId : voiceAudioOutputDeviceId) !== deviceId) return;
+    if (kind === "audioinput") voiceAudioPreferences.inputDeviceId = deviceId;
+    else voiceAudioPreferences.outputDeviceId = deviceId;
+    voiceAudioPreferences = saveVoiceAudioPreferences(currentUser.id, voiceAudioPreferences);
+  }).catch((error) => {
+    if ((kind === "audioinput" ? voiceAudioInputDeviceId : voiceAudioOutputDeviceId) !== deviceId) return;
     if (kind === "audioinput") voiceAudioInputDeviceId = previousDeviceId;
     else voiceAudioOutputDeviceId = previousDeviceId;
     renderVoiceDevicePickers();
@@ -1196,6 +1243,7 @@ function initializeVoiceCalls(userId: string) {
     getAudioOutputDeviceId: () => voiceAudioOutputDeviceId,
     getInitialMuted: () => preferredVoiceMuted,
     getInitialDeafened: () => preferredVoiceDeafened,
+    getAudioPreferences: () => voiceAudioPreferences,
   });
   voiceRooms = new VoiceRoomController({
     currentUserId: userId,
@@ -1218,6 +1266,7 @@ function initializeVoiceCalls(userId: string) {
     getAudioOutputDeviceId: () => voiceAudioOutputDeviceId,
     getInitialMuted: () => preferredVoiceMuted,
     getInitialDeafened: () => preferredVoiceDeafened,
+    getAudioPreferences: () => voiceAudioPreferences,
   });
   renderVoiceDevicePickers();
   updateVoiceCallButton();
@@ -1467,6 +1516,61 @@ function closeNavigationContextMenu() {
   navigationContextMenu.replaceChildren();
 }
 
+function bindVoiceUserContextMenu(element: HTMLElement, userId: string, name: string) {
+  if (userId === currentUser?.id) return;
+  element.tabIndex = 0;
+  element.setAttribute("aria-haspopup", "dialog");
+  element.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openVoiceUserContextMenu(userId, name, event.clientX, event.clientY);
+  });
+  element.addEventListener("keydown", (event) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    event.preventDefault();
+    const rect = element.getBoundingClientRect();
+    openVoiceUserContextMenu(userId, name, rect.left, rect.bottom);
+  });
+}
+
+function openVoiceUserContextMenu(userId: string, name: string, x: number, y: number) {
+  closeMessageContextMenu();
+  navigationContextMenu.replaceChildren();
+  navigationContextMenu.setAttribute("role", "dialog");
+  navigationContextMenu.setAttribute("aria-label", `Local audio for ${name}`);
+  const settings = voiceAudioPreferences.users[userId] ?? { muted: false, volume: 100 };
+  const persist = () => {
+    if (!currentUser) return;
+    voiceAudioPreferences.users[userId] = settings;
+    voiceAudioPreferences = saveVoiceAudioPreferences(currentUser.id, voiceAudioPreferences);
+    voiceRooms?.refreshAudioPreferences();
+    voiceCalls?.refreshAudioPreferences();
+  };
+  navigationContextAction(settings.muted ? "Unmute for me" : "Mute for me", () => { settings.muted = !settings.muted; persist(); }, { icon: settings.muted ? "volume-2" : "volume-x" });
+  navigationContextMenu.querySelector("button")?.removeAttribute("role");
+  const label = document.createElement("label");
+  label.className = "voice-user-volume";
+  const description = document.createElement("span");
+  description.textContent = `User volume · ${settings.volume}%`;
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0";
+  slider.max = "100";
+  slider.step = "1";
+  slider.value = String(settings.volume);
+  slider.setAttribute("aria-label", `Volume for ${name}`);
+  slider.addEventListener("input", () => {
+    settings.volume = Number(slider.value);
+    description.textContent = `User volume · ${settings.volume}%`;
+    persist();
+  });
+  label.append(description, slider);
+  navigationContextMenu.append(label);
+  renderIcons(navigationContextMenu);
+  placeContextMenu(navigationContextMenu, x, y);
+  navigationContextMenu.querySelector<HTMLButtonElement>("button")?.focus();
+}
+
 function placeContextMenu(menu: HTMLElement, x: number, y: number) {
   menu.hidden = false;
   const margin = 8;
@@ -1536,6 +1640,8 @@ function copyRoomLink(serverId: string, channelId: string) {
 }
 
 function openNavigationContextMenu(target: { kind: "channel"; channel: ServerChannel } | { kind: "category"; category: ServerCategory }, x: number, y: number) {
+  navigationContextMenu.setAttribute("role", "menu");
+  navigationContextMenu.setAttribute("aria-label", "Room and category actions");
   closeMessageContextMenu();
   navigationContextMenu.replaceChildren();
   if (target.kind === "channel") {
@@ -3581,6 +3687,7 @@ function readableError(error: unknown) {
   if (error instanceof Error && (error.name === "NotAllowedError" || error.name === "PermissionDeniedError")) return "Allow microphone access in your browser to join voice.";
   if (error instanceof Error && error.name === "NotFoundError") return "No microphone was found for voice.";
   if (error instanceof Error && error.message === "voice_microphone_unavailable") return "This browser does not have microphone access available.";
+  if (error instanceof Error && error.message === "voice_audio_processing_unavailable") return "Voice audio controls require a browser with AudioWorklet support and trusted HTTPS.";
   if (error instanceof Error && error.message === "voice_audio_input_unavailable") return "Could not switch to that microphone. Check that it is connected and try again.";
   if (error instanceof Error && error.message === "voice_audio_output_unavailable") return "Could not switch to that audio output. Check that it is connected and try again.";
   if (error instanceof Error && error.message === "voice_secure_context_required") return "Voice requires a secure browser connection. Open Naigi over HTTPS; remote HTTP addresses such as a LAN IP cannot access the microphone or encrypted media worker.";
@@ -3662,6 +3769,9 @@ function conversationLocation(conversationId: string) {
 async function startCrypto() {
   if (!currentUser) throw new Error("not_authenticated");
   appPreferences = applyAppPreferences(loadAppPreferences(currentUser.id), chatLayout);
+  voiceAudioPreferences = loadVoiceAudioPreferences(currentUser.id);
+  voiceAudioInputDeviceId = voiceAudioPreferences.inputDeviceId;
+  voiceAudioOutputDeviceId = voiceAudioPreferences.outputDeviceId;
   const localPassphrase = await resolveLocalPassphrase(currentUser.id);
   if (!localPassphrase) {
     const returnPath = `${window.location.pathname}${window.location.search}`;
@@ -4056,6 +4166,85 @@ function renderServers() {
   if (activeServer) serverSettingsButton.href = `/server-settings?server=${encodeURIComponent(activeServer.id)}`;
 }
 
+let sidebarDraggedRoom: { id: string; serverId: string } | undefined;
+let sidebarRoomSortSaving = false;
+
+function canDragSidebarRoom() {
+  const server = activeServer();
+  return Boolean(server && !server.deactivatedAt && !sidebarRoomSortSaving && (
+    server.permissions.manage_channels || server.permissions.edit_channels || server.permissions.reorder_channels
+  ));
+}
+
+function bindSidebarRoomDrop(target: HTMLElement, categoryId: string | null, room?: ServerChannel) {
+  let beforeId: string | undefined;
+  const allowed = () => {
+    const server = activeServer();
+    const dragged = channels.find((channel) => channel.id === sidebarDraggedRoom?.id);
+    if (!canDragSidebarRoom() || !server || sidebarDraggedRoom?.serverId !== server.id || !dragged || dragged.id === room?.id) return false;
+    if (dragged.categoryId !== categoryId && !server.permissions.manage_channels && !server.permissions.edit_channels) return false;
+    return !room || server.permissions.manage_channels || server.permissions.reorder_channels;
+  };
+  const clear = () => target.classList.remove("sidebar-room-drop-before", "sidebar-room-drop-after", "sidebar-room-drop-category");
+  target.addEventListener("dragover", (event) => {
+    if (!allowed()) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    clear();
+    if (room) {
+      const rect = target.getBoundingClientRect();
+      const after = event.clientY >= rect.top + rect.height / 2;
+      const siblings = channels.filter((channel) => channel.categoryId === categoryId && channel.id !== sidebarDraggedRoom?.id)
+        .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+      beforeId = after ? siblings[siblings.findIndex((channel) => channel.id === room.id) + 1]?.id : room.id;
+      target.classList.add(after ? "sidebar-room-drop-after" : "sidebar-room-drop-before");
+    } else {
+      beforeId = undefined;
+      target.classList.add("sidebar-room-drop-category");
+    }
+  });
+  target.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) return;
+    clear();
+  });
+  target.addEventListener("drop", (event) => {
+    clear();
+    if (!allowed() || !sidebarDraggedRoom) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const dragged = sidebarDraggedRoom;
+    sidebarDraggedRoom = undefined;
+    void saveSidebarRoomDrop(dragged.serverId, dragged.id, categoryId, beforeId);
+  });
+}
+
+async function saveSidebarRoomDrop(serverId: string, roomId: string, categoryId: string | null, beforeId?: string) {
+  const server = activeServer();
+  if (!server || server.id !== serverId || sidebarRoomSortSaving) return;
+  const canReorder = server.permissions.manage_channels || server.permissions.reorder_channels;
+  const updates = canReorder ? roomDropUpdates(channels, roomId, categoryId, beforeId)
+    : channels.find((channel) => channel.id === roomId)?.categoryId !== categoryId ? [{ id: roomId, categoryId }] : [];
+  if (!updates.length) return;
+  sidebarRoomSortSaving = true;
+  channelList.setAttribute("aria-busy", "true");
+  try {
+    for (const { id, ...update } of updates) await api.updateChannel(serverId, id, update);
+    if (categoryId && selectedServerId === serverId) collapsedCategories.delete(categoryId);
+    setStatus("Room order saved.");
+  } catch (error) {
+    setStatus(`Could not finish moving the room: ${readableError(error)}`, true);
+  } finally {
+    try {
+      const result = await api.serverChannels(serverId);
+      channelsByServer.set(serverId, result.channels);
+      if (selectedServerId === serverId) channels = result.channels;
+    } catch (error) { setStatus(readableError(error), true); }
+    sidebarRoomSortSaving = false;
+    channelList.removeAttribute("aria-busy");
+    renderChannels();
+  }
+}
+
 function renderChannels() {
   const visible = selectedServerId ? channels.filter((channel) => {
     const query = conversationSearchQuery.trim().toLowerCase();
@@ -4090,6 +4279,22 @@ function renderChannels() {
     button.className = "channel-item";
     button.type = "button";
     button.dataset.channelId = channel.id;
+    button.draggable = canDragSidebarRoom();
+    bindSidebarRoomDrop(button, channel.categoryId, channel);
+    button.addEventListener("dragstart", (event) => {
+      if (!canDragSidebarRoom() || !selectedServerId || !event.dataTransfer) { event.preventDefault(); return; }
+      sidebarDraggedRoom = { id: channel.id, serverId: selectedServerId };
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", channel.id);
+      button.classList.add("sidebar-room-dragging");
+    });
+    button.addEventListener("dragend", () => {
+      sidebarDraggedRoom = undefined;
+      button.classList.remove("sidebar-room-dragging");
+      channelList.querySelectorAll(".sidebar-room-drop-before, .sidebar-room-drop-after, .sidebar-room-drop-category").forEach((target) => {
+        target.classList.remove("sidebar-room-drop-before", "sidebar-room-drop-after", "sidebar-room-drop-category");
+      });
+    });
     const unread = unreadMarkers.get(channel.conversationId)?.count ?? 0;
     button.dataset.unread = String(unread > 0);
     button.classList.toggle("selected", channel.id === selectedChannelId);
@@ -4151,6 +4356,7 @@ function renderChannels() {
         const member = members.find((item) => item.userId === participant.userId);
         const person = document.createElement("span");
         person.className = "channel-voice-participant";
+        if (participant.userId && !isCurrentUser) bindVoiceUserContextMenu(person, participant.userId, name);
         if (participant.speaking) person.classList.add("is-speaking");
         const avatar = document.createElement("span");
         avatar.className = "channel-voice-avatar";
@@ -4175,10 +4381,11 @@ function renderChannels() {
   };
 
   const appendCategory = (category: ServerCategory | null, categoryChannels: ServerChannel[]) => {
-    if (categoryChannels.length === 0) return;
+    if (categoryChannels.length === 0 && (!canDragSidebarRoom() || conversationSearchQuery.trim())) return;
     const unread = categoryChannels.reduce((count, channel) => count + (unreadMarkers.get(channel.conversationId)?.count ?? 0), 0);
     const heading = document.createElement(category ? "button" : "div");
     heading.className = "category-heading";
+    bindSidebarRoomDrop(heading, category?.id ?? null);
     if (category) {
       const categoryButton = heading as HTMLButtonElement;
       categoryButton.type = "button";
@@ -4766,6 +4973,7 @@ function renderMembers(members: ConversationMember[]) {
       row.dataset.roleGroupId = group.roleId ?? "participants";
       row.title = `View ${memberName}'s profile`;
       row.addEventListener("click", () => void openUserProfile(member.userId));
+      bindVoiceUserContextMenu(row, member.userId, memberName);
       const state = member.userId === currentUser?.id ? "online" : presenceByUser.get(member.userId) ?? "offline";
       const presence = document.createElement("span");
       presence.className = "member-presence-dot";
@@ -7538,7 +7746,7 @@ voiceCallButton.addEventListener("click", () => {
   }
   const conversation = conversations.find((item) => item.id === selectedConversationId);
   if (!selectedConversationId || conversation?.kind !== "dm" || !voiceCalls) return;
-  void voiceCalls.start(selectedConversationId, conversationDisplayName(conversation))
+  void voiceCalls.start(selectedConversationId, conversationDisplayName(conversation), selectedMembers.find((member) => member.userId !== currentUser?.id)?.userId)
     .catch((error) => setStatus(readableError(error), true));
 });
 voiceCallAccept.addEventListener("click", () => {
@@ -7575,6 +7783,32 @@ voiceRoomMute.addEventListener("click", () => voiceCallMute.click());
 voiceRoomDeafen.addEventListener("click", () => voiceCallDeafen.click());
 voiceRoomEnableAudio.addEventListener("click", () => voiceCallEnableAudio.click());
 voiceRoomLeave.addEventListener("click", () => voiceCallEnd.click());
+const setVoicePushToTalk = (pressed: boolean) => {
+  voiceRooms?.setPushToTalk(pressed);
+  voiceCalls?.setPushToTalk(pressed);
+  for (const button of voiceHoldButtons) {
+    button.setAttribute("aria-pressed", String(pressed));
+    button.classList.toggle("is-active", pressed);
+  }
+};
+for (const button of voiceHoldButtons) {
+  button.addEventListener("pointerdown", (event) => {
+    if (button.disabled) return;
+    button.setPointerCapture(event.pointerId);
+    setVoicePushToTalk(true);
+  });
+  for (const event of ["pointerup", "pointercancel", "lostpointercapture", "blur"]) button.addEventListener(event, () => setVoicePushToTalk(false));
+  button.addEventListener("keydown", (event) => {
+    if (event.code === "Space" || event.code === "Enter") { event.preventDefault(); setVoicePushToTalk(true); }
+  });
+  button.addEventListener("keyup", () => setVoicePushToTalk(false));
+}
+window.addEventListener("blur", () => setVoicePushToTalk(false));
+document.addEventListener("visibilitychange", () => { if (document.hidden) setVoicePushToTalk(false); });
+window.addEventListener("focus", refreshStoredVoiceAudioPreferences);
+window.addEventListener("storage", (event) => {
+  if (currentUser && (event.key === null || event.key === voiceAudioStorageKey(currentUser.id))) refreshStoredVoiceAudioPreferences();
+});
 sidebarVoiceLeave.addEventListener("click", () => voiceCallEnd.click());
 sidebarVoiceMute.addEventListener("click", () => {
   if ((voiceRooms && voiceRooms.currentState.status !== "idle") || (voiceCalls && voiceCalls.currentState.status !== "idle")) voiceCallMute.click();

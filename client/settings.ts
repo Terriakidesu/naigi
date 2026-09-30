@@ -28,6 +28,7 @@ import { clearLocalData } from "./local-data";
 import { disableFcmPush, synchronizeFcmPush } from "./push-notifications";
 import { cachedMessageCacheStats, clearCachedMessages } from "./message-cache";
 import { setupProfileSettings } from "./profile-settings";
+import { setupVoiceAudioSettings } from "./voice-audio-settings";
 import { clearSessionPassphrase, forgetRememberedPassphrase, lockLocalSession } from "./unlock-vault";
 
 type Device = {
@@ -1345,6 +1346,7 @@ async function boot() {
   try {
     const result = await api.me();
     currentUserId = result.user.id;
+    setupVoiceAudioSettings(currentUserId);
     const preferences = loadAppPreferences(currentUserId);
     appPreferencesLoaded = true;
     renderAppPreferences(preferences);

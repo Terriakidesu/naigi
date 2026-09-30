@@ -36,6 +36,7 @@
             <div class="settings-nav-group">
               <p class="eyebrow settings-nav-group-title">PREFERENCES</p>
               <a class="settings-nav-item" data-settings-tab data-title="App preferences" data-description="Appearance, notifications, and chat behavior." href="#app"><i data-lucide="sliders-horizontal"></i><span>App preferences</span></a>
+              <a class="settings-nav-item" data-settings-tab data-title="Voice & audio" data-description="Microphone, playback, push-to-talk, and audio devices." href="#audio"><i data-lucide="headphones"></i><span>Voice &amp; audio</span></a>
             </div>
           </nav>
           <div class="sidebar-user settings-sidebar-user">
@@ -163,6 +164,41 @@
               <h1>Blocked users</h1>
               <p class="muted">Blocked users can’t start or continue direct conversations with you. Blocking does not remove either person from a shared space or hide shared-space messages.</p>
               <div id="blocked-users-list" class="settings-list"><p class="muted">Loading blocked users…</p></div>
+            </section>
+            <section id="audio" class="settings-section" data-settings-view hidden>
+              <p class="eyebrow">VOICE &amp; AUDIO</p>
+              <h1>Your audio, your browser</h1>
+              <p class="muted">Changes save locally and apply to rooms and direct calls. Audio settings, device names, and mic-test audio are never uploaded.</p>
+              <form id="voice-audio-form" class="settings-form voice-audio-form">
+                <section class="settings-preference-group" aria-labelledby="audio-devices-heading">
+                  <header class="settings-preference-heading"><h2 id="audio-devices-heading">Default devices</h2><p>Used for new connections and available in the in-call dropdowns.</p></header>
+                  <label class="settings-preference-row" for="audio-default-input"><span>Microphone</span><select id="audio-default-input"><option value="">System default microphone</option></select></label>
+                  <label class="settings-preference-row" for="audio-default-output"><span>Audio output</span><select id="audio-default-output"><option value="">System default output</option></select></label>
+                  <button id="audio-device-permission" class="secondary" type="button">Allow microphone &amp; refresh devices</button>
+                  <p class="muted small">Device names may require microphone permission. Output selection depends on browser support.</p>
+                </section>
+                <section class="settings-preference-group" aria-labelledby="audio-input-heading">
+                  <header class="settings-preference-heading"><h2 id="audio-input-heading">Microphone</h2><p>Processing happens locally before end-to-end encryption.</p></header>
+                  <label class="settings-preference-row" for="audio-input-mode"><span>Input mode</span><select id="audio-input-mode"><option value="activity">Voice activity</option><option value="push-to-talk">Push to talk</option></select></label>
+                  <div class="settings-preference-row"><span>Push-to-talk shortcut</span><button id="audio-ptt-key" class="secondary audio-key-field" type="button" aria-label="Record push-to-talk shortcut">Space</button></div>
+                  <p class="muted small">Hold the shortcut while Naigi is focused, or use the in-call hold-to-talk button. Shortcuts do not activate while typing or using form controls. Manual mute always takes priority.</p>
+                  <label class="settings-preference-row" for="audio-input-volume"><span>Input volume</span><span class="audio-range-field"><input id="audio-input-volume" type="range" min="0" max="200" step="1" value="100"><output id="audio-input-volume-value" for="audio-input-volume">100%</output></span></label>
+                  <label class="settings-preference-row" for="audio-silence-threshold"><span>Silence threshold</span><span class="audio-range-field"><input id="audio-silence-threshold" type="range" min="-100" max="-10" step="1" value="-100"><output id="audio-threshold-value" for="audio-silence-threshold">Off</output></span></label>
+                  <p class="muted small">In voice-activity mode, quieter input is silenced. Higher thresholds reject more background sound. Fully left disables gating. A short release delay helps preserve word endings.</p>
+                </section>
+                <section class="settings-preference-group" aria-labelledby="audio-output-heading">
+                  <header class="settings-preference-heading"><h2 id="audio-output-heading">Playback</h2><p>Right-click a participant to mute them for yourself or adjust their volume.</p></header>
+                  <label class="settings-preference-row" for="audio-output-volume"><span>Output volume</span><span class="audio-range-field"><input id="audio-output-volume" type="range" min="0" max="100" step="1" value="100"><output id="audio-output-volume-value" for="audio-output-volume">100%</output></span></label>
+                </section>
+                <section class="settings-preference-group" aria-labelledby="audio-test-heading">
+                  <header class="settings-preference-heading"><h2 id="audio-test-heading">Mic test</h2><p>Test your input volume, activity threshold, and push-to-talk without joining a call. Stops after 60 seconds or when you leave this view.</p></header>
+                  <div id="audio-test-meter" class="audio-test-meter" role="meter" aria-label="Microphone input level in dBFS" aria-valuemin="-100" aria-valuemax="0" aria-valuenow="-100"><span></span></div>
+                  <label class="audio-listen-field"><input id="audio-test-listen" type="checkbox"><span>Listen to my microphone (use headphones)</span></label>
+                  <div class="settings-actions"><button id="audio-mic-test" class="secondary" type="button">Start mic test</button><button id="audio-test-ptt" class="secondary" type="button" aria-pressed="false" hidden>Hold to talk</button></div>
+                  <p id="audio-test-status" class="muted small" role="status" aria-live="polite">No microphone is being captured.</p>
+                </section>
+                <p id="audio-save-status" class="muted small" role="status" aria-live="polite">Settings save automatically on this browser.</p>
+              </form>
             </section>
             <section id="app" class="settings-section" data-settings-view hidden>
              <p class="eyebrow">APP SETTINGS</p>

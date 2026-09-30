@@ -117,6 +117,7 @@
                 </section>
                 <section class="settings-section panel">
                   <div class="settings-section-heading"><div><p class="eyebrow">ENCRYPTED ROOMS</p><h2>Rooms</h2></div><span class="muted small">Each room has its own encrypted conversation key</span></div>
+                  <p class="settings-section-description">Drag the grip to place a room before another room, or drop on a group to move it there. Category and order fields are also available.</p>
                   <form id="channel-form" class="inline-settings-form channel-create-form">
                     <input id="new-channel-name" maxlength="80" placeholder="New room name" required>
                     <select id="new-channel-kind" aria-label="Room type"><option value="text">Text</option><option value="voice">Voice</option></select>
@@ -130,11 +131,11 @@
                 <section class="settings-section panel roles-settings-section">
                   <div class="settings-section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>Roles</h2></div><span class="muted small">Higher roles appear first</span></div>
                   <p class="settings-section-description">Give each role exactly the access it needs. Role names stay end-to-end encrypted; permissions and room gates are enforced by the server.</p>
-                  <form id="role-form" class="inline-settings-form role-create-form">
+                  <details class="role-create-disclosure"><summary>Create role</summary><form id="role-form" class="inline-settings-form role-create-form">
                     <input id="new-role-name" maxlength="80" placeholder="New role name" aria-label="New role name" required>
                     <label class="role-color-input" title="New role color"><span class="sr-only">New role color</span><input id="new-role-color" type="color" value="#92aaa5"></label>
                     <button type="submit">Create role</button>
-                  </form>
+                  </form></details>
                   <div id="role-settings-list" class="role-manager"></div>
                 </section>
               </div>

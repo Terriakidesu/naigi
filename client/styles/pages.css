@@ -139,6 +139,23 @@
 .settings-preference-heading p { margin: 0.3rem 0 0; color: var(--text-faint); font-size: 0.72rem; }
 .settings-preference-row { display: grid; grid-template-columns: minmax(150px, 0.8fr) minmax(200px, 1fr); align-items: center; gap: 1.5rem; width: 100%; padding: 0.85rem 0; border-bottom: 1px solid color-mix(in srgb, var(--line-soft) 75%, transparent); color: var(--text); font-size: 0.78rem; font-weight: 600; }
 .settings-preference-row select { justify-self: end; width: min(100%, 280px); }
+.audio-range-field { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.audio-range-field input[type="range"] { flex: 1 1 auto; min-width: 0; width: 100%; }
+.audio-range-field output { flex: 0 0 5.5rem; color: var(--text-muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; text-align: right; }
+.audio-key-field { justify-self: end; min-width: 140px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--bg-input); }
+.audio-test-meter { height: 16px; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg-deep); }
+.audio-test-meter > span { display: block; width: var(--audio-level, 0%); height: 100%; background: var(--text-faint); transition: width 50ms linear; }
+.audio-test-meter[data-open="true"] > span { background: var(--green); }
+.audio-listen-field { display: flex; align-items: center; gap: 0.6rem; font-size: 0.78rem; }
+.voice-audio-form .settings-actions { flex-wrap: wrap; }
+.voice-audio-form [hidden] { display: none; }
+.voice-user-volume { display: grid; gap: 0.3rem; padding: 0.5rem; color: var(--text-muted); font-size: 0.72rem; }
+.voice-user-volume input { width: 100%; }
+.voice-hold-to-talk { touch-action: none; user-select: none; }
+@media (max-width: 620px) {
+  .voice-audio-form .settings-preference-row { grid-template-columns: 1fr; gap: 0.5rem; }
+  .voice-audio-form .settings-preference-row select, .audio-key-field { justify-self: stretch; width: 100%; }
+}
 .settings-preference-row input[type="color"] { justify-self: end; }
 .theme-choice-field { display: grid; gap: 0.65rem; padding: 0.9rem 0; border-bottom: 1px solid color-mix(in srgb, var(--line-soft) 75%, transparent); }
 .theme-choice-label { color: var(--text); font-size: 0.78rem; font-weight: 700; }

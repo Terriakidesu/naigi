@@ -1,6 +1,8 @@
 import { DisconnectReason, ExternalE2EEKeyProvider, Room, RoomEvent, Track, TrackEvent } from "livekit-client";
 import { parseVoiceRoomSignal, type VoiceRoomSignalBody } from "./voice-room-protocol";
 import { assertVoiceSecureContext, waitForLocalVoiceEncryption } from "./voice-e2ee";
+import { VoiceAudioProcessor, setProcessedMicrophone } from "./voice-audio-processor";
+import { defaultVoiceAudioPreferences, voicePlaybackSettings, type VoiceAudioPreferences } from "./voice-audio-preferences";
 
 export type VoiceRoomView = {
   status: "idle" | "joining" | "connecting" | "connected" | "reconnecting";
@@ -30,6 +32,7 @@ type ActiveRoom = {
   mediaKey?: string;
   room?: Room;
   worker?: Worker;
+  audioProcessor?: VoiceAudioProcessor;
   muted: boolean;
   deafened: boolean;
   participantUserIds: Map<string, string>;
@@ -69,6 +72,7 @@ type VoiceRoomOptions = {
   getAudioOutputDeviceId: () => string;
   getInitialMuted?: () => boolean;
   getInitialDeafened?: () => boolean;
+  getAudioPreferences?: () => VoiceAudioPreferences;
 };
 
 function randomMediaKey() {
@@ -298,7 +302,7 @@ export class VoiceRoomController {
     const active = this.active;
     if (!active?.room) return;
     const muted = !active.muted;
-    await active.room.localParticipant.setMicrophoneEnabled(!muted);
+    await setProcessedMicrophone(active.room, active.audioProcessor!, !muted, () => this.isActive(active));
     if (!this.isActive(active)) return;
     active.muted = muted;
     this.emitState();
@@ -322,10 +326,23 @@ export class VoiceRoomController {
     const active = this.active;
     if (!active?.room) return;
     active.deafened = !active.deafened;
-    for (const audio of this.options.audioOutput.querySelectorAll<HTMLAudioElement>("audio")) {
-      audio.muted = active.deafened;
-    }
+    this.refreshAudioPreferences();
     this.emitState();
+  }
+
+  setPushToTalk(pressed: boolean) { this.active?.audioProcessor?.setPushToTalk(pressed); }
+
+  refreshAudioPreferences() {
+    const active = this.active;
+    if (!active) return;
+    active.audioProcessor?.update();
+    const preferences = this.options.getAudioPreferences?.() ?? defaultVoiceAudioPreferences;
+    for (const audio of this.options.audioOutput.querySelectorAll<HTMLAudioElement>("audio[data-voice-room-audio]")) {
+      const userId = active.participantUserIds.get(audio.dataset.voiceIdentity ?? "");
+      const settings = voicePlaybackSettings(preferences, active.deafened, userId);
+      audio.muted = settings.muted;
+      audio.volume = settings.volume;
+    }
   }
 
   async enableAudioPlayback() {
@@ -335,9 +352,7 @@ export class VoiceRoomController {
     try {
       await active.room.startAudio();
       if (!this.isActive(active)) return;
-      for (const audio of this.options.audioOutput.querySelectorAll<HTMLAudioElement>("audio")) {
-        audio.muted = active.deafened;
-      }
+      this.refreshAudioPreferences();
       active.audioPlaybackAllowed = true;
       if (active.audioIssue === "playback") active.audioIssue = undefined;
       this.emitState();
@@ -392,9 +407,11 @@ export class VoiceRoomController {
     const keyProvider = new ExternalE2EEKeyProvider();
     const audioInputDeviceId = this.options.getAudioInputDeviceId();
     const audioOutputDeviceId = this.options.getAudioOutputDeviceId();
+    const audioProcessor = new VoiceAudioProcessor(() => this.options.getAudioPreferences?.() ?? defaultVoiceAudioPreferences);
+    active.audioProcessor = audioProcessor;
     const room = new Room({
       encryption: { keyProvider, worker },
-      ...(audioInputDeviceId ? { audioCaptureDefaults: { deviceId: audioInputDeviceId } } : {}),
+      audioCaptureDefaults: { ...(audioInputDeviceId ? { deviceId: audioInputDeviceId } : {}), autoGainControl: false },
       ...(audioOutputDeviceId ? { audioOutput: { deviceId: audioOutputDeviceId } } : {}),
     });
     active.room = room;
@@ -445,7 +462,7 @@ export class VoiceRoomController {
       active.audioIssue = "microphone";
       this.emitState();
     });
-    room.on(RoomEvent.TrackSubscribed, (track, publication) => {
+    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
       if (track.kind !== Track.Kind.Audio || !this.isActive(active)) return;
       active.remoteAudioTrackSids.add(publication.trackSid);
       track.on(TrackEvent.AudioPlaybackFailed, () => {
@@ -465,8 +482,10 @@ export class VoiceRoomController {
       element.muted = active.deafened;
       element.setAttribute("playsinline", "");
       element.dataset.voiceRoomAudio = "true";
+      element.dataset.voiceIdentity = participant.identity;
       this.options.audioOutput.append(element);
       track.attach(element);
+      this.refreshAudioPreferences();
     });
     room.on(RoomEvent.TrackUnsubscribed, (track, publication) => {
       active.remoteAudioTrackSids.delete(publication.trackSid);
@@ -497,7 +516,7 @@ export class VoiceRoomController {
     }, 20_000);
     let microphone;
     try {
-      microphone = await room.localParticipant.setMicrophoneEnabled(!active.muted);
+      microphone = await setProcessedMicrophone(room, audioProcessor, !active.muted, () => this.isActive(active));
     } catch (error) {
       if (error instanceof Error && ["NotAllowedError", "PermissionDeniedError", "NotFoundError"].includes(error.name)) throw error;
       console.warn("[voice-room] microphone publication failed", error instanceof Error ? error.name : "unknown");
@@ -574,6 +593,7 @@ export class VoiceRoomController {
   }
 
   private emitState() {
+    this.refreshAudioPreferences();
     this.options.onState(this.currentState);
   }
 
@@ -604,5 +624,6 @@ export class VoiceRoomController {
       // The room is already gone.
     }
     active.worker?.terminate();
+    await active.audioProcessor?.destroy();
   }
 }

@@ -831,7 +831,7 @@ try {
   const reporterEvidenceText = "report evidence plaintext sentinel";
   const bobMessageForReport = a.locator(".message").filter({ hasText: "Bob to Alice: independent device keys work" });
   await bobMessageForReport.hover();
-  await bobMessageForReport.getByRole("button", { name: "Add reaction to message from bob" }).click();
+  await bobMessageForReport.getByRole("button", { name: "Actions for message from bob" }).click();
   await a.locator("#message-context-menu").getByText("Report message", { exact: true }).click();
   const reportDialog = a.locator(".report-dialog");
   await reportDialog.waitFor({ state: "visible", timeout: 20_000 });

@@ -1,6 +1,6 @@
 import { emojiEntryAt } from "./emoji";
 import { guardExternalLink } from "./external-link";
-import { formatMessageMacro, MAX_MESSAGE_MACROS, parseMessageMacro, type ParsedMessageMacro } from "./message-macros";
+import { formatMessageMacro, messageMacroTooltip, MAX_MESSAGE_MACROS, parseMessageMacro, type ParsedMessageMacro } from "./message-macros";
 
 export type MarkdownInline =
   | { kind: "text"; value: string }
@@ -165,7 +165,9 @@ function appendMessageMacro(parent: HTMLElement, macro: ParsedMessageMacro, stat
   const element = document.createElement("time");
   element.className = "message-macro";
   element.dateTime = new Date(macro.timestampMs).toISOString();
-  element.title = new Date(macro.timestampMs).toLocaleString();
+  element.title = messageMacroTooltip(macro.timestampMs);
+  element.tabIndex = 0;
+  element.setAttribute("aria-label", `${formatMessageMacro(macro)} · ${element.title}`);
   element.textContent = formatMessageMacro(macro);
   element.dataset.messageMacro = "true";
   element.dataset.timestampMs = String(macro.timestampMs);

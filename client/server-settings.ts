@@ -16,8 +16,17 @@ import {
 import { renderAvatar } from "./avatar";
 import { readableAccentText, type AppTheme } from "./app-preferences";
 import { CryptoClient, LocalCryptoStoreError } from "./crypto";
-import { renderIcons } from "./icons";
+import { iconElement, renderIcons } from "./icons";
 import { highestSeparatedRole } from "./member-roles";
+import { setupSpaceSettingsLists } from "./space-settings-layout";
+import { decryptCustomEmojiImage } from "./custom-emoji-media";
+import { roomDropUpdates } from "./room-order";
+import { roleDropUpdates } from "./role-order";
+import { memberRolePicker } from "./member-role-picker";
+import { showAnchoredPopover } from "./anchored-popover";
+import { showMemberProfile } from "./member-profile";
+
+setupSpaceSettingsLists();
 import { previewChannelCapabilities, previewRoleFeatures } from "./role-preview";
 import { showOneTimeToken } from "./ui-dialog";
 import {
@@ -128,12 +137,22 @@ let previewRoleId: string | undefined;
 let previewChannelId: string | undefined;
 let roleSearchQuery = "";
 let roleEditorDirty = false;
+let roleEditorOpen = false;
+let draggedRoleId: string | undefined;
+let roleSortSaving = false;
 let metadataReady = false;
 let metadataHydrationVersion = 0;
 const categoryNames = new Map<string, string>();
 const channelNames = new Map<string, string>();
 const roleNames = new Map<string, string>();
 const customEmojiNames = new Map<string, string>();
+const customEmojiMetadata = new Map<string, Record<string, unknown>>();
+const customEmojiPreviewUrls = new Map<string, string>();
+function clearCustomEmojiPreviews() {
+  for (const url of customEmojiPreviewUrls.values()) URL.revokeObjectURL(url);
+  customEmojiPreviewUrls.clear();
+}
+window.addEventListener("pagehide", () => { metadataHydrationVersion += 1; clearCustomEmojiPreviews(); });
 
 const permissionDefinitions: Array<{ id: ServerPermission; label: string; description: string }> = [
   { id: "view_channels", label: "View rooms", description: "See rooms and read encrypted history." },
@@ -204,6 +223,9 @@ function syncSettingsNav() {
   const requestedHash = window.location.hash || "#overview";
   const views = [...document.querySelectorAll<HTMLElement>("[data-settings-view]")];
   const hash = views.some((view) => `#${view.id}` === requestedHash) ? requestedHash : "#overview";
+  if (hash !== "#members") {
+    document.querySelectorAll<HTMLElement>(".member-actions-popover:popover-open, .member-role-dialog:popover-open").forEach((popover) => popover.hidePopover());
+  }
   for (const view of views) view.hidden = `#${view.id}` !== hash;
   let activeLink: HTMLAnchorElement | undefined;
   for (const link of document.querySelectorAll<HTMLAnchorElement>(".server-settings-nav-item")) {
@@ -231,6 +253,10 @@ function setMobileSidebar(open: boolean, focusNavigation = false) {
 for (const link of document.querySelectorAll<HTMLAnchorElement>(".server-settings-nav-item")) {
   link.addEventListener("click", (event: MouseEvent) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (roleEditorOpen && !closeRoleEditor(false)) {
+      event.preventDefault();
+      return;
+    }
     if (window.matchMedia("(max-width: 760px)").matches) setMobileSidebar(false);
   });
 }
@@ -249,6 +275,12 @@ mobileSidebarBackdrop.addEventListener("click", () => {
 window.addEventListener("resize", () => setMobileSidebar(settingsLayout.classList.contains("mobile-sidebar-open")));
 setMobileSidebar(settingsLayout.classList.contains("mobile-sidebar-open"));
 window.addEventListener("hashchange", syncSettingsNav);
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || !roleEditorOpen
+    || document.querySelector("dialog[open]") || document.getElementById("access")?.hidden) return;
+  event.preventDefault();
+  closeRoleEditor();
+});
 syncSettingsNav();
 renderIcons();
 
@@ -337,7 +369,7 @@ function defaultRolePermissions(): Partial<ServerPermissionMap> {
 }
 
 function hasPermission(permission: ServerPermission) {
-  return Boolean(currentServer?.permissions[permission]);
+  return currentServer?.role === "owner" || Boolean(currentServer?.permissions[permission]);
 }
 
 function hasAnyPermission(...permissions: ServerPermission[]) {
@@ -366,19 +398,6 @@ function canManageRoleAccess() {
 
 function canAssignRoles() {
   return hasAnyPermission("manage_roles", "assign_roles");
-}
-
-function roleOptions(selected: string[]) {
-  const fragment = document.createDocumentFragment();
-  for (const role of roles.filter((candidate) => candidate.systemKey !== "owner" && candidate.systemKey !== "everyone")) {
-    const option = document.createElement("option");
-    option.value = role.id;
-    option.textContent = roleName(role);
-    option.selected = selected.includes(role.id);
-    option.style.color = role.color;
-    fragment.append(option);
-  }
-  return fragment;
 }
 
 function previewPermissions(role: CustomServerRole) {
@@ -997,9 +1016,17 @@ function renderCustomEmojis() {
   for (const emoji of customEmojis) {
     const row = document.createElement("div");
     row.className = "settings-list-row custom-emoji-row";
+    row.dataset.emojiId = emoji.id;
     const preview = document.createElement("span");
     preview.className = "custom-emoji-preview";
     preview.textContent = "✦";
+    const previewUrl = customEmojiPreviewUrls.get(emoji.id);
+    if (previewUrl) {
+      const image = document.createElement("img");
+      image.src = previewUrl;
+      image.alt = `:${customEmojiNames.get(emoji.id) ?? "emoji"}:`;
+      preview.replaceChildren(image);
+    } else preview.title = emoji.status === "uploaded" ? "Preview unavailable or still loading" : "Upload pending";
     const copy = document.createElement("div");
     copy.className = "settings-row-copy";
     const name = document.createElement("strong");
@@ -1011,6 +1038,46 @@ function renderCustomEmojis() {
     copy.append(name, details);
     row.append(preview, copy);
     if (hasPermission("manage_custom_emoji")) {
+      const metadata = customEmojiMetadata.get(emoji.id);
+      if (metadata && customEmojiNames.has(emoji.id)) {
+        const form = document.createElement("form");
+        form.className = "emoji-rename-form";
+        const input = document.createElement("input");
+        input.value = customEmojiNames.get(emoji.id)!;
+        input.maxLength = 32;
+        input.pattern = "[A-Za-z0-9_+-]+";
+        input.required = true;
+        input.setAttribute("aria-label", `Name for ${input.value}`);
+        const save = document.createElement("button");
+        save.type = "submit";
+        save.className = "secondary";
+        save.textContent = "Save";
+        save.disabled = true;
+        input.addEventListener("input", () => { save.disabled = input.value.trim() === customEmojiNames.get(emoji.id); });
+        form.append(input, save);
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const nextName = input.value.trim();
+          if (!metadataReady || !metadataConversationId || !/^[A-Za-z0-9_+-]{1,32}$/.test(nextName)) return;
+          if ([...customEmojiNames].some(([id, name]) => id !== emoji.id && name.toLowerCase() === nextName.toLowerCase())) {
+            setStatus("That custom emoji name is already in use.", true);
+            return;
+          }
+          save.disabled = true;
+          input.disabled = true;
+          try {
+            const encryptedMetadata = await encryptMetadata(metadataConversationId, { ...metadata, name: nextName });
+            await api.updateServerCustomEmoji(currentServer!.id, emoji.id, encryptedMetadata);
+            await loadData();
+            setStatus("Custom emoji renamed.");
+          } catch (error) {
+            input.disabled = false;
+            save.disabled = false;
+            setStatus(readableError(error), true);
+          }
+        });
+        row.append(form);
+      }
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "danger-button";
@@ -1068,6 +1135,7 @@ function renderCategories() {
   for (const category of categories) {
     const row = document.createElement("div");
     row.className = "settings-list-row";
+    bindRoomDropTarget(row, category.id);
     const name = document.createElement("input");
     name.value = categoryName(category);
     name.maxLength = 80;
@@ -1152,10 +1220,40 @@ async function saveChannel(channel: ServerChannel, name: HTMLInputElement, categ
 
 function renderChannels() {
   channelList.replaceChildren();
-  for (const channel of channels) {
+  const groups = [
+    { id: null as string | null, name: "No category" },
+    ...[...categories].sort((a, b) => a.position - b.position).map((category) => ({ id: category.id, name: categoryNames.get(category.id) ?? "Encrypted group" })),
+  ];
+  for (const group of groups) {
+    const heading = document.createElement("div");
+    heading.className = "room-sort-group";
+    heading.textContent = group.name;
+    heading.setAttribute("aria-label", `${group.name} — drop a room here`);
+    bindRoomDropTarget(heading, group.id);
+    channelList.append(heading);
+    for (const channel of channels.filter((room) => room.categoryId === group.id).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))) {
     const row = document.createElement("div");
     row.className = "settings-list-row channel-settings-row";
     row.dataset.channelId = channel.id;
+    bindRoomDropTarget(row, group.id, channel.id);
+    const handle = document.createElement("span");
+    handle.className = "room-drag-handle";
+    handle.textContent = "⠿";
+    handle.title = "Drag to reorder or move to a group. You can also use the category and order fields.";
+    handle.setAttribute("aria-hidden", "true");
+    handle.draggable = metadataReady && hasAnyPermission("manage_channels", "reorder_channels", "edit_channels");
+    handle.addEventListener("dragstart", (event) => {
+      if (roomSortSaving || !handle.draggable || !event.dataTransfer) { event.preventDefault(); return; }
+      draggedRoomId = channel.id;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", channel.id);
+      row.classList.add("room-dragging");
+    });
+    handle.addEventListener("dragend", () => {
+      draggedRoomId = undefined;
+      row.classList.remove("room-dragging");
+      document.querySelectorAll(".room-drop-target").forEach((target) => target.classList.remove("room-drop-target"));
+    });
     const name = document.createElement("input");
     const fallbackName = channelName(channel);
     name.value = fallbackName;
@@ -1199,8 +1297,9 @@ function renderChannels() {
         archive.disabled = false;
       }
     });
-    row.append(name, kind, category, position, save, archive);
+    row.append(handle, name, kind, category, position, save, archive);
     channelList.append(row);
+    }
   }
   if (channels.length === 0) {
     const empty = document.createElement("p");
@@ -1208,6 +1307,78 @@ function renderChannels() {
     empty.textContent = "No active encrypted rooms.";
     channelList.append(empty);
   }
+}
+
+let draggedRoomId: string | undefined;
+let roomSortSaving = false;
+
+function bindRoomDropTarget(target: HTMLElement, categoryId: string | null, beforeId?: string) {
+  const allowed = () => {
+    const room = channels.find((channel) => channel.id === draggedRoomId);
+    if (!room || !metadataReady || roomSortSaving || beforeId === room.id) return false;
+    if (room.categoryId !== categoryId && !hasAnyPermission("manage_channels", "edit_channels")) return false;
+    return !beforeId || hasAnyPermission("manage_channels", "reorder_channels");
+  };
+  target.addEventListener("dragover", (event) => {
+    if (!allowed()) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    target.classList.add("room-drop-target");
+  });
+  target.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) return;
+    target.classList.remove("room-drop-target");
+  });
+  target.addEventListener("drop", (event) => {
+    target.classList.remove("room-drop-target");
+    if (!allowed() || !draggedRoomId) return;
+    event.preventDefault();
+    const roomId = draggedRoomId;
+    draggedRoomId = undefined;
+    void persistRoomDrop(roomId, categoryId, beforeId);
+  });
+}
+
+async function persistRoomDrop(roomId: string, categoryId: string | null, beforeId?: string) {
+  if (!currentServer || roomSortSaving) return;
+  const unsaved = [...channelList.querySelectorAll<HTMLElement>(".channel-settings-row")].some((row) => {
+    const channel = channels.find((room) => room.id === row.dataset.channelId);
+    const name = row.querySelector<HTMLInputElement>('input[aria-label="Channel name"]');
+    const category = row.querySelector<HTMLSelectElement>("select");
+    const position = row.querySelector<HTMLInputElement>('input[type="number"]');
+    return channel && (name?.value !== name?.dataset.fallbackName || (category?.value || null) !== channel.categoryId || Number(position?.value) !== channel.position);
+  });
+  if (unsaved && !window.confirm("Moving this room will reload the list and discard unsaved room fields. Continue?")) return;
+  const canReorder = hasAnyPermission("manage_channels", "reorder_channels");
+  const updates = canReorder ? roomDropUpdates(channels, roomId, categoryId, beforeId)
+    : channels.find((room) => room.id === roomId)?.categoryId !== categoryId ? [{ id: roomId, categoryId }] : [];
+  if (!updates.length) return;
+  roomSortSaving = true;
+  channelList.setAttribute("aria-busy", "true");
+  try {
+    for (const { id, ...update } of updates) await api.updateChannel(currentServer.id, id, update);
+    setStatus("Room order saved.");
+  } catch (error) {
+    setStatus(`Could not finish moving the room: ${readableError(error)}`, true);
+  } finally {
+    roomSortSaving = false;
+    channelList.removeAttribute("aria-busy");
+    await loadData().catch((error) => setStatus(readableError(error), true));
+  }
+}
+
+function closeRoleEditor(focusList = true) {
+  if (!roleEditorOpen) return true;
+  if (roleEditorDirty && !window.confirm("Discard unsaved role changes?")) return false;
+  roleEditorOpen = false;
+  roleEditorDirty = false;
+  renderRoles();
+  if (focusList) {
+    roleList.scrollIntoView({ block: "start" });
+    const row = [...roleList.querySelectorAll<HTMLElement>("[data-role-id]")].find((item) => item.dataset.roleId === selectedRoleId);
+    (row?.querySelector<HTMLButtonElement>("button") ?? roleList.querySelector<HTMLButtonElement>("button"))?.focus({ preventScroll: true });
+  }
+  return true;
 }
 
 function renderRoles() {
@@ -1245,6 +1416,18 @@ function renderRoles() {
     "manage_channel_access",
   );
   const manager = roleList;
+  manager.classList.toggle("role-manager-editing", roleEditorOpen);
+
+  const selectRoleEditor = (id: string) => {
+    if (roleEditorDirty && !window.confirm("Discard unsaved role changes?")) return;
+    selectedRoleId = id;
+    roleEditorDirty = false;
+    roleEditorOpen = true;
+    renderRoles();
+  };
+  const ownRoleIds = normalizeRoleIds(members.find((member) => member.userId === currentUserId)?.roleIds ?? roleAssignments.get(currentUserId ?? "") ?? []);
+  const hierarchyCeiling = currentServer?.role === "owner" ? Infinity : Math.max(0, ...roles.filter((role) => ownRoleIds.includes(role.id)).map((role) => role.position));
+  const canDragRole = (role: CustomServerRole) => metadataReady && canReorderRoles() && !roleSortSaving && !role.isSystem && role.position < hierarchyCeiling;
 
   const listPanel = document.createElement("aside");
   listPanel.className = "role-list-panel";
@@ -1254,7 +1437,7 @@ function renderRoles() {
   listTitle.textContent = "Roles";
   const listCount = document.createElement("span");
   listCount.className = "muted small";
-  listCount.textContent = `${editableRoles.length} total`;
+  listCount.textContent = `${editableRoles.filter((role) => role.systemKey !== "everyone").length} roles`;
   listHeading.append(listTitle, listCount);
   const search = document.createElement("input");
   search.type = "search";
@@ -1264,13 +1447,14 @@ function renderRoles() {
   search.value = roleSearchQuery;
   const listItems = document.createElement("div");
   listItems.className = "role-list-items";
-  listItems.setAttribute("role", "listbox");
+  listItems.setAttribute("role", "list");
   listItems.setAttribute("aria-label", "Roles");
 
   const renderRoleList = () => {
     listItems.replaceChildren();
     const query = roleSearchQuery.trim().toLocaleLowerCase();
-    const visibleRoles = editableRoles.filter((role) => !query || roleName(role).toLocaleLowerCase().includes(query));
+    const visibleRoles = editableRoles.filter((role) => role.systemKey !== "everyone" && (!query || roleName(role).toLocaleLowerCase().includes(query)))
+      .sort((a, b) => b.position - a.position || a.id.localeCompare(b.id));
     if (visibleRoles.length === 0) {
       const empty = document.createElement("p");
       empty.className = "muted small role-list-empty";
@@ -1279,12 +1463,68 @@ function renderRoles() {
       return;
     }
     for (const role of visibleRoles) {
-      const item = document.createElement("button");
-      item.type = "button";
+      const item = document.createElement("div");
       item.className = "role-list-item";
-      item.setAttribute("role", "option");
-      item.setAttribute("aria-selected", String(role.id === selectedRoleId));
+      item.setAttribute("role", "listitem");
+      item.dataset.roleId = role.id;
+      const grip = document.createElement("span");
+      grip.className = "role-drag-grip";
+      grip.textContent = "⠿";
+      grip.draggable = canDragRole(role);
+      grip.title = grip.draggable ? "Drag to reorder role" : "Role ordering is restricted by permissions and hierarchy";
+      grip.setAttribute("aria-hidden", "true");
+      grip.addEventListener("dragstart", (event) => {
+        if (!canDragRole(role) || !event.dataTransfer) { event.preventDefault(); return; }
+        draggedRoleId = role.id;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", role.id);
+        item.classList.add("role-dragging");
+      });
+      grip.addEventListener("dragend", () => {
+        draggedRoleId = undefined;
+        item.classList.remove("role-dragging");
+        listItems.querySelectorAll(".role-drop-before, .role-drop-after").forEach((row) => row.classList.remove("role-drop-before", "role-drop-after"));
+      });
+      let dropAfter = false;
+      item.addEventListener("dragover", (event) => {
+        if (!draggedRoleId || draggedRoleId === role.id || !canDragRole(role)) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        const rect = item.getBoundingClientRect();
+        dropAfter = event.clientY >= rect.top + rect.height / 2;
+        item.classList.toggle("role-drop-before", !dropAfter);
+        item.classList.toggle("role-drop-after", dropAfter);
+      });
+      item.addEventListener("dragleave", (event) => {
+        if (event.relatedTarget instanceof Node && item.contains(event.relatedTarget)) return;
+        item.classList.remove("role-drop-before", "role-drop-after");
+      });
+      item.addEventListener("drop", (event) => {
+        item.classList.remove("role-drop-before", "role-drop-after");
+        if (!draggedRoleId || !canDragRole(role)) return;
+        event.preventDefault();
+        const movedId = draggedRoleId;
+        draggedRoleId = undefined;
+        void (async () => {
+          if (roleEditorDirty && !window.confirm("Discard unsaved role changes and reorder?")) return;
+          roleSortSaving = true;
+          manager.setAttribute("aria-busy", "true");
+          try {
+            for (const update of roleDropUpdates(roles, movedId, role.id, dropAfter, hierarchyCeiling)) {
+              await api.updateServerRole(currentServer!.id, update.id, { position: update.position });
+            }
+            roleEditorDirty = false;
+            setStatus("Role order saved.");
+          } catch (error) { setStatus(readableError(error), true); }
+          finally {
+            roleSortSaving = false;
+            manager.removeAttribute("aria-busy");
+            await loadData().catch((error) => setStatus(readableError(error), true));
+          }
+        })();
+      });
       item.style.setProperty("--role-color", role.color);
+      item.style.setProperty("--role-text-color", readableAccentText(role.color, currentAppTheme()));
       const swatch = document.createElement("span");
       swatch.className = "role-color-swatch";
       swatch.style.background = role.color;
@@ -1293,16 +1533,46 @@ function renderRoles() {
       const name = document.createElement("strong");
       name.textContent = roleName(role);
       const meta = document.createElement("span");
-      meta.textContent = role.isSystem ? `System · ${role.position}` : `Custom · ${role.position}`;
+      meta.textContent = role.isSystem ? "System role" : "";
       copy.append(name, meta);
-      item.append(swatch, copy);
-      item.addEventListener("click", () => {
-        if (role.id === selectedRoleId) return;
-        if (roleEditorDirty && !window.confirm("Discard unsaved role changes?")) return;
-        selectedRoleId = role.id;
-        roleEditorDirty = false;
-        renderRoles();
-      });
+      const count = document.createElement("span");
+      count.className = "role-member-count";
+      const memberCount = members.filter((member) => normalizeRoleIds(member.roleIds ?? roleAssignments.get(member.userId) ?? []).includes(role.id)).length;
+      count.textContent = String(memberCount);
+      count.setAttribute("aria-label", `${memberCount} members`);
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "icon-button";
+      edit.append(iconElement("pencil"));
+      edit.title = `Edit ${roleName(role)}`;
+      edit.setAttribute("aria-label", edit.title);
+      edit.addEventListener("click", () => selectRoleEditor(role.id));
+      const menu = document.createElement("details");
+      menu.className = "role-row-menu";
+      const summary = document.createElement("summary");
+      summary.textContent = "•••";
+      summary.setAttribute("aria-label", `Actions for ${roleName(role)}`);
+      const actions = document.createElement("div");
+      const permissions = document.createElement("button");
+      permissions.type = "button";
+      permissions.textContent = "Permissions & access";
+      permissions.addEventListener("click", () => selectRoleEditor(role.id));
+      actions.append(permissions);
+      if (!role.isSystem && hasAnyPermission("manage_roles", "delete_roles") && role.position < hierarchyCeiling) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "danger-button";
+        remove.textContent = "Delete role";
+        remove.addEventListener("click", async () => {
+          if (!currentServer || !window.confirm(`Delete ${roleName(role)}? Members keep access only through other roles.`)) return;
+          remove.disabled = true;
+          try { await api.deleteServerRole(currentServer.id, role.id); await loadData(); setStatus("Role deleted."); }
+          catch (error) { remove.disabled = false; setStatus(readableError(error), true); }
+        });
+        actions.append(remove);
+      }
+      menu.append(summary, actions);
+      item.append(grip, swatch, copy, count, edit, menu);
       listItems.append(item);
     }
   };
@@ -1311,12 +1581,33 @@ function renderRoles() {
     renderRoleList();
   });
   listPanel.append(listHeading, search, listItems);
+  const columns = document.createElement("div");
+  columns.className = "role-list-columns";
+  const roleColumn = document.createElement("span");
+  roleColumn.textContent = "Role";
+  const memberColumn = document.createElement("span");
+  memberColumn.textContent = "Members";
+  columns.append(roleColumn, memberColumn);
+  listItems.before(columns);
+  const everyone = editableRoles.find((role) => role.systemKey === "everyone");
+  if (everyone) {
+    const defaults = document.createElement("button");
+    defaults.type = "button";
+    defaults.className = "role-default-permissions";
+    const title = document.createElement("strong");
+    title.textContent = "Default permissions";
+    const description = document.createElement("span");
+    description.textContent = "All members · applies to everyone in this space";
+    defaults.append(title, description, iconElement("chevron-right"));
+    defaults.addEventListener("click", () => selectRoleEditor(everyone.id));
+    listPanel.prepend(defaults);
+  }
 
   const role = editableRoles.find((candidate) => candidate.id === selectedRoleId) ?? editableRoles[0];
   const ownerRole = role.systemKey === "owner";
   const everyoneRole = role.systemKey === "everyone";
   const editableSystemRole = currentServer?.role === "owner" && role.systemKey !== "owner";
-  const canEditThisRole = !role.isSystem || editableSystemRole;
+  const canEditThisRole = (!role.isSystem && role.position < hierarchyCeiling) || editableSystemRole;
   const canEditName = canEditThisRole && canEditRoleName();
   const canEditAppearance = canEditThisRole && canEditRoleAppearance();
   const canEditPermissions = canEditThisRole && canEditRolePermissions();
@@ -1347,6 +1638,12 @@ function renderRoles() {
   headingCopy.append(headingName, headingMeta);
   identity.append(swatch, headingCopy);
   heading.append(identity);
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "secondary";
+  back.textContent = "Back to roles";
+  back.addEventListener("click", () => closeRoleEditor());
+  heading.append(back);
   if (role.systemKey === "owner") {
     const owner = members.find((member) => member.userId === currentServer?.ownerId);
     const ownerLabel = document.createElement("span");
@@ -1584,6 +1881,12 @@ function renderRoles() {
 
   const actions = document.createElement("div");
   actions.className = "role-card-actions";
+  const done = document.createElement("button");
+  done.type = "button";
+  done.className = "secondary role-editor-exit";
+  done.textContent = "Back to roles";
+  done.addEventListener("click", () => closeRoleEditor());
+  actions.append(done);
   const preview = document.createElement("button");
   preview.type = "button";
   preview.className = "secondary";
@@ -1670,8 +1973,9 @@ function renderRoles() {
     actions.append(remove);
   }
   card.append(actions);
-  manager.append(listPanel, card);
+  manager.append(roleEditorOpen ? card : listPanel);
   renderRoleList();
+  renderIcons(manager);
   renderRolePreview();
 }
 
@@ -1742,10 +2046,24 @@ moderationActionForm.addEventListener("submit", async (event) => {
 });
 
 function renderMembers() {
+  document.querySelectorAll<HTMLElement>(".member-actions-popover:popover-open, .member-role-dialog:popover-open").forEach((popover) => popover.hidePopover());
   memberList.replaceChildren();
+  memberList.setAttribute("role", "table");
+  memberList.setAttribute("aria-label", "Space members");
+  const columns = document.createElement("div");
+  columns.className = "members-table-heading";
+  columns.setAttribute("role", "row");
+  for (const title of ["Name", "Member since", "Roles", "Actions"]) {
+    const column = document.createElement("span");
+    column.setAttribute("role", "columnheader");
+    column.textContent = title;
+    columns.append(column);
+  }
+  memberList.append(columns);
   for (const member of members) {
     const row = document.createElement("div");
     row.className = "settings-list-row member-settings-row";
+    row.setAttribute("role", "row");
     const avatar = document.createElement("span");
     avatar.className = "member-avatar";
     renderAvatar(avatar, member.displayName, member.userId, member.avatarUrl);
@@ -1757,10 +2075,41 @@ function renderMembers() {
     const username = document.createElement("span");
     username.textContent = `@${member.username} · ${member.role === "owner" ? "Owner" : "member"}`;
     copy.append(name, username);
-    row.append(avatar, copy);
+    const identity = document.createElement("div");
+    identity.className = "member-table-identity";
+    identity.setAttribute("role", "cell");
+    identity.append(avatar, copy);
+    const joined = document.createElement("div");
+    joined.className = "member-table-joined";
+    joined.setAttribute("role", "cell");
+    const date = document.createElement("time");
+    date.dateTime = member.joinedAt;
+    date.textContent = new Date(member.joinedAt).toLocaleDateString();
+    date.title = new Date(member.joinedAt).toLocaleString();
+    joined.append(date);
+    row.append(identity, joined);
+    const actionCell = document.createElement("div");
+    actionCell.setAttribute("role", "cell");
+    actionCell.className = "member-table-actions";
+    const actionButton = document.createElement("button");
+    actionButton.type = "button";
+    actionButton.className = "icon-button";
+    actionButton.append(iconElement("more-horizontal"));
+    actionButton.setAttribute("aria-label", `Actions for ${member.displayName}`);
+    actionButton.setAttribute("aria-haspopup", "dialog");
+    const actions = document.createElement("div");
+    actions.className = "member-actions-popover";
+    actions.setAttribute("role", "dialog");
+    actions.setAttribute("aria-label", `Actions for ${member.displayName}`);
+    actionButton.addEventListener("click", () => {
+      showAnchoredPopover(actions, actionButton);
+      actions.querySelector<HTMLButtonElement>("button")?.focus();
+    });
+    actionCell.append(actionButton);
     const assignedRoleIds = normalizeRoleIds(member.roleIds ?? roleAssignments.get(member.userId) ?? []);
     const roleSummary = document.createElement("div");
     roleSummary.className = "member-role-summary";
+    roleSummary.setAttribute("role", "cell");
     const assignedRoles = assignedRoleIds
       .map((id) => roles.find((role) => role.id === id))
       .filter((role): role is CustomServerRole => Boolean(role))
@@ -1774,33 +2123,41 @@ function renderMembers() {
       badge.textContent = roleName(role);
       roleSummary.append(badge);
     }
-    if (roleSummary.childElementCount > 0) copy.append(roleSummary);
+    row.append(roleSummary);
+    const restriction = (allowed: boolean) => member.userId === currentUserId ? "You cannot manage yourself with this action."
+      : member.role === "owner" ? "The space owner is protected."
+      : !allowed ? "Your role does not have permission for this action." : "";
+    const restrict = (button: HTMLButtonElement, allowed: boolean) => {
+      const reason = restriction(allowed);
+      button.disabled = Boolean(reason);
+      if (reason) button.title = reason;
+      return button;
+    };
     const canManageRoles = canAssignRoles();
-    if (member.userId !== currentUserId && member.role !== "owner" && canManageRoles) {
-      const role = document.createElement("select");
-      role.multiple = true;
-      role.className = "member-role-select";
-      role.setAttribute("aria-label", `Roles for ${member.displayName}`);
-      role.append(roleOptions(assignedRoleIds));
-      role.addEventListener("change", async () => {
-        role.disabled = true;
-        try {
-          await api.updateServerMemberRoles(currentServer!.id, member.userId, [...role.selectedOptions].map((option) => option.value));
+    {
+      const assign = memberRolePicker({
+        memberName: member.displayName,
+        roles: roles.filter((role) => role.systemKey !== "owner" && role.systemKey !== "everyone")
+          .sort((a, b) => b.position - a.position)
+          .map((role) => ({ id: role.id, name: roleName(role), color: role.color })),
+        selected: assignedRoleIds,
+        error: readableError,
+        save: async (ids) => {
+          await api.updateServerMemberRoles(currentServer!.id, member.userId, ids);
           await loadData();
           setStatus("Member roles updated.");
-        } catch (error) {
-          setStatus(readableError(error), true);
-          role.disabled = false;
-        }
+        },
       });
-      row.append(role);
+      assign.textContent = "Roles";
+      assign.classList.add("member-roles-submenu-trigger");
+      actions.append(restrict(assign, canManageRoles));
     }
-    if (member.userId !== currentUserId && member.role !== "owner" &&
-      hasAnyPermission("manage_members", "kick_members")) {
+    {
       const remove = document.createElement("button");
       remove.className = "danger-button";
       remove.type = "button";
-      remove.textContent = "Remove";
+      remove.textContent = "Kick member";
+      restrict(remove, hasAnyPermission("manage_members", "kick_members"));
       remove.addEventListener("click", async () => {
         if (!window.confirm(`Remove ${member.displayName} from this space?`)) return;
         remove.disabled = true;
@@ -1813,34 +2170,109 @@ function renderMembers() {
           remove.disabled = false;
         }
       });
-      row.append(remove);
+      actions.append(remove);
     }
-    if (member.userId !== currentUserId && member.role !== "owner" && hasAnyPermission("manage_members", "ban_members")) {
+    {
       const ban = document.createElement("button");
       ban.className = "danger-button";
       ban.type = "button";
       ban.textContent = "Ban";
-      ban.addEventListener("click", () => openModerationAction("ban", member));
-      row.append(ban);
+      restrict(ban, hasAnyPermission("manage_members", "ban_members"));
+      ban.addEventListener("click", () => { actions.hidePopover(); openModerationAction("ban", member); });
+      actions.append(ban);
     }
-    if (member.userId !== currentUserId && member.role !== "owner" && hasAnyPermission("manage_members", "warn_members")) {
+    {
       const warn = document.createElement("button");
       warn.type = "button";
       warn.className = "secondary";
       warn.textContent = "Warn";
-      warn.addEventListener("click", () => openModerationAction("warn", member));
-      row.append(warn);
+      restrict(warn, hasAnyPermission("manage_members", "warn_members"));
+      warn.addEventListener("click", () => { actions.hidePopover(); openModerationAction("warn", member); });
+      actions.append(warn);
     }
-    if (member.userId !== currentUserId && member.role !== "owner" && hasAnyPermission("manage_members", "timeout_members")) {
+    {
       const timeout = document.createElement("button");
       timeout.type = "button";
       timeout.className = "secondary";
       timeout.textContent = "Timeout";
-      timeout.addEventListener("click", () => openModerationAction("timeout", member));
-      row.append(timeout);
+      restrict(timeout, hasAnyPermission("manage_members", "timeout_members"));
+      timeout.addEventListener("click", () => { actions.hidePopover(); openModerationAction("timeout", member); });
+      actions.append(timeout);
     }
+    const copyId = document.createElement("button");
+    copyId.type = "button";
+    copyId.className = "secondary";
+    copyId.textContent = "Copy user ID";
+    copyId.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(member.userId);
+        actions.hidePopover();
+        setStatus("User ID copied.");
+      } catch { setStatus("Could not copy the user ID. Check browser clipboard permissions.", true); }
+    });
+    actions.append(copyId);
+    const profile = document.createElement("button");
+    profile.type = "button";
+    profile.className = "secondary";
+    profile.textContent = "Profile";
+    profile.addEventListener("click", () => { actions.hidePopover(); void showMemberProfile(api, member.userId); });
+    const message = document.createElement("button");
+    message.type = "button";
+    message.className = "secondary";
+    message.textContent = "Message";
+    message.disabled = member.userId === currentUserId;
+    message.addEventListener("click", async () => {
+      message.disabled = true;
+      try {
+        const result = await api.createConversation("dm", [member.userId]);
+        window.location.assign(`/channels/@me/${encodeURIComponent(result.conversation.id)}`);
+      } catch (error) { message.disabled = false; setStatus(readableError(error), true); }
+    });
+    const block = document.createElement("button");
+    block.type = "button";
+    block.className = "danger-button";
+    block.textContent = "Block";
+    block.disabled = true;
+    let blocked = false;
+    actionButton.addEventListener("click", () => {
+      if (member.userId === currentUserId) { block.title = "You cannot block yourself."; return; }
+      block.disabled = true;
+      void api.user(member.userId).then((result) => {
+        blocked = result.blockedByMe;
+        block.textContent = blocked ? "Unblock" : "Block";
+        block.disabled = false;
+      }).catch(() => { block.title = "Could not load block status. Reopen the menu to retry."; });
+    });
+    block.addEventListener("click", async () => {
+      if (!blocked && !window.confirm(`Block ${member.displayName}? This affects your account, not space membership.`)) return;
+      block.disabled = true;
+      try {
+        if (blocked) await api.unblockUser(member.userId); else await api.blockUser(member.userId);
+        blocked = !blocked;
+        block.textContent = blocked ? "Unblock" : "Block";
+        setStatus(blocked ? "Member blocked for your account." : "Member unblocked.");
+      } catch (error) { setStatus(readableError(error), true); }
+      finally { block.disabled = false; }
+    });
+    const existing = [...actions.querySelectorAll<HTMLButtonElement>("button")];
+    const separator = () => document.createElement("hr");
+    actions.replaceChildren(profile, message, separator(), block, separator());
+    for (const label of ["Roles", "Warn", "Timeout", "Kick member", "Ban"]) {
+      const button = existing.find((candidate) => candidate.textContent === label);
+      if (button) actions.append(button);
+    }
+    actions.append(separator(), copyId);
+    const limitation = restriction(true);
+    if (limitation) {
+      const explanation = document.createElement("p");
+      explanation.className = "member-actions-note";
+      explanation.textContent = limitation;
+      actions.append(explanation);
+    }
+    row.append(actionCell);
     memberList.append(row);
   }
+  renderIcons(memberList);
 }
 
 function renderModeration() {
@@ -2125,11 +2557,33 @@ async function hydrateCustomEmojiMetadata(version: number) {
   const values = await Promise.all(customEmojis.map((emoji) => decryptMetadata(metadataConversationId!, emoji.encryptedMetadata)));
   if (version !== metadataHydrationVersion) return;
   customEmojiNames.clear();
+  customEmojiMetadata.clear();
+  clearCustomEmojiPreviews();
   for (let index = 0; index < customEmojis.length; index += 1) {
     const name = values[index].name;
+    customEmojiMetadata.set(customEmojis[index].id, values[index]);
     if (typeof name === "string" && /^[A-Za-z0-9_+-]{1,32}$/.test(name)) customEmojiNames.set(customEmojis[index].id, name);
   }
   renderCustomEmojis();
+  await Promise.all(customEmojis.map(async (emoji, index) => {
+    if (emoji.status !== "uploaded" || !emoji.fileUrl) return;
+    try {
+      const response = await fetch(emoji.fileUrl, { credentials: "include" });
+      if (!response.ok) return;
+      const blob = await decryptCustomEmojiImage(values[index], new Uint8Array(await response.arrayBuffer()));
+      if (version !== metadataHydrationVersion) return;
+      const src = URL.createObjectURL(blob);
+      customEmojiPreviewUrls.set(emoji.id, src);
+      const preview = emojiList.querySelector<HTMLElement>(`[data-emoji-id="${emoji.id}"] .custom-emoji-preview`);
+      if (preview) {
+        const image = document.createElement("img");
+        image.src = src;
+        image.alt = `:${customEmojiNames.get(emoji.id) ?? "emoji"}:`;
+        preview.replaceChildren(image);
+        preview.removeAttribute("title");
+      }
+    } catch { /* Keep an explicit unavailable preview without exposing keys or metadata. */ }
+  }));
 }
 
 async function loadData() {
@@ -2170,6 +2624,8 @@ async function loadData() {
   categoryNames.clear();
   channelNames.clear();
   customEmojiNames.clear();
+  customEmojiMetadata.clear();
+  clearCustomEmojiPreviews();
   title.textContent = "Space settings";
   roleLabel.textContent = `${currentServer.role} · ${channels.length} encrypted room${channels.length === 1 ? "" : "s"}`;
   backToServer.href = destination(currentServer.landingChannelId ?? channels[0]?.id);
@@ -2418,6 +2874,8 @@ roleForm.addEventListener("submit", async (event) => {
       viewAllChannels: true,
     });
     selectedRoleId = result.role.id;
+    roleEditorOpen = true;
+    roleForm.closest("details")?.removeAttribute("open");
     roleEditorDirty = false;
     newRoleName.value = "";
     await loadData();
@@ -2436,7 +2894,7 @@ function closeRolePreview() {
   setPreviewRoomNavigation(false);
   setPreviewInspector(false);
   renderRolePreview();
-  roleList.querySelector<HTMLElement>(".role-list-item[aria-selected='true']")?.focus();
+  roleList.querySelector<HTMLElement>(".role-editor button, .role-list-item button")?.focus();
 }
 
 exitRolePreview.addEventListener("click", closeRolePreview);

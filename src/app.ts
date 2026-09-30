@@ -1125,6 +1125,11 @@ export function createApp() {
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
+    .get("/voice-audio-worklet.js", async ({ set }) => {
+      const file = await publicFile("voice-audio-worklet.js", "text/javascript; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
     .get("/auth.js", async ({ set }) => {
       const file = await publicFile("auth.js", "text/javascript; charset=utf-8");
       if (!file) return respondError(set, 404, "client_not_built");
@@ -3625,6 +3630,30 @@ export function createApp() {
         serverId: t.String({ format: "uuid" }),
         emojiId: t.String({ format: "uuid" }),
       }),
+    })
+    .patch("/v1/servers/:serverId/emojis/:emojiId", async ({ headers, params, body, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      const authorization = await serverAuthorization(params.serverId, user.id);
+      if (!authorization) return respondError(set, 403, "not_a_server_member");
+      if (!hasServerPermission(authorization, "manage_custom_emoji")) return respondError(set, 403, "insufficient_server_permissions");
+      let metadata: Buffer;
+      try { metadata = decodeEncryptedMetadata(body.encryptedMetadata); }
+      catch (error) {
+        if (error instanceof InvalidEncodingError) return respondError(set, 400, "invalid_encrypted_metadata");
+        throw error;
+      }
+      const [updated] = await db<{ id: string }[]>`
+        update server_custom_emojis set encrypted_metadata = ${metadata}
+        where id = ${params.emojiId} and server_id = ${params.serverId}
+        returning id
+      `;
+      if (!updated) return respondError(set, 404, "custom_emoji_not_found");
+      await recordServerAudit(params.serverId, user.id, "custom_emoji.updated", updated.id);
+      return { updated: true };
+    }, {
+      params: t.Object({ serverId: t.String({ format: "uuid" }), emojiId: t.String({ format: "uuid" }) }),
+      body: t.Object({ encryptedMetadata: t.String({ minLength: 1, maxLength: 90_000 }) }),
     })
     .get("/v1/servers/:serverId/audit-logs", async ({ headers, params, query, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);

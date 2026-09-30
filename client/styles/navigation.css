@@ -146,3 +146,9 @@
 .chat-layout[data-app-theme="momotalk"] .workspace-rail .rail-button:hover,
 .chat-layout[data-app-theme="momotalk"] .workspace-rail .rail-button.rail-active { color: #fff; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 26%, var(--workspace-rail)); }
 .chat-layout[data-app-theme="momotalk"] .sidebar-user { border-color: var(--line); background: var(--bg-sidebar); }
+.channel-item[draggable="true"] { cursor: grab; }
+.channel-item[draggable="true"]:active { cursor: grabbing; }
+.sidebar-room-dragging { opacity: 0.45; }
+.channel-item.sidebar-room-drop-before { box-shadow: inset 0 2px var(--accent); }
+.channel-item.sidebar-room-drop-after { box-shadow: inset 0 -2px var(--accent); }
+.category-heading.sidebar-room-drop-category { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); outline: 1px solid var(--accent); outline-offset: -1px; }

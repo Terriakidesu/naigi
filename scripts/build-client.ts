@@ -1,6 +1,6 @@
 import { emojiAssetCodes } from "../client/emoji-data";
 
-for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "server-settings", "instance-admin", "instance-users", "instance-spaces", "instance-operations", "instance-maintenance", "instance-operators", "instance-admin-login"]) {
+for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "server-settings", "instance-admin", "instance-users", "instance-spaces", "instance-operations", "instance-maintenance", "instance-operators", "instance-admin-login", "voice-audio-worklet"]) {
   const result = await Bun.build({
     entrypoints: [`client/${entry}.ts`],
     outdir: "public",
@@ -35,6 +35,7 @@ const styleSheets = [
   "pages.css",
   "responsive.css",
   "controls.css",
+  "space-settings.css",
 ];
 const bundledStyles = (await Promise.all(styleSheets.map((sheet) => Bun.file(`client/styles/${sheet}`).text()))).join("");
 await Bun.write("public/app.css", bundledStyles);

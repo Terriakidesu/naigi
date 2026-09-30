@@ -1,6 +1,8 @@
 import { ExternalE2EEKeyProvider, Room, RoomEvent, Track } from "livekit-client";
 import { assertVoiceSecureContext, waitForLocalVoiceEncryption } from "./voice-e2ee";
 import { parseVoiceCallSignal, type VoiceSignalBody } from "./voice-protocol";
+import { VoiceAudioProcessor, setProcessedMicrophone } from "./voice-audio-processor";
+import { defaultVoiceAudioPreferences, voicePlaybackSettings, type VoiceAudioPreferences } from "./voice-audio-preferences";
 
 export type VoiceCallView = {
   status: "idle" | "incoming" | "calling" | "connecting" | "connected" | "reconnecting";
@@ -17,11 +19,13 @@ type ActiveCall = {
   conversationId: string;
   callId: string;
   peerName: string;
+  peerUserId?: string;
   mediaKey: string;
   direction: "outgoing" | "incoming";
   acceptedLocally?: boolean;
   room?: Room;
   worker?: Worker;
+  audioProcessor?: VoiceAudioProcessor;
   muted: boolean;
   deafened: boolean;
   peerAccepted?: boolean;
@@ -45,6 +49,7 @@ type VoiceCallOptions = {
   getAudioOutputDeviceId: () => string;
   getInitialMuted?: () => boolean;
   getInitialDeafened?: () => boolean;
+  getAudioPreferences?: () => VoiceAudioPreferences;
 };
 
 function randomMediaKey() {
@@ -86,13 +91,14 @@ export class VoiceCallController {
     };
   }
 
-  async start(conversationId: string, peerName: string) {
+  async start(conversationId: string, peerName: string, peerUserId?: string) {
     assertVoiceSecureContext();
     if (this.active) throw new Error("voice_call_already_active");
     const active: ActiveCall = {
       conversationId,
       callId: crypto.randomUUID(),
       peerName,
+      peerUserId,
       mediaKey: randomMediaKey(),
       direction: "outgoing",
       muted: this.options.getInitialMuted?.() ?? false,
@@ -137,6 +143,7 @@ export class VoiceCallController {
         conversationId,
         callId: signal.callId,
         peerName,
+        peerUserId: senderUserId,
         mediaKey: signal.mediaKey!,
         direction: "incoming",
         acceptedLocally: false,
@@ -210,7 +217,7 @@ export class VoiceCallController {
     const active = this.active;
     if (!active?.room) return;
     const muted = !active.muted;
-    await active.room.localParticipant.setMicrophoneEnabled(!muted);
+    await setProcessedMicrophone(active.room, active.audioProcessor!, !muted, () => this.isActive(active));
     if (!this.isActive(active)) return;
     active.muted = muted;
     this.emitState();
@@ -234,10 +241,21 @@ export class VoiceCallController {
     const active = this.active;
     if (!active?.room) return;
     active.deafened = !active.deafened;
-    for (const audio of this.options.audioOutput.querySelectorAll<HTMLAudioElement>("audio")) {
-      audio.muted = active.deafened;
-    }
+    this.refreshAudioPreferences();
     this.emitState();
+  }
+
+  setPushToTalk(pressed: boolean) { this.active?.audioProcessor?.setPushToTalk(pressed); }
+
+  refreshAudioPreferences() {
+    const active = this.active;
+    if (!active) return;
+    active.audioProcessor?.update();
+    const settings = voicePlaybackSettings(this.options.getAudioPreferences?.() ?? defaultVoiceAudioPreferences, active.deafened, active.peerUserId);
+    for (const audio of this.options.audioOutput.querySelectorAll<HTMLAudioElement>("audio[data-voice-call-audio]")) {
+      audio.muted = settings.muted;
+      audio.volume = settings.volume;
+    }
   }
 
   private async sendAction(active: ActiveCall, action: VoiceSignalBody["action"], extra: Pick<VoiceSignalBody, "expiresAt"> = {}) {
@@ -258,9 +276,11 @@ export class VoiceCallController {
     const keyProvider = new ExternalE2EEKeyProvider();
     const audioInputDeviceId = this.options.getAudioInputDeviceId();
     const audioOutputDeviceId = this.options.getAudioOutputDeviceId();
+    const audioProcessor = new VoiceAudioProcessor(() => this.options.getAudioPreferences?.() ?? defaultVoiceAudioPreferences);
+    active.audioProcessor = audioProcessor;
     const room = new Room({
       encryption: { keyProvider, worker },
-      ...(audioInputDeviceId ? { audioCaptureDefaults: { deviceId: audioInputDeviceId } } : {}),
+      audioCaptureDefaults: { ...(audioInputDeviceId ? { deviceId: audioInputDeviceId } : {}), autoGainControl: false },
       ...(audioOutputDeviceId ? { audioOutput: { deviceId: audioOutputDeviceId } } : {}),
     });
     active.room = room;
@@ -287,6 +307,7 @@ export class VoiceCallController {
       element.dataset.voiceCallAudio = "true";
       this.options.audioOutput.append(element);
       track.attach(element);
+      this.refreshAudioPreferences();
     });
     room.on(RoomEvent.TrackUnsubscribed, (track) => {
       for (const element of track.detach()) element.remove();
@@ -302,7 +323,7 @@ export class VoiceCallController {
     if (!this.isActive(active)) return;
     await waitForLocalVoiceEncryption(room);
     if (!this.isActive(active)) return;
-    await room.localParticipant.setMicrophoneEnabled(!active.muted);
+    await setProcessedMicrophone(room, audioProcessor, !active.muted, () => this.isActive(active));
     if (!this.isActive(active)) return;
     this.beginAccessChecks(active);
     this.emitState();
@@ -335,6 +356,7 @@ export class VoiceCallController {
   }
 
   private emitState() {
+    this.refreshAudioPreferences();
     this.options.onState(this.currentState);
   }
 
@@ -357,5 +379,6 @@ export class VoiceCallController {
       // The room is already gone.
     }
     active.worker?.terminate();
+    await active.audioProcessor?.destroy();
   }
 }

@@ -5,6 +5,9 @@
   "scripts": {
     "test": "bun test",
     "test:e2ee": "bun run build:client && bun run scripts/test-e2ee.ts",
+    "test:voice-audio": "bun run build:client && bun run scripts/test-voice-audio.ts",
+    "test:space-settings": "bun run build:client && bun run scripts/test-space-settings.ts",
+    "test:member-roles": "bun run build:client && bun run scripts/test-member-role-picker.ts",
     "typecheck": "bunx --bun tsc --noEmit",
     "build:client": "bun run scripts/build-client.ts",
     "dev": "bun run --watch src/index.ts",

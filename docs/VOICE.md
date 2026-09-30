@@ -35,6 +35,32 @@ Voice-room capacity is not capped by Naigi to a fixed participant count. LiveKit
 configuration, host resources, and network determine how many participants can connect. Direct
 one-to-one calls remain limited to two participants.
 
+## Voice & audio preferences
+
+Open **Settings → Voice & audio**, or use the footer gear to open it in a separate tab without leaving
+your voice connection. These preferences are browser-local and apply to both rooms and
+direct calls. Device names, input samples, and microphone-test audio are never sent to Naigi.
+
+- **Push to talk:** choose a shortcut and hold it while the Naigi page is focused, or hold the in-call
+  talk button (also available on touch screens). Typing, form controls, focus loss, and hidden tabs do
+  not activate the shortcut. Manual microphone mute always wins. This is not an OS-wide hotkey.
+- **Input volume:** 0–200%, applied before encryption; high gain can clip. Browser automatic gain
+  control is disabled so this setting has predictable effect.
+- **Output volume:** 0–100%. Right-click a participant tile, sidebar voice participant, or member row
+  (or use Shift+F10) for **Mute for me** and per-user volume. User volume multiplies output volume;
+  deafen and per-user mute take precedence. These controls do not mute someone for others.
+- **Silence threshold:** activity-mode input below the selected dBFS level is gated locally, with a
+  200 ms release hold to preserve word endings. Fully left disables the gate. PTT ignores this threshold.
+- **Mic test:** displays the input meter and whether audio passes the selected gate. Listening is opt-in;
+  use headphones to avoid feedback. No recording is saved. Stopping, leaving the view, hiding the tab,
+  or the 60-second limit releases the microphone and audio resources.
+- **Default devices:** remembered only on this browser, including changes from in-call selectors.
+  Microphone permission may be needed to list names. Unsupported output selectors are disabled.
+
+Audio processing requires Web Audio/AudioWorklet support and trusted HTTPS. PTT is initialized closed
+before publishing a microphone, and processing is reinstalled after device changes. No adaptive bitrate
+or continuous-transmission change is included.
+
 ## Configure the service
 
 Deploy LiveKit on infrastructure you control and configure a trusted HTTPS/WSS endpoint for browser

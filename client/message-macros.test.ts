@@ -1,12 +1,36 @@
 import { expect, test } from "bun:test";
 import {
   formatMessageMacro,
+  messageMacroTooltip,
+  refreshRelativeTimeMacros,
   formatMessageMacrosAsText,
   freezeNowMessageMacros,
   parseMessageMacro,
 } from "./message-macros";
 
 const now = Date.parse("2025-03-04T05:06:07.890Z");
+
+test("macro tooltips include the absolute date, seconds, and viewer timezone", () => {
+  const tooltip = messageMacroTooltip(now);
+  expect(tooltip).toContain("2025");
+  expect(tooltip).toContain(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  expect(tooltip).toContain("07");
+  const relative = parseMessageMacro("{relative:2d}", now)!;
+  expect(messageMacroTooltip(relative.timestampMs)).not.toBe(tooltip);
+});
+
+test("relative macro refresh retains timezone tooltip and accessible date", () => {
+  const attributes = new Map<string, string>();
+  const element = { dataset: { timestampMs: String(now + 172_800_000) }, textContent: "", title: "", setAttribute: (name: string, value: string) => attributes.set(name, value) };
+  const root = { querySelectorAll: () => [element] } as unknown as ParentNode;
+  refreshRelativeTimeMacros(root, now);
+  expect(element.textContent).toBe("in 2 days");
+  expect(element.title).toBe(messageMacroTooltip(now + 172_800_000));
+  expect(attributes.get("aria-label")).toContain(element.title);
+  refreshRelativeTimeMacros(root, now + 86_400_000);
+  expect(element.textContent).toBe("in 24 hours");
+  expect(element.title).toBe(messageMacroTooltip(now + 172_800_000));
+});
 
 test("message macros accept no argument, now, Unix seconds, milliseconds, and ISO dates", () => {
   expect(parseMessageMacro("{time}", now)).toMatchObject({ name: "time", timestampMs: now, format: "t", usesNow: true });

@@ -442,3 +442,5 @@
   .chat-layout[data-theme-design="true"] *,
   .theme-preview-window * { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+.message-macro { padding: 0.08em 0.28em; border-radius: 4px; background: color-mix(in srgb, currentColor 9%, transparent); box-decoration-break: clone; cursor: help; }
+.message-macro:hover, .message-macro:focus-visible { background: color-mix(in srgb, currentColor 16%, transparent); }

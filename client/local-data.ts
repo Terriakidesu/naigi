@@ -17,6 +17,7 @@ function removeUserLocalStorage(userId: string) {
     const keys = [
       `priv-chat.device.${userId}`,
       `priv-chat.app-preferences.${userId}`,
+      `priv-chat.voice-audio.${userId}`,
       `priv-chat.notifications.${userId}`,
       `priv-chat.muted-rooms.${userId}`,
       `priv-chat.unread.${userId}`,
@@ -41,6 +42,7 @@ export async function clearLocalData(userId: string) {
   try {
     sessionStorage.removeItem("priv-chat.local-passphrase");
     sessionStorage.removeItem("priv-chat.manual-lock");
+    sessionStorage.removeItem(`naigi.voice-room-resume.${userId}`);
   } catch {
     // Session storage is optional.
   }

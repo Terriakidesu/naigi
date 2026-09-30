@@ -1,0 +1,160 @@
+/* Compact management workspace; scoped so account settings and chat stay unchanged. */
+.server-settings-page .chat-layout.server-settings-layout { grid-template-columns: 200px minmax(0, 1fr); }
+.server-settings-sidebar .sidebar-heading { min-height: 52px; padding: 0.65rem 0.85rem; }
+.server-settings-sidebar .workspace-subtitle { display: none; }
+.server-settings-sidebar .settings-nav { padding: 0.55rem; gap: 0.65rem; }
+.server-settings-sidebar .settings-nav-item { min-height: 36px; padding: 0.45rem 0.6rem; font-size: 0.76rem; }
+.server-settings-sidebar .settings-nav-group-title { margin: 0.5rem 0 0.25rem; font-size: 0.58rem; }
+.server-settings-page .settings-header { flex-basis: 52px; min-height: 52px; }
+.server-settings-page .settings-header .channel-subtitle { display: none; }
+.server-settings-main-content { padding: 1rem 1.25rem 1.5rem; }
+.server-settings-content { width: 100%; max-width: 1440px; gap: 0.75rem; }
+.server-settings-content .settings-view { gap: 1rem; }
+.server-settings-content .settings-section { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.server-settings-content .settings-section + .settings-section { padding-top: 1rem; border-top: 1px solid var(--line-soft); }
+.server-settings-content .settings-section-heading { gap: 0.65rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+.server-settings-content .settings-section-heading .eyebrow { display: none; }
+.server-settings-content h1 { margin: 0 0 0.25rem; font-size: 1.15rem; }
+.server-settings-content h2 { margin: 0; font-size: 0.95rem; }
+.server-settings-content .settings-section-description { margin: 0.25rem 0 0.65rem; font-size: 0.72rem; }
+.server-settings-content .settings-form { gap: 0.65rem; margin-top: 0.7rem; }
+.server-settings-content .settings-form label { gap: 0.3rem; font-size: 0.74rem; }
+.server-settings-content input:not([type="checkbox"]):not([type="color"]):not([type="file"]), .server-settings-content select:not([multiple]), .server-settings-content textarea { padding: 0.45rem 0.6rem; min-height: 34px; font-size: 0.75rem; }
+.server-settings-content textarea { resize: vertical; }
+.server-settings-content .settings-form > .small { margin: -0.25rem 0 0; font-size: 0.66rem; }
+.server-settings-content .settings-form > button { justify-self: start; width: auto; }
+.server-settings-content .inline-settings-form { margin: 0.5rem 0 0.75rem; flex-wrap: wrap; }
+.server-settings-content .inline-settings-form input { flex: 1 1 160px; }
+.server-settings-content .inline-settings-form button { min-height: 34px; }
+.server-settings-content #overview { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem; }
+.server-settings-content #overview > .settings-section { padding: 0; border: 0; }
+.server-settings-content #overview > .settings-section:first-child { grid-row: span 2; }
+.server-settings-content #overview .settings-form { max-width: none; }
+.server-settings-content #overview > #danger-zone { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; padding-top: 0.85rem; border-top: 1px solid var(--line-soft); }
+.server-settings-content #danger-zone > .eyebrow { display: none; }
+.server-settings-content #danger-zone > p { flex: 1 1 250px; margin: 0; font-size: 0.72rem; }
+.server-settings-content .server-branding-grid { margin-top: 0.5rem; gap: 0.5rem; }
+.server-settings-content .server-branding-card { padding: 0.6rem; border-radius: 6px; flex-wrap: wrap; }
+.server-settings-content .settings-checkbox { min-height: 36px; padding: 0.45rem 0; gap: 0.5rem; }
+.server-settings-content .settings-list { gap: 0; border-top: 1px solid var(--line-soft); }
+.server-settings-content .settings-list-row { min-height: 46px; padding: 0.5rem 0; gap: 0.5rem; border: 0; border-bottom: 1px solid var(--line-soft); border-radius: 0; background: transparent; flex-wrap: wrap; }
+.server-settings-content .settings-list-row:hover { background: color-mix(in srgb, var(--bg-hover) 45%, transparent); }
+.server-settings-content .settings-row-copy { flex: 1 1 180px; }
+.server-settings-content .settings-list-row button { min-height: 32px; }
+.server-settings-content .member-avatar { width: 30px; height: 30px; flex-basis: 30px; }
+.server-settings-content .role-manager { grid-template-columns: 180px minmax(0, 1fr); gap: 1rem; }
+.server-settings-content .role-list-panel { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.server-settings-content .role-settings-card { padding: 0.75rem 0.85rem; gap: 0.6rem; border-radius: 6px; background: transparent; }
+.server-settings-content .role-permission-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 0.5rem; }
+.server-settings-content .role-permission-grid { grid-template-columns: 1fr; gap: 0.15rem; }
+.server-settings-content .permission-option { padding: 0.4rem; }
+.server-settings-content .role-editor .role-card-actions { margin: 0 -0.85rem -0.75rem; padding: 0.6rem 0.85rem; background: var(--bg); }
+.space-list-toolbar { display: flex; align-items: center; gap: 0.6rem; margin: 0.5rem 0; }
+.space-list-toolbar input { width: min(100%, 320px); }
+.space-list-count { color: var(--text-faint); font-size: 0.68rem; white-space: nowrap; }
+.space-list-empty { padding: 1rem 0; color: var(--text-faint); font-size: 0.75rem; }
+.room-sort-group { padding: 0.65rem 0.45rem; margin-top: 0.35rem; border-radius: 5px; color: var(--text-muted); background: var(--bg-sidebar); font-size: 0.72rem; font-weight: 700; }
+.room-drag-handle { flex: 0 0 20px; padding: 0.4rem 0; text-align: center; color: var(--text-faint); font-size: 1.25rem; user-select: none; }
+.room-drag-handle[draggable="true"] { cursor: grab; }
+.room-dragging { opacity: 0.45; }
+.server-settings-content .room-drop-target { box-shadow: inset 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
+#channel-settings-list[aria-busy="true"] { pointer-events: none; opacity: 0.65; }
+.custom-emoji-preview img { width: 100%; height: 100%; object-fit: contain; }
+.emoji-rename-form { display: flex; align-items: center; gap: 0.4rem; flex: 0 1 280px; min-width: 0; }
+.emoji-rename-form input { min-width: 0; }
+.member-role-picker { position: relative; flex: 0 0 auto; }
+.member-role-picker > summary { padding: 0.4rem 0.6rem; border: 1px solid var(--line-soft); border-radius: 6px; color: var(--text-muted); cursor: pointer; font-size: 0.7rem; }
+.member-role-picker .member-role-select { width: 220px; max-width: 100%; min-height: 110px; }
+.server-settings-content .role-manager { display: block; max-width: 1000px; }
+.server-settings-content .role-list-panel { position: static; gap: 0.75rem; }
+.server-settings-content .role-list-items { display: grid; max-height: none; overflow: visible; gap: 0; }
+.server-settings-content .role-list-item { display: grid; grid-template-columns: 20px 16px minmax(0, 1fr) 70px 34px 34px; gap: 0.65rem; min-height: 54px; padding: 0.5rem; border: 0; border-bottom: 1px solid var(--line-soft); border-radius: 0; }
+.server-settings-content .role-list-copy strong { font-size: 0.8rem; color: var(--role-text-color, var(--text)); }
+.role-list-columns { display: grid; grid-template-columns: minmax(0, 1fr) 70px 81px; gap: 0.65rem; padding: 0 0.5rem 0 3.55rem; color: var(--text-faint); font-size: 0.6rem; font-weight: 700; text-transform: uppercase; }
+.role-list-columns > span:last-child { text-align: center; }
+.role-list-copy span:empty { display: none; }
+.role-member-count { color: var(--text-muted); text-align: center; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.role-drag-grip { color: var(--text-faint); font-size: 1.2rem; user-select: none; opacity: 0.35; }
+.role-drag-grip[draggable="true"] { cursor: grab; opacity: 1; }
+.role-dragging { opacity: 0.45; }
+.role-list-item.role-drop-before { box-shadow: inset 0 2px var(--accent); }
+.role-list-item.role-drop-after { box-shadow: inset 0 -2px var(--accent); }
+.role-default-permissions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.25rem 0.7rem; align-items: center; width: 100%; padding: 0.85rem; border: 1px solid var(--line-soft); border-radius: 7px; color: var(--text); background: var(--bg-sidebar); text-align: left; }
+.role-default-permissions strong { font-size: 0.82rem; }
+.role-default-permissions span { color: var(--text-faint); font-size: 0.7rem; }
+.role-default-permissions svg { grid-column: 2; grid-row: 1 / 3; width: 18px; height: 18px; }
+.role-create-disclosure { max-width: 1000px; margin: 0.75rem 0; }
+.role-create-disclosure > summary { width: fit-content; padding: 0.5rem 0.75rem; border-radius: 6px; color: var(--accent-ink); background: var(--accent); font-size: 0.75rem; font-weight: 650; cursor: pointer; }
+.role-row-menu { position: relative; }
+.role-row-menu > summary { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line-soft); border-radius: 6px; color: var(--text-muted); cursor: pointer; list-style: none; }
+.role-row-menu > summary::-webkit-details-marker { display: none; }
+.role-row-menu > div { position: absolute; z-index: 4; top: 38px; right: 0; display: grid; gap: 0.25rem; width: 190px; padding: 0.4rem; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--bg-elevated); box-shadow: 0 8px 24px #0005; }
+.role-row-menu button { text-align: left; padding: 0.5rem; font-size: 0.72rem; }
+.role-manager[aria-busy="true"] { pointer-events: none; opacity: 0.65; }
+@media (max-width: 760px) {
+  .server-settings-content .role-list-items { max-height: none; }
+  .server-settings-content .role-list-item { grid-template-columns: 16px 12px minmax(0, 1fr) 30px 32px 32px; gap: 0.35rem; }
+  .role-list-columns { grid-template-columns: minmax(0, 1fr) 45px 65px; padding-left: 2.8rem; gap: 0.35rem; }
+}
+.server-settings-content [hidden] { display: none !important; }
+@media (max-width: 1050px) {
+  .server-settings-content #overview { grid-template-columns: 1fr; }
+  .server-settings-content #overview > .settings-section:first-child { grid-row: auto; }
+  .server-settings-content #overview > .settings-section + .settings-section { padding-top: 1rem; border-top: 1px solid var(--line-soft); }
+}
+@media (max-width: 760px) {
+  .server-settings-main-content { padding: 0.85rem; }
+  .server-settings-content .role-manager { grid-template-columns: 1fr; }
+  .server-settings-content .role-list-panel { position: static; }
+  .server-settings-content .role-list-items { max-height: 160px; }
+  .server-settings-content .role-permission-groups { grid-template-columns: 1fr; }
+  .server-settings-content .settings-list-row select { max-width: 100%; }
+  .server-settings-content .channel-create-form select { flex: 1 1 120px; }
+}
+.member-role-dialog { width: min(380px, calc(100vw - 2rem)); max-height: min(560px, calc(100dvh - 2rem)); margin: auto; padding: 1rem; overflow: auto; border: 1px solid var(--line-soft); border-radius: 10px; color: var(--text); background: var(--bg-elevated); box-shadow: 0 16px 60px #0006; }
+.member-role-dialog::backdrop { background: transparent; }
+.member-role-dialog header { display: grid; gap: 0.2rem; margin-bottom: 0.8rem; }
+.member-role-dialog header strong { font-size: 0.95rem; }
+.member-role-dialog header span { color: var(--text-muted); font-size: 0.75rem; overflow-wrap: anywhere; }
+.member-role-dialog > input { min-height: 36px; padding: 0.5rem 0.65rem; font-size: 0.75rem; }
+.member-role-choices { display: grid; gap: 0.2rem; max-height: 280px; overflow: auto; margin-top: 0.6rem; }
+.member-role-choice { display: flex; align-items: center; gap: 0.6rem; min-height: 38px; padding: 0.45rem 0.5rem; border-radius: 5px; cursor: pointer; font-size: 0.78rem; }
+.member-role-choice:hover { background: var(--bg-hover); }
+.member-role-choice:has(input:checked) { background: var(--bg-active); }
+.member-role-choice input { flex: 0 0 auto; }
+.member-role-choice > span:last-child { overflow-wrap: anywhere; min-width: 0; }
+.member-role-choice-swatch { flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; }
+.member-role-picker-status { margin: 0.6rem 0; color: var(--text-muted); font-size: 0.68rem; }
+.member-role-dialog footer { display: flex; justify-content: flex-end; gap: 0.5rem; padding-top: 0.65rem; border-top: 1px solid var(--line-soft); }
+.member-role-dialog footer button { min-height: 34px; padding: 0.45rem 0.75rem; font-size: 0.72rem; }
+.role-card-actions .role-editor-exit { margin-right: auto; }
+.server-settings-content .role-card-actions { flex-wrap: wrap; }
+.server-settings-content .member-settings-row, .members-table-heading { display: grid; grid-template-columns: minmax(160px, 1.2fr) minmax(110px, 0.5fr) minmax(180px, 1fr) 54px; align-items: center; gap: 1rem; padding: 0.5rem; }
+.members-table-heading { min-height: 36px; color: var(--text-faint); font-size: 0.6rem; font-weight: 750; text-transform: uppercase; }
+.member-table-identity { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
+.member-table-joined { color: var(--text-muted); font-size: 0.72rem; }
+.member-table-actions { justify-self: end; }
+.server-settings-content .member-role-summary { display: flex; flex-wrap: wrap; gap: 0.3rem; min-width: 0; margin: 0; }
+.member-actions-popover { position: fixed; inset: auto; margin: 0; width: 190px; padding: 0.4rem; border: 1px solid var(--line-soft); border-radius: 8px; color: var(--text); background: var(--bg-elevated); box-shadow: 0 8px 24px #0005; }
+.member-actions-popover:popover-open { display: grid; gap: 0.2rem; }
+.member-actions-popover button { width: 100%; min-height: 34px; padding: 0.5rem 0.6rem; font-size: 0.72rem; text-align: left; }
+.member-actions-popover button:disabled { opacity: 0.45; cursor: not-allowed; }
+.member-actions-note { margin: 0.3rem 0; padding: 0.3rem 0.5rem; color: var(--text-faint); font-size: 0.65rem; line-height: 1.4; }
+.member-actions-popover hr { width: 100%; margin: 0.25rem 0; border: 0; border-top: 1px solid var(--line-soft); }
+.member-actions-popover .member-roles-submenu-trigger { display: flex; justify-content: space-between; align-items: center; }
+.member-roles-submenu-trigger::after { content: "›"; color: var(--text-muted); font-size: 1rem; }
+.member-actions-popover { max-height: calc(100dvh - 16px); overflow-y: auto; }
+.member-profile-dialog { width: min(360px, calc(100vw - 2rem)); margin: auto; padding: 1.2rem; border: 1px solid var(--line-soft); border-radius: 10px; color: var(--text); background: var(--bg-elevated); }
+.member-profile-dialog::backdrop { background: #0007; }
+.member-profile-body { display: grid; justify-items: start; gap: 0.6rem; margin-bottom: 1rem; overflow-wrap: anywhere; }
+.member-profile-body .member-avatar { width: 64px; height: 64px; }
+.member-profile-body > span:not(.member-avatar) { color: var(--text-muted); font-size: 0.75rem; }
+.member-role-dialog { position: fixed; inset: auto; margin: 0; width: min(320px, calc(100vw - 16px)); }
+@media (max-width: 760px) {
+  .server-settings-content .member-settings-row, .members-table-heading { grid-template-columns: minmax(0, 1fr) 36px; gap: 0.5rem; }
+  .member-table-joined { grid-column: 1; font-size: 0.65rem; }
+  .member-table-actions { grid-column: 2; grid-row: 1 / 4; }
+  .member-settings-row > .member-role-summary { grid-column: 1; }
+  .members-table-heading > span:nth-child(2), .members-table-heading > span:nth-child(3) { display: none; }
+  .members-table-heading > span:last-child { font-size: 0; }
+}
