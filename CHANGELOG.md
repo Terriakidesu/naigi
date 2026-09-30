@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-09-30
+
+### Fixed
+
+- Voice rooms and direct calls now wait for LiveKit to confirm local media encryption after connecting before enabling the microphone.
+
 ## [0.21.1] - 2026-09-30
 
 ### Fixed
@@ -203,6 +209,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.21.2](docs/changelogs/0.21.2.md) — 2026-09-30
 - [0.21.1](docs/changelogs/0.21.1.md) — 2026-09-30
 - [0.21.0](docs/changelogs/0.21.0.md) — 2026-09-30
 - [0.20.1](docs/changelogs/0.20.1.md) — 2026-09-30

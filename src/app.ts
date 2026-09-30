@@ -1047,7 +1047,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.21.1" };
+         ?? { name: "Naigi", version: "0.21.2" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -5458,22 +5458,27 @@ export function createApp() {
       const roomName = `naigi-voice-room-${roomDigest}`;
       const roomService = liveKitRoomService();
       if (!roomService) return respondError(set, 503, "voice_service_not_configured");
+      let failureStage = "list_room";
       try {
         let rooms = await roomService.listRooms([roomName]);
         if (!rooms.some((room) => room.name === roomName)) {
+          failureStage = "create_room";
           try {
             // Do not impose an application-wide participant count. LiveKit and
             // the host's deployment resources determine how many can join.
             await roomService.createRoom({ name: roomName, emptyTimeout: 60, departureTimeout: 30 });
           } catch {
+            failureStage = "confirm_room_creation";
             rooms = await roomService.listRooms([roomName]);
             if (!rooms.some((room) => room.name === roomName)) throw new Error("voice_room_creation_failed");
           }
+          failureStage = "verify_room";
           rooms = await roomService.listRooms([roomName]);
         }
         const activeParticipants = rooms.find((room) => room.name === roomName)?.numParticipants ?? 0;
         const bootstrapKey = `naigi:voice-room-bootstrap:${access.channel.id}`;
         let canStart = false;
+        failureStage = "bootstrap_lock";
         if (activeParticipants > 0) {
           await evalRedisScript("return redis.call('DEL', KEYS[1])", 1, bootstrapKey);
         } else {
@@ -5487,6 +5492,7 @@ export function createApp() {
           canStart = Number(acquired) === 1;
         }
 
+        failureStage = "sign_token";
         const accessToken = new AccessToken(config.liveKit.apiKey, config.liveKit.apiSecret, {
           identity: crypto.randomUUID(),
           ttl: "1m",
@@ -5500,7 +5506,9 @@ export function createApp() {
         });
         set.headers["cache-control"] = "no-store";
         return { url: config.liveKit.webSocketUrl, token: await accessToken.toJwt(), canStart };
-      } catch {
+      } catch (error) {
+        const errorType = error instanceof Error ? error.name : typeof error;
+        console.error(`[voice-room] room token failed at ${failureStage} (${errorType})`);
         return respondError(set, 503, "voice_room_service_unavailable");
       }
     }, {

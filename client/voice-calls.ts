@@ -1,4 +1,5 @@
 import { ExternalE2EEKeyProvider, Room, RoomEvent, Track } from "livekit-client";
+import { waitForLocalVoiceEncryption } from "./voice-e2ee";
 import { parseVoiceCallSignal, type VoiceSignalBody } from "./voice-protocol";
 
 export type VoiceCallView = {
@@ -254,8 +255,9 @@ export class VoiceCallController {
     await keyProvider.setKey(active.mediaKey);
     if (!this.isActive(active)) return;
     await room.setE2EEEnabled(true);
-    if (!room.isE2EEEnabled) throw new Error("voice_media_encryption_unavailable");
     await room.connect(ticket.url, ticket.token);
+    if (!this.isActive(active)) return;
+    await waitForLocalVoiceEncryption(room);
     if (!this.isActive(active)) return;
     await room.localParticipant.setMicrophoneEnabled(true);
     if (!this.isActive(active)) return;
