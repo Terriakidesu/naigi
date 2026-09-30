@@ -59,7 +59,7 @@ import {
   storeProfileImage,
   validProfileImageBytes,
 } from "./profile-images";
-import { connectRedis, pingRedis, publishMessageCreated, redis } from "./redis/client";
+import { connectRedis, evalRedisScript, pingRedis, publishMessageCreated, redis } from "./redis/client";
 import {
   publicFirebaseMessagingConfiguration,
   registerFcmPushToken,
@@ -1000,10 +1000,9 @@ function liveKitRoomService() {
 }
 
 async function voiceTokenRateLimited(userId: string) {
-  await connectRedis();
   const minute = Math.floor(Date.now() / 60_000);
   const key = `naigi:voice-token:${userId}:${minute}`;
-  const count = Number(await redis.eval(
+  const count = Number(await evalRedisScript(
     "local count = redis.call('INCR', KEYS[1]); if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]); end; return count",
     1,
     key,
@@ -1048,7 +1047,7 @@ export function createApp() {
     })
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.21.0" };
+         ?? { name: "Naigi", version: "0.21.1" };
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");
@@ -5475,11 +5474,10 @@ export function createApp() {
         const activeParticipants = rooms.find((room) => room.name === roomName)?.numParticipants ?? 0;
         const bootstrapKey = `naigi:voice-room-bootstrap:${access.channel.id}`;
         let canStart = false;
-        await connectRedis();
         if (activeParticipants > 0) {
-          await redis.eval("return redis.call('DEL', KEYS[1])", 1, bootstrapKey);
+          await evalRedisScript("return redis.call('DEL', KEYS[1])", 1, bootstrapKey);
         } else {
-          const acquired = await redis.eval(
+          const acquired = await evalRedisScript(
             "if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2]); return 1; end; return 0",
             1,
             bootstrapKey,

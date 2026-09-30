@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-09-30
+
+### Fixed
+
+- Voice token rate limiting and room bootstrap now invoke Redis Lua through Bun's supported command API, allowing eligible members to create and join voice rooms.
+
 ## [0.21.0] - 2026-09-30
 
 ### Added
@@ -197,6 +203,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.21.1](docs/changelogs/0.21.1.md) — 2026-09-30
 - [0.21.0](docs/changelogs/0.21.0.md) — 2026-09-30
 - [0.20.1](docs/changelogs/0.20.1.md) — 2026-09-30
 - [0.20.0](docs/changelogs/0.20.0.md) — 2026-09-30

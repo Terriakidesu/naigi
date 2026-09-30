@@ -17,6 +17,11 @@ export async function connectRedis() {
   await connection;
 }
 
+export async function evalRedisScript(script: string, numKeys: number, ...keysAndArgs: (string | number)[]) {
+  await connectRedis();
+  return redis.send("EVAL", [script, String(numKeys), ...keysAndArgs.map(String)]);
+}
+
 export async function pingRedis() {
   await connectRedis();
   await redis.ping();
