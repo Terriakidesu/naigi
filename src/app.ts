@@ -69,6 +69,7 @@ import {
 import { createRealtimeConnection, type RealtimeConnection } from "./realtime";
 import { fetchTwitterPreview, parseTwitterStatusUrl } from "./twitter-preview";
 import { historyRecoveryRoutes } from "./history-recovery";
+import { serverVersionInfo } from "./server-version";
 
 type UserRow = {
   id: string;
@@ -1047,9 +1048,10 @@ export function createApp() {
       console.error(`[request-error] ${request.method} ${new URL(request.url).pathname} (${code})\n${detail}`);
       return respondError(set, 500, "internal_error");
     })
+    .get("/v1/version", () => serverVersionInfo())
     .get("/", async () => {
       return await publicFile("index.html", "text/html; charset=utf-8")
-         ?? { name: "Naigi", version: "0.23.0" };
+         ?? serverVersionInfo();
     })
     .get("/register", async ({ set }) => {
       const file = await publicFile("register.html", "text/html; charset=utf-8");

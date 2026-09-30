@@ -10,6 +10,17 @@ frontends. The API is responsible for identity, authorization, ordering, and del
 opaque encrypted envelopes. A frontend is responsible for cryptography, secure local key
 storage, photo compression, and rendering.
 
+## Server information
+
+`GET /v1/version` is public and returns the Naigi server's application version and supported
+API version. For example:
+
+```json
+{"name":"Naigi","version":"0.24.0","apiVersion":1}
+```
+
+Clients should display the server version separately from their own application version.
+
 ## Authentication
 
 `POST /v1/auth/register` and `POST /v1/auth/login` set the `HttpOnly` session cookie

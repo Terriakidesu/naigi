@@ -2,8 +2,11 @@
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-01
+
 ### Added
 
+- A public `GET /v1/version` endpoint reports the server application version and supported API version.
 - Selecting composer text shows an icon-only formatting toolbar for bold, italic, strikethrough, and spoilers; Ctrl/⌘+B, Ctrl/⌘+I, Ctrl/⌘+Shift+X, and Ctrl/⌘+Shift+S apply or remove Markdown formatting.
 - MIT license for Naigi's original source code, with third-party asset licenses preserved.
 
@@ -272,6 +275,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.24.0](docs/changelogs/0.24.0.md) — 2026-10-01
 - [0.23.0](docs/changelogs/0.23.0.md) — 2026-09-30
 - [0.22.0](docs/changelogs/0.22.0.md) — 2026-09-30
 - [0.21.2](docs/changelogs/0.21.2.md) — 2026-09-30
