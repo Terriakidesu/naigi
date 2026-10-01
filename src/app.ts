@@ -1,4 +1,5 @@
 import { password } from "bun";
+import { deviceClientName } from "./device-client";
 import { createPublicKey } from "node:crypto";
 import { Elysia, t } from "elysia";
 import { AccessToken, RoomServiceClient, TrackSource } from "livekit-server-sdk";
@@ -385,6 +386,8 @@ function prefixUpperBound(value: string) {
 
 function parseCryptoUpload(value: unknown) {
   const body = objectValue(value);
+  const deviceName = deviceClientName(body?.device_client);
+  if (deviceName === null) return null;
   const deviceKeys = objectValue(body?.device_keys);
   const keys = objectValue(deviceKeys?.keys);
   const deviceId = deviceKeys?.device_id ?? body?.device_id;
@@ -396,7 +399,7 @@ function parseCryptoUpload(value: unknown) {
   if (keys && !Object.values(keys).every((key) => typeof key === "string")) return null;
   if (!Object.values(oneTimeKeys).every(validCryptoKey)) return null;
   if (!Object.values(fallbackKeys).every(validCryptoKey)) return null;
-  return { deviceId, deviceKeys, oneTimeKeys, fallbackKeys };
+  return { deviceId, deviceKeys, oneTimeKeys, fallbackKeys, deviceName };
 }
 
 function decodeEncryptedMetadata(value: string | undefined) {
@@ -5658,8 +5661,15 @@ export function createApp() {
           await transaction`
             insert into devices (id, user_id, name, identity_key, signed_prekey)
             values (
-              ${deviceId}, ${user.id}, 'web', ${publicKeyBytes}, ${publicKeyBytes}
+              ${deviceId}, ${user.id}, ${upload.deviceName ?? "web"}, ${publicKeyBytes}, ${publicKeyBytes}
             )
+          `;
+        }
+
+        if (existingDevice && upload.deviceName) {
+          await transaction`
+            update devices set name = ${upload.deviceName}
+            where id = ${deviceId} and user_id = ${user.id} and revoked_at is null
           `;
         }
 

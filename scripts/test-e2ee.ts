@@ -355,6 +355,27 @@ try {
 
   await unlock(a, "/app");
   await unlock(b, "/app");
+  const registeredClients = await request(a, "/v1/devices");
+  assert.equal(registeredClients.status, 200);
+  assert.ok(registeredClients.body.devices.length > 0);
+  assert.ok(registeredClients.body.devices.every((device: { name: string }) => device.name === "Web browser"));
+  const clientDeviceId = registeredClients.body.devices[0].id;
+  const clientMetadata = { device_id: clientDeviceId, device_client: "desktop" };
+  assert.equal((await request(a, "/v1/crypto/keys/upload", clientMetadata)).status, 200);
+  assert.equal((await request(a, "/v1/crypto/keys/upload", { device_id: clientDeviceId })).status, 200);
+  assert.equal((await request(a, "/v1/devices")).body.devices.find((device: { id: string }) => device.id === clientDeviceId).name, "Naigi Desktop", "old uploads preserve client metadata");
+  // Send deliberate failures outside the page's response stream so the global
+  // browser crypto-error collector still catches every unexpected UI failure.
+  const foreignClientMetadata = await b.context().request.post(`${origin}/v1/crypto/keys/upload`, { data: clientMetadata });
+  assert.equal(foreignClientMetadata.status(), 400, "other accounts cannot relabel a device");
+  const invalidClientMetadata = await a.context().request.post(`${origin}/v1/crypto/keys/upload`, { data: { ...clientMetadata, device_client: "invalid" } });
+  assert.equal(invalidClientMetadata.status(), 400);
+  await a.goto(`${origin}/settings#devices`);
+  await a.locator(".device-copy strong").filter({ hasText: "Naigi Desktop" }).waitFor();
+  assert.equal(await a.locator(".device-icon svg.lucide-app-window").count(), 1);
+  assert.equal(await a.locator(".device-copy span").filter({ hasText: "This device" }).count(), 1);
+  assert.equal((await request(a, "/v1/crypto/keys/upload", { device_id: clientDeviceId, device_client: "web" })).status, 200);
+  console.log("Device client metadata, ownership validation, legacy preservation, and device-list UI passed.");
   await a.goto(`${origin}/settings#recovery`);
   await a.locator("#recovery").waitFor({ state: "visible", timeout: 20_000 });
   await a.locator("#recovery-local-passphrase").fill("Independent-local-vault-passphrase!");
@@ -753,10 +774,11 @@ try {
     const { width, height } = image.getBoundingClientRect();
     return { filter: getComputedStyle(image).filter, naturalWidth: (image as HTMLImageElement).naturalWidth, naturalHeight: (image as HTMLImageElement).naturalHeight, width, height };
   });
-  assert.match(spoilerPreviewAppearance.filter, /blur\(/, "spoiler media is blurred rather than hidden behind an opaque cover");
+  assert.equal(spoilerPreviewAppearance.filter, "none", "spoiler blur is pre-rendered, not a full-size CSS filter");
+  assert.ok(spoilerPreviewAppearance.naturalWidth <= 64 && spoilerPreviewAppearance.naturalHeight <= 64, "only a tiny static preview is displayed while concealed");
   assert.ok(Math.abs(spoilerPreviewAppearance.width / spoilerPreviewAppearance.height - spoilerPreviewAppearance.naturalWidth / spoilerPreviewAppearance.naturalHeight) < 0.01, "spoiler preview retains the media's intrinsic aspect ratio");
-  assert.ok(Math.abs(spoilerPreviewAppearance.width - spoilerPreviewAppearance.naturalWidth) <= 1
-    && Math.abs(spoilerPreviewAppearance.height - spoilerPreviewAppearance.naturalHeight) <= 1,
+  assert.ok(Math.abs(spoilerPreviewAppearance.width - 320) <= 1
+    && Math.abs(spoilerPreviewAppearance.height - 180) <= 1,
   "spoiler preview keeps the original display dimensions when it fits the chat column");
   await spoilerMessage.locator(".media-spoiler-cover").click();
   await blurredSpoilerPreview.waitFor({ timeout: 20_000 });

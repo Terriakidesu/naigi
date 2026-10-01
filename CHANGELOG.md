@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-10-01
+
+### Fixed
+
+- Device registrations identify Naigi Desktop and web clients, refresh legacy labels on reconnect, and preserve identified names for older clients that do not send platform metadata.
+- Pin shared frontend 0.1.3, with pre-rendered spoiler previews and encrypted bounded caching, stable loading-state voice controls, and Profile navigation from the account settings gear.
+- Isolate deliberate device-metadata rejection checks from the E2EE browser error collector without suppressing unexpected crypto errors.
+
 ## [0.25.0] - 2026-10-01
 
 ### Changed
@@ -288,6 +296,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.25.1](docs/changelogs/0.25.1.md) — 2026-10-01
 - [0.25.0](docs/changelogs/0.25.0.md) — 2026-10-01
 - [0.24.0](docs/changelogs/0.24.0.md) — 2026-10-01
 - [0.23.0](docs/changelogs/0.23.0.md) — 2026-09-30
