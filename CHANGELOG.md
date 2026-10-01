@@ -2,10 +2,23 @@
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-01
+
+### Changed
+
+- Web user assets now build from the pinned `naigi-frontend` 0.1.2 submodule with Node.js/npm; the instance-admin console remains server-owned with an independent stylesheet.
+
+### Fixed
+
+- Voice rooms use one opaque participant identity per account and room, require explicit confirmation before switching devices, and reserve pending joins to prevent simultaneous duplicate connections.
+- Recovery imports notify already-open chats to reload their cached room keys and retry locked history without losing scroll position. Chat startup also enables automatic backup when initial network key sync is deferred.
+- Recovery distinguishes newly added or earlier keys from duplicate imports instead of claiming locked messages were restored when zero keys improved history access.
+
 ## [0.24.0] - 2026-10-01
 
 ### Added
 
+- Recovery includes a local, count-only history-key check for comparing original and new devices without exposing message text, keys, or passphrases.
 - A public `GET /v1/version` endpoint reports the server application version and supported API version.
 - Selecting composer text shows an icon-only formatting toolbar for bold, italic, strikethrough, and spoilers; Ctrl/⌘+B, Ctrl/⌘+I, Ctrl/⌘+Shift+X, and Ctrl/⌘+Shift+S apply or remove Markdown formatting.
 - MIT license for Naigi's original source code, with third-party asset licenses preserved.
@@ -275,6 +288,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.25.0](docs/changelogs/0.25.0.md) — 2026-10-01
 - [0.24.0](docs/changelogs/0.24.0.md) — 2026-10-01
 - [0.23.0](docs/changelogs/0.23.0.md) — 2026-09-30
 - [0.22.0](docs/changelogs/0.22.0.md) — 2026-09-30

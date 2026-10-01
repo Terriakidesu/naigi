@@ -7743,6 +7743,12 @@ window.addEventListener("focus", () => {
   clearUnread();
   void refreshMessages().catch((error) => setStatus(readableError(error), true));
 });
+window.addEventListener("naigi:history-keys-ready", (event) => {
+  if ((event as CustomEvent<{ userId: string }>).detail?.userId !== currentUser?.id || !cryptoClient || !selectedConversationId) return;
+  const wasAtLatest = isAtLatestMessage();
+  const scrollAnchor = wasAtLatest ? undefined : captureScrollAnchor() ?? undefined;
+  void renderMessageHistory({ scrollToBottom: wasAtLatest, scrollAnchor }).catch((error) => setStatus(readableError(error), true));
+});
 window.addEventListener("pagehide", () => {
   voicePageClosing = true;
   window.clearTimeout(voiceRoomResumeTimer);

@@ -358,7 +358,7 @@ try {
   await a.goto(`${origin}/settings#recovery`);
   await a.locator("#recovery").waitFor({ state: "visible", timeout: 20_000 });
   await a.locator("#recovery-local-passphrase").fill("Independent-local-vault-passphrase!");
-  await a.locator(".history-manual-backup > summary").click();
+  await a.getByText("Manual file backup and import", { exact: true }).click();
   await a.locator("#recovery-export-passphrase").fill("Recovery-passphrase-for-e2e-test!");
   await a.locator("#recovery-export-confirm").fill("Recovery-passphrase-for-e2e-test!");
   const recoveryDownloadPromise = a.waitForEvent("download");

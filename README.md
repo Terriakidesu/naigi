@@ -63,6 +63,7 @@ See [Features](docs/FEATURES.md), [Voice](docs/VOICE.md), and
 ### Requirements
 
 - [Bun](https://bun.sh/).
+- Node.js 22.12+ and npm for the shared user frontend.
 - PostgreSQL with **two separate databases**: one for chat and one for host-operator identities.
 - Redis or Valkey.
 - Persistent filesystem storage for attachments and profile images.
@@ -83,7 +84,9 @@ See [Features](docs/FEATURES.md), [Voice](docs/VOICE.md), and
 3. Install dependencies, migrate both databases, build the browser client, and start development:
 
    ```bash
-   bun install
+    bun install
+    git submodule update --init --recursive
+    npm --prefix shared-frontend ci
    bun run db:migrate
    bun run build:client
    bun run dev
@@ -94,6 +97,11 @@ See [Features](docs/FEATURES.md), [Voice](docs/VOICE.md), and
 
 For deployment and upgrades, use the [operator setup guide](docs/SETUP.md). Build the client and
 apply migrations when upgrading; run `bun run start` rather than the development watcher in production.
+The user UI comes from the pinned [naigi-frontend](https://github.com/Terriakidesu/naigi-frontend)
+submodule at `shared-frontend/`. After pulling, run `git submodule update --init --recursive`
+and `npm --prefix shared-frontend ci` before rebuilding. The instance-admin console remains
+in this repository and is built separately by the same `build:client` command. Existing
+user files in `client/` are retained during integration, but are no longer the user build source.
 Version 0.23.0 adds migration `028_history_recovery` for encrypted backups and temporary device transfers.
 
 ### Storage and health
@@ -235,7 +243,7 @@ guarantee legal compliance. See [Setup](docs/SETUP.md) and [Security](docs/SECUR
 
 ## Development
 
-Edit browser sources in `client/`, not generated `public/` assets. Rebuild after browser changes:
+Edit user browser sources in `shared-frontend/` (the shared repository), and server-owned admin sources in `client/`, not generated `public/` assets. Rebuild after browser changes:
 
 ```bash
 bun run build:client
@@ -246,7 +254,7 @@ bun run dev
 
 ```bash
 bun run typecheck
-bun test
+bun run test
 bun run test:e2ee
 ```
 

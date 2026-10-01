@@ -47,6 +47,12 @@ try {
   for (const page of [newDevice, recoveredDevice]) assert.equal((await request(page, "/v1/auth/login", { username: "history_user", password: accountPassword })).status, 200);
   await oldDevice.evaluate(() => (window as any).historyTest.initialize());
   const seed = await oldDevice.evaluate(() => (window as any).historyTest.seed());
+  const invitation = await request(oldDevice, `/v1/servers/${seed.serverId}/invites`, {});
+  assert.equal((await request(stranger, `/v1/invites/${invitation.body.invite.token}/accept`, {})).status, 200);
+  await stranger.evaluate(() => (window as any).historyTest.initialize());
+  const receivedHistory = await stranger.evaluate((id) => (window as any).historyTest.sendBatch(id), seed.conversationId);
+  await oldDevice.evaluate(() => (window as any).historyTest.sync());
+  assert.equal((await oldDevice.evaluate((message) => (window as any).historyTest.decryptMessage(message), receivedHistory[0])).content.body, "received older message 0", "Original device really holds keys for received history, not just cached plaintext");
   const recoveryKey = await oldDevice.evaluate(() => (window as any).historyTest.enable());
   await oldDevice.evaluate(() => (window as any).historyTest.backup());
   const oldDeviceId = await oldDevice.evaluate(() => (window as any).historyTest.initialize());
@@ -64,6 +70,77 @@ try {
   await newDevice.evaluate((pairing) => (window as any).historyTest.finish(pairing), pairing);
   const restored = await newDevice.evaluate((seed) => (window as any).historyTest.decrypt(seed.conversationId, seed.encrypted), seed);
   assert.equal(restored.name, "private history fixture");
+  // Exercise the real UI, keeping chat open while a second tab imports keys.
+  const uiContext = await browser.newContext();
+  // Optionally verify the separately built desktop frontend against the real
+  // backend, without changing its API/crypto code or persisting test plaintext.
+  const frontendAssets = Bun.env.HISTORY_RECOVERY_FRONTEND_ASSETS;
+  if (frontendAssets) {
+    await uiContext.addInitScript((serverOrigin) => {
+      (window as any).naigiDesktop = {
+        getInfo: async () => ({ appVersion: "integration-test", serverVersion: null, serverOrigin }),
+        getRealtimeUrl: async () => `${serverOrigin.replace(/^http/, "ws")}/v1/realtime`,
+      };
+    }, origin);
+    await uiContext.route("**/*", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      const asset = pathname.startsWith("/channels/") || pathname === "/app" ? "chat.html"
+        : pathname === "/settings" ? "settings.html" : pathname.slice(1);
+      if (!asset || asset.includes("..") || pathname.startsWith("/v1/")) return route.continue();
+      const file = Bun.file(`${frontendAssets}/${asset}`);
+      if (!await file.exists()) return route.continue();
+      await route.fulfill({ body: Buffer.from(await file.arrayBuffer()), contentType: file.type });
+    });
+  }
+  const uiChat = await uiContext.newPage();
+  await uiChat.goto(`${origin}/history-test`);
+  assert.equal((await request(uiChat, "/v1/auth/login", { username: "history_user", password: accountPassword })).status, 200);
+  await uiChat.evaluate(() => sessionStorage.setItem("priv-chat.local-passphrase", "ui-recovery-passphrase"));
+  await uiChat.goto(`${origin}/channels/${seed.serverId}/${seed.channelId}`);
+  await uiChat.locator(".unavailable-history").waitFor({ state: "visible" });
+  const uiRecovery = await uiContext.newPage();
+  await uiRecovery.goto(`${origin}/settings#recovery`);
+  await uiRecovery.waitForFunction(() => !(document.getElementById("settings-name")?.textContent ?? "").includes("Loading"));
+  await uiRecovery.locator("#recovery-local-passphrase").fill("ui-recovery-passphrase");
+  await uiRecovery.getByText("Messages still locked? Check history keys", { exact: true }).click();
+  await uiRecovery.locator("#history-diagnostics-link").fill(`${origin}/channels/${seed.serverId}/${seed.channelId}`);
+  await uiRecovery.locator("#history-check-keys").click();
+  await uiRecovery.locator("#history-diagnostics-result").filter({ hasText: "0 readable" }).waitFor();
+  await uiRecovery.locator("#history-request-device").click();
+  await uiRecovery.waitForFunction(() => Boolean((document.getElementById("history-pairing-link") as HTMLTextAreaElement)?.value));
+  const uiLink = await uiRecovery.locator("#history-pairing-link").inputValue();
+  const sourceRecovery = await oldDevice.context().newPage();
+  await sourceRecovery.goto(`${origin}/settings#recovery`);
+  await sourceRecovery.waitForFunction(() => !(document.getElementById("settings-name")?.textContent ?? "").includes("Loading"));
+  await sourceRecovery.locator("#recovery-local-passphrase").fill("history-test-local-passphrase");
+  await sourceRecovery.locator("#history-approval-link").fill(uiLink);
+  await sourceRecovery.locator("#history-review-device").click();
+  await sourceRecovery.getByText("Messages still locked? Check history keys", { exact: true }).click();
+  await sourceRecovery.locator("#history-diagnostics-link").fill(`${origin}/channels/${seed.serverId}/${seed.channelId}`);
+  await sourceRecovery.locator("#history-check-keys").click();
+  await sourceRecovery.locator("#history-diagnostics-result").filter({ hasText: "50 readable" }).waitFor();
+  await sourceRecovery.locator("#history-device-confirm").check();
+  await sourceRecovery.locator("#history-approve-device").click();
+  await sourceRecovery.locator("#history-recovery-status").filter({ hasText: "History transfer approved" }).waitFor();
+  await uiRecovery.locator("#history-recovery-status").filter({ hasText: "Device approved" }).waitFor();
+  await uiChat.bringToFront();
+  await uiChat.getByText("received older message 0", { exact: true }).waitFor({ timeout: 10_000 });
+  assert.equal(await uiChat.locator(".unavailable-history").count(), 0, "Received history also recovers through actual settings approval");
+  await uiRecovery.locator("#history-check-keys").click();
+  await uiRecovery.locator("#history-diagnostics-result").filter({ hasText: "50 readable" }).waitFor();
+  await sourceRecovery.close();
+  // Duplicate imports are valid, but must not claim to have unlocked more history.
+  await uiRecovery.bringToFront();
+  await uiRecovery.locator("#history-request-device").click();
+  await uiRecovery.waitForFunction(() => Boolean((document.getElementById("history-pairing-link") as HTMLTextAreaElement)?.value));
+  const duplicateLink = await uiRecovery.locator("#history-pairing-link").inputValue();
+  const duplicateParts = new URL(duplicateLink).hash.replace("#approve-device=", "").split(".");
+  await oldDevice.evaluate((pairing) => (window as any).historyTest.approve(pairing), { id: duplicateParts[0], deviceId: duplicateParts[1], secret: duplicateParts[2] });
+  await uiRecovery.locator("#history-recovery-status").filter({ hasText: "no new or earlier keys" }).waitFor();
+  assert.ok((await uiRecovery.locator("#history-recovery-status").textContent())?.includes("specific messages"));
+  await uiChat.bringToFront();
+  await uiChat.getByText("received older message 0", { exact: true }).waitFor();
+  await uiContext.close();
   assert.equal((await request(newDevice, `/v1/crypto/history/transfers/${pairing.id}`)).status, 404, "transfer is consumed after import");
   await recoveredDevice.evaluate(() => (window as any).historyTest.initialize());
   await assert.rejects(recoveredDevice.evaluate(() => (window as any).historyTest.restore("NCR1-" + "A".repeat(43))));
@@ -81,6 +158,10 @@ try {
   await oldDevice.evaluate(() => (window as any).historyTest.backup());
   await recoveredDevice.evaluate((key) => (window as any).historyTest.restore(key), recoveryKey);
   assert.equal((await recoveredDevice.evaluate((seed) => (window as any).historyTest.decrypt(seed.conversationId, seed.encrypted), added)).name, "private history fixture", "merging preserves another device's keys");
+  await recoveredDevice.evaluate(() => (window as any).historyTest.stop());
+  await recoveredDevice.reload();
+  await recoveredDevice.evaluate(() => (window as any).historyTest.initialize(false));
+  assert.equal(await recoveredDevice.evaluate(() => (window as any).historyTest.hasBackup()), true, "Deferred initial key sync must still enable remembered automatic backup");
   const another = await newDevice.evaluate(() => (window as any).historyTest.request());
   await db`update history_device_transfers set expires_at = now() - interval '1 second' where id = ${another.id}`;
   assert.equal((await request(oldDevice, `/v1/crypto/history/transfers/${another.id}`)).status, 404);
@@ -94,15 +175,20 @@ try {
   assert.equal((await request(recoveredDevice, `/v1/crypto/history/transfers/${revokedRequester.id}`)).status, 404);
   for (const page of [oldDevice, newDevice, recoveredDevice]) await page.evaluate(() => (window as any).historyTest.stop());
   await recoveredDevice.goto(`${origin}/settings#recovery`);
+  await recoveredDevice.waitForFunction(() => {
+    const name = document.getElementById("settings-name")?.textContent;
+    return Boolean(name && !name.includes("Loading"));
+  });
   await recoveredDevice.locator("#history-request-device").waitFor({ state: "visible" });
   assert.equal(await recoveredDevice.locator(".history-recovery-card").count(), 2);
   await recoveredDevice.locator("#history-generate-key").click();
+  await recoveredDevice.waitForFunction(() => /^NCR1-[A-Za-z0-9_-]{43}$/.test((document.getElementById("history-generated-key") as HTMLInputElement)?.value ?? ""));
   assert.match(await recoveredDevice.locator("#history-generated-key").inputValue(), /^NCR1-[A-Za-z0-9_-]{43}$/);
   assert.equal(await recoveredDevice.locator("#history-enable-backup").isDisabled(), true);
   await recoveredDevice.locator("#history-key-saved").check();
   assert.equal(await recoveredDevice.locator("#history-enable-backup").isEnabled(), true);
   assert.equal(await recoveredDevice.locator("#recovery-export-passphrase").isVisible(), false);
-  await recoveredDevice.locator(".history-manual-backup > summary").click();
+  await recoveredDevice.getByText("Manual file backup and import", { exact: true }).click();
   assert.equal(await recoveredDevice.locator("#recovery-export-passphrase").isVisible(), true);
   await recoveredDevice.locator('a[href="#accessibility"]').click();
   await recoveredDevice.locator("#app-scale").waitFor({ state: "visible" });

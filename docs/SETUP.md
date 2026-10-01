@@ -1,12 +1,14 @@
 # Setup and deployment
 
 Naigi runs as a Bun application backed by PostgreSQL and Redis/Valkey. The browser client is built
-from `client/` and served by the application. Production deployments must serve the client over
+from the pinned `shared-frontend/` submodule and served by the application; the admin console
+is built separately from this repository's `client/`. Production deployments must serve the client over
 HTTPS; Web Crypto and secure browser storage are not available on ordinary remote HTTP origins.
 
 ## Requirements
 
 - Bun and the dependencies in `package.json`.
+- Node.js 22.12+ and npm for the shared frontend build.
 - PostgreSQL for application data and a **separate PostgreSQL database** for host-operator
   identities and sessions.
 - Redis or Valkey for readiness checks, cross-instance pub/sub, realtime support, and optional voice
@@ -22,6 +24,8 @@ HTTPS; Web Crypto and secure browser storage are not available on ordinary remot
 
    ```bash
    bun install
+   git submodule update --init --recursive
+   npm --prefix shared-frontend ci
    cp .env.example .env
    ```
 
@@ -40,7 +44,9 @@ HTTPS; Web Crypto and secure browser storage are not available on ordinary remot
    development. Create a normal chat account at `/register`.
 
 The generated `public/` files are build output and are intentionally ignored by Git. Edit files in
-`client/` and rebuild with `bun run build:client`.
+`shared-frontend/` for the user UI or `client/` for the admin console, then rebuild with
+`bun run build:client`. Legacy user sources remain in `client/` during integration but
+are no longer used by the user build.
 
 ## Production deployment
 
@@ -63,6 +69,8 @@ The generated `public/` files are build output and are intentionally ignored by 
 
    ```bash
    bun install --frozen-lockfile
+   git submodule update --init --recursive
+   npm --prefix shared-frontend ci
    bun run build:client
    bun run db:migrate
    bun run start
@@ -107,7 +115,9 @@ that set is configured.
 ## Upgrades, backups, and recovery
 
 - Before upgrading, back up both PostgreSQL databases and the persistent attachment and profile-image
-  directories. Apply migrations with `bun run db:migrate`, rebuild the client, then restart the app.
+   directories. Apply migrations with `bun run db:migrate`, rebuild the client, then restart the app.
+  After pulling, initialize/update the pinned submodule with `git submodule update --init --recursive`
+  and run `npm --prefix shared-frontend ci`. Builds do not fetch or advance the frontend pin.
 - Attachments are encrypted before upload; profile images are account profile media and are not part
   of the message encryption boundary. Protect both storage directories and backups accordingly.
 - Users should export encrypted room-key recovery data from account settings and keep the backup
@@ -121,7 +131,7 @@ that set is configured.
 
 ```bash
 bun run typecheck
-bun test
+bun run test
 bun run test:e2ee
 ```
 

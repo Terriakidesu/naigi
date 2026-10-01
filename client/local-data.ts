@@ -21,6 +21,7 @@ function removeUserLocalStorage(userId: string) {
       `priv-chat.notifications.${userId}`,
       `priv-chat.muted-rooms.${userId}`,
       `priv-chat.unread.${userId}`,
+      `naigi.history-keys.${userId}`,
     ];
     for (const key of keys) localStorage.removeItem(key);
     for (let index = localStorage.length - 1; index >= 0; index -= 1) {

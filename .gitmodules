@@ -1,0 +1,3 @@
+[submodule "shared-frontend"]
+	path = shared-frontend
+	url = https://github.com/Terriakidesu/naigi-frontend.git

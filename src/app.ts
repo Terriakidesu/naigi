@@ -70,6 +70,7 @@ import { createRealtimeConnection, type RealtimeConnection } from "./realtime";
 import { fetchTwitterPreview, parseTwitterStatusUrl } from "./twitter-preview";
 import { historyRecoveryRoutes } from "./history-recovery";
 import { serverVersionInfo } from "./server-version";
+import { claimVoiceRoomDevice, VoiceRoomDeviceConflict, voiceRoomIdentity } from "./voice-room-device";
 
 type UserRow = {
   id: string;
@@ -1214,6 +1215,36 @@ export function createApp() {
       if (!file) return respondError(set, 404, "client_not_built");
       return file;
     })
+    .get("/instance-admin.css", async ({ set }) => {
+      const file = await publicFile("instance-admin.css", "text/css; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/chunks/:chunk", async ({ params, set }) => {
+      if (!/^[A-Za-z0-9_-]+\.js(?:\.LEGAL\.txt)?$/.test(params.chunk)) return respondError(set, 404, "asset_not_found");
+      const file = Bun.file(`${import.meta.dir}/../public/chunks/${params.chunk}`);
+      if (!await file.exists()) return respondError(set, 404, "asset_not_found");
+      return new Response(file, { headers: {
+        "cache-control": "public, max-age=31536000, immutable",
+        "content-type": params.chunk.endsWith(".txt") ? "text/plain; charset=utf-8" : "text/javascript; charset=utf-8",
+      } });
+    })
+    .get("/version.json", async ({ set }) => {
+      const file = await publicFile("version.json", "application/json; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      set.headers["cache-control"] = "no-cache";
+      return file;
+    })
+    .get("/LICENSE", async ({ set }) => {
+      const file = await publicFile("LICENSE", "text/plain; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
+    .get("/third-party-licenses.txt", async ({ set }) => {
+      const file = await publicFile("third-party-licenses.txt", "text/plain; charset=utf-8");
+      if (!file) return respondError(set, 404, "client_not_built");
+      return file;
+    })
     .get("/favicon.svg", async ({ set }) => {
       const file = await publicFile("favicon.svg", "image/svg+xml");
       if (!file) return respondError(set, 404, "client_not_built");
@@ -1227,7 +1258,7 @@ export function createApp() {
       return file;
     })
     .get("/assets/twemoji/:asset", async ({ params, set }) => {
-      if (!/^[A-Za-z0-9_.-]+$/.test(params.asset) || !params.asset.endsWith(".svg") && params.asset !== "NOTICE.txt") {
+      if (!/^[A-Za-z0-9_.-]+$/.test(params.asset) || !params.asset.endsWith(".svg") && params.asset !== "NOTICE.txt" && params.asset !== "LICENSE-GRAPHICS") {
         return respondError(set, 404, "asset_not_found");
       }
       const file = Bun.file(`${import.meta.dir}/../public/assets/twemoji/${params.asset}`);
@@ -5508,6 +5539,14 @@ export function createApp() {
           failureStage = "verify_room";
           rooms = await roomService.listRooms([roomName]);
         }
+        failureStage = "claim_device";
+        const identity = voiceRoomIdentity(access.channel.id, user.id, config.liveKit.apiSecret);
+        await claimVoiceRoomDevice(identity, body.instanceId ?? crypto.randomUUID(), body.replaceExisting === true,
+          await roomService.listParticipants(roomName),
+          async (participantIdentity, instanceId, replaceExisting) => Number(await evalRedisScript(
+            "local owner = redis.call('GET', KEYS[1]); if owner and owner ~= ARGV[1] and ARGV[2] ~= '1' then return 0; end; redis.call('SET', KEYS[1], ARGV[1], 'EX', 60); return 1",
+            1, `naigi:voice-room-device:${participantIdentity}`, instanceId, replaceExisting ? "1" : "0",
+          )) === 1);
         const activeParticipants = rooms.find((room) => room.name === roomName)?.numParticipants ?? 0;
         const bootstrapKey = `naigi:voice-room-bootstrap:${access.channel.id}`;
         let canStart = false;
@@ -5527,7 +5566,7 @@ export function createApp() {
 
         failureStage = "sign_token";
         const accessToken = new AccessToken(config.liveKit.apiKey, config.liveKit.apiSecret, {
-          identity: crypto.randomUUID(),
+          identity,
           ttl: "10m",
         });
         accessToken.addGrant({
@@ -5540,12 +5579,35 @@ export function createApp() {
         set.headers["cache-control"] = "no-store";
         return { url: config.liveKit.webSocketUrl, token: await accessToken.toJwt(), canStart };
       } catch (error) {
+        if (error instanceof VoiceRoomDeviceConflict) return respondError(set, 409, "voice_room_active_on_another_device");
         const errorType = error instanceof Error ? error.name : typeof error;
         console.error(`[voice-room] room token failed at ${failureStage} (${errorType})`);
         return respondError(set, 503, "voice_room_service_unavailable");
       }
     }, {
-      body: t.Object({ channelId: t.String({ format: "uuid" }) }),
+      body: t.Object({
+        channelId: t.String({ format: "uuid" }),
+        instanceId: t.Optional(t.String({ format: "uuid" })),
+        replaceExisting: t.Optional(t.Boolean()),
+      }),
+    })
+    .post("/v1/voice/room-release", async ({ body, headers, set }) => {
+      const user = await authenticate(headers.authorization, headers.cookie);
+      if (!user) return respondError(set, 401, "unauthorized");
+      if (!config.liveKit) return respondError(set, 503, "voice_service_not_configured");
+      const identity = voiceRoomIdentity(body.channelId, user.id, config.liveKit.apiSecret);
+      try {
+        const released = await evalRedisScript(
+          "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]); end; return 0",
+          1, `naigi:voice-room-device:${identity}`, body.instanceId,
+        );
+        set.headers["cache-control"] = "no-store";
+        return { released: Number(released) === 1 };
+      } catch {
+        return respondError(set, 503, "voice_token_service_unavailable");
+      }
+    }, {
+      body: t.Object({ channelId: t.String({ format: "uuid" }), instanceId: t.String({ format: "uuid" }) }),
     })
     .post("/v1/voice/room-check", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);

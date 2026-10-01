@@ -83,7 +83,9 @@ export function setupHistoryRecovery(api: ApiClient, unlock: () => Promise<Crypt
     const imported = await (await unlock()).restoreHistoryBackup(key);
     restoreKey.value = "";
     await refresh();
-    status.textContent = `Restored ${imported.imported} of ${imported.total} history keys. Reopen the conversation to read its history. Automatic backup is now enabled on this device.`;
+    status.textContent = imported.imported > 0
+      ? `Backup processed: added ${imported.imported} new or earlier history keys from ${imported.total} supplied. Open chat to retry locked messages. Automatic backup is now enabled.`
+      : `Backup processed, but none of its ${imported.total} keys added earlier history access. This browser already has the same or better keys. If messages remain locked, use a device or backup that can read those specific messages.`;
   });
   busy("history-backup-now", async () => {
     const client = await unlock();
@@ -97,6 +99,22 @@ export function setupHistoryRecovery(api: ApiClient, unlock: () => Promise<Crypt
     await (await unlock()).disableHistoryBackup();
     await refresh();
     status.textContent = "Encrypted server backup deleted. Local room keys were not removed.";
+  });
+  busy("history-check-keys", async () => {
+    const output = byId<HTMLElement>("history-diagnostics-result");
+    output.textContent = "Checking…";
+    try {
+      const url = new URL(byId<HTMLInputElement>("history-diagnostics-link").value, window.location.origin);
+      const parts = url.pathname.split("/");
+      const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+      if (url.origin !== window.location.origin || url.username || url.password || parts.length !== 4 || parts[1] !== "channels" || !uuid.test(parts[2]) || !uuid.test(parts[3])) throw new Error("Paste the affected room’s /channels/space-id/room-id link from this host.");
+      const { channels } = await api.serverChannels(parts[2]);
+      const channel = channels.find((channel) => channel.id === parts[3]);
+      if (!channel) throw new Error("This account cannot access the selected room.");
+      const report = await (await unlock()).diagnoseHistory(channel.conversationId);
+      output.textContent = `History check: ${report.sampled} messages sampled; ${report.readable} readable; ${report.missingKeys} missing keys; ${report.earlierKeysNeeded} need earlier keys; ${report.otherErrors} other errors. Export contains ${report.roomKeys} room keys, matching ${report.matchingSessions} of ${report.requiredSessions} message sessions. Check version: 1.`;
+      status.textContent = "History check complete. Compare this summary with the same check in the original browser. You can share these counts, but never share your recovery key, passphrase, or approval link.";
+    } catch (error) { output.textContent = "Check did not complete."; throw error; }
   });
   busy("history-request-device", async () => {
     if (pairing) await api.deleteHistoryTransfer(pairing.id).catch(() => undefined);
@@ -120,7 +138,9 @@ export function setupHistoryRecovery(api: ApiClient, unlock: () => Promise<Crypt
       void client.finishHistoryDeviceTransfer(request, () => generation === token).then((result) => {
         if (generation !== token || !result) return;
         clearPairing();
-        status.textContent = `Device approved. Imported ${result.imported} of ${result.total} history keys. Reopen your conversation to read the restored history.`;
+        status.textContent = result.imported > 0
+          ? `Device approved. Added ${result.imported} new or earlier history keys from ${result.total} supplied. Open chat to retry locked messages; already-open chats refresh automatically.`
+          : `Device approved, but no new or earlier keys were added (${result.total} supplied). This browser already has the same or better keys. If messages remain locked, request approval from a device that can read those specific messages.`;
         void refresh().catch(() => undefined);
       }).catch((error) => {
         if (generation !== token) return;

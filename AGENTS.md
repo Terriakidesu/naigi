@@ -3,15 +3,15 @@
 ## Commands
 
 - Copy `.env.example` to `.env`; local development needs the app and admin PostgreSQL databases plus Redis/Valkey. Run `bun run db:migrate` before `bun run dev`.
-- `bun run build:client` bundles `client/*.ts` and copies the HTML/CSS/WASM assets into ignored `public/`; edit `client/`, never generated `public/` files.
-- Verification commands are `bun run typecheck`, `bun test`, and `bun run test:e2ee`. The E2EE test builds the browser client, needs PostgreSQL/Redis and Playwright Chromium, and uses temporary app/admin PostgreSQL schemas.
+- `bun run build:client` builds the pinned `shared-frontend/` submodule's web target using Node.js/npm, then builds server-owned instance-admin entries from `client/` into ignored `public/`. Initialize with `git submodule update --init --recursive` and `npm --prefix shared-frontend ci`. User UI changes belong in the shared repository; keep the old user copy intact until live integration validation passes. Never edit generated `public/` files.
+- Verification commands are `bun run typecheck`, `bun run test`, and `bun run test:e2ee`. Use the test script to avoid discovering the submodule's npm/Vitest tests. Run its check/tests separately with npm. The E2EE test builds the browser client, needs PostgreSQL/Redis and Playwright Chromium, and uses temporary app/admin PostgreSQL schemas.
 - Run one unit-test file with `bun test path/to/file.test.ts`; `bun run db:purge -- --yes` is destructive local cleanup and must not be used against production.
 - When a change is ready and the user requests it, stage all intended source and documentation changes, run the verification commands, and create one descriptive git commit; do not commit generated ignored `public/` files.
 
 ## Architecture and security
 
 - `src/index.ts` starts the Bun/Elysia server; `src/app.ts` owns HTTP routes, `src/realtime.ts` owns WebSocket subscriptions, and `src/redis/client.ts` publishes best-effort notifications.
-- `client/main.ts` is the chat UI; `client/crypto.ts` is the Matrix Olm/Megolm WASM adapter. The backend stores opaque encrypted envelopes and must never receive or log plaintext message content, names, URLs, embeds, or media keys.
+- `shared-frontend/src/main.ts` is the chat UI; `shared-frontend/src/crypto.ts` is the Matrix Olm/Megolm WASM adapter. The backend stores opaque encrypted envelopes and must never receive or log plaintext message content, names, URLs, embeds, or media keys.
 - Redis realtime events are notifications only. PostgreSQL message history is authoritative; reconnect and catch-up paths must fetch encrypted envelopes with cursors.
 - IndexedDB message caching stores encrypted envelopes only. Do not add plaintext message content or local passphrases to persistent browser storage.
 - Private recipient discovery is limited to active members of a shared server; do not restore global username/user search.

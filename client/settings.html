@@ -150,7 +150,7 @@
                   <button id="history-review-device" class="secondary" type="button">Review approval</button>
                   <div id="history-approval-panel" hidden>
                     <p>Verification code: <strong id="history-approval-code"></strong></p>
-                    <label class="checkbox-label"><input id="history-device-confirm" type="checkbox">Both codes match and I control this new device</label>
+                    <label class="checkbox-label"><input id="history-device-confirm" type="checkbox">Both codes match, I control the new device, and this browser can read the messages I want to recover</label>
                     <button id="history-approve-device" type="button" disabled>Approve history transfer</button>
                   </div>
                 </section>
@@ -169,6 +169,13 @@
                 </section>
               </div>
               <p id="history-recovery-status" class="muted small" role="status" aria-live="polite"></p>
+              <details class="history-manual-backup">
+                <summary>Messages still locked? Check history keys</summary>
+                <p class="muted small">Run this check on both the original and new browsers using the same room link. It checks actual encrypted messages, not cached display text. Only counts are shown; no message text or keys are uploaded.</p>
+                <label class="history-unlock-field">Affected room link<input id="history-diagnostics-link" type="url" placeholder="https://your-host/channels/space-id/room-id" autocomplete="off" spellcheck="false"></label>
+                <button id="history-check-keys" class="secondary" type="button">Check history keys</button>
+                <p id="history-diagnostics-result" class="muted small" role="status" aria-live="polite"></p>
+              </details>
               <details class="history-manual-backup"><summary>Manual file backup and import</summary>
              <p class="muted small">Export an encrypted copy of this browser’s room keys for safekeeping or import one on another browser. The recovery passphrase is never uploaded or remembered.</p>
             <div class="settings-form">

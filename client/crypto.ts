@@ -1,6 +1,7 @@
 import {
   Attachment,
   CollectStrategy,
+  DecryptionErrorCode,
   DecryptionSettings,
   DeviceId,
   DeviceLists,
@@ -19,6 +20,7 @@ import {
 import { ApiError, type ApiClient, type ConversationMember, type MessageEnvelope, type UploadOptions } from "./api";
 import { openRecovery, sealRecovery, parseRecoveryKey, randomRecoverySecret, recoverySecretHash, wrapLocalRecovery, unwrapLocalRecovery, type DevicePairing } from "./history-recovery-crypto";
 import { readLocalRecovery, writeLocalRecovery } from "./history-recovery-store";
+import { notifyHistoryKeysChanged, subscribeHistoryKeysChanged } from "./history-recovery-events";
 import { prepareMedia } from "./media";
 import {
   enqueuePendingMessage,
@@ -198,6 +200,8 @@ export class CryptoClient {
   private historyBackupMessage = "Automatic backup is not enabled on this device.";
   private historyBackupUnlocking = false;
   private closing = false;
+  private readonly recoverySourceId = randomUuid();
+  private unsubscribeHistoryKeys?: () => void;
   private reloadHistoryBackup = () => {
     if (!this.initialized || this.historyBackupState || this.historyBackupUnlocking) return;
     this.historyBackupUnlocking = true;
@@ -260,18 +264,37 @@ export class CryptoClient {
     }
     this.initialized = true;
     this.state.roomKeyRequestsEnabled = true;
-    if (options.syncToDevice === false) return;
     try {
       // Ask the SDK to request room keys when a device misses an original share.
       // Forwarding remains controlled by the SDK's device-trust rules.
-      await this.processOutgoingRequests();
-      await this.syncToDevice();
+      if (options.syncToDevice !== false) {
+        await this.processOutgoingRequests();
+        await this.syncToDevice();
+      }
     } catch (error) {
       await this.close().catch(() => undefined);
       throw error;
     }
     await this.loadHistoryBackup();
     window.addEventListener("focus", this.reloadHistoryBackup);
+    this.unsubscribeHistoryKeys = subscribeHistoryKeysChanged(this.accountUserId, this.recoverySourceId, () => {
+      void this.reloadRecoveredRoomKeys().catch(() => undefined);
+    });
+  }
+
+  private reloadRecoveredRoomKeys() {
+    return this.runCryptoOperation(async () => {
+      if (this.closing || !this.initialized) return;
+      // Olm machines cache inbound sessions. Another tab's IndexedDB import does
+      // not invalidate this machine's cached missing/late keys.
+      const nextMachine = await OlmMachine.initialize(new UserId(matrixUserId(this.accountUserId)), new DeviceId(this.requestedDeviceId), cryptoStoreName(this.accountUserId), this.storePassphrase);
+      if (this.closing) { nextMachine.close(); return; }
+      this.machine?.close();
+      this.machine = nextMachine;
+      this.machine.roomKeyRequestsEnabled = true;
+      this.preparingRooms.clear();
+      window.dispatchEvent(new CustomEvent("naigi:history-keys-ready", { detail: { userId: this.accountUserId } }));
+    });
   }
 
   private async loadHistoryBackup() {
@@ -363,7 +386,7 @@ export class CryptoClient {
         throw new Error("Backup was removed or changed. Restore with the current recovery key.");
       }
       // Merge other devices' keys before publishing. Revision checks reject concurrent overwrites.
-      await this.importRecovery(backup.encryptedExport, state.dataKey);
+      await this.importRecovery(backup.encryptedExport, state.dataKey, false);
       const encryptedExport = await this.exportRecovery(state.dataKey);
       if (!this.initialized || this.closing || this.historyBackupState !== state) return;
       await this.api.putHistoryBackup({ id: state.id, deviceId: this.deviceId, revision: backup.revision, encryptedKey: state.encryptedKey, encryptedExport });
@@ -426,12 +449,51 @@ export class CryptoClient {
     });
   }
 
-  async importRecovery(encryptedExport: string, passphrase: string) {
+  async diagnoseHistory(conversationId: string) {
+    const { messages } = await this.api.messages(conversationId, { limit: 50 });
+    return this.runCryptoOperation(async () => {
+      const report = { sampled: messages.length, readable: 0, missingKeys: 0, earlierKeysNeeded: 0, otherErrors: 0, roomKeys: 0, requiredSessions: 0, matchingSessions: 0 };
+      const required = new Set<string>();
+      for (const message of messages) {
+        try {
+          const event = eventForMessage(message);
+          const sessionId = event.content.session_id;
+          const senderKey = event.content.sender_key;
+          if (typeof sessionId === "string" && typeof senderKey === "string") required.add(JSON.stringify([senderKey, sessionId]));
+          // Check real ciphertext with the SDK; do not use the chat's plaintext render cache.
+          await this.decryptMessageInternal(conversationId, message);
+          report.readable += 1;
+        } catch (error) {
+          const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+          if (code === DecryptionErrorCode.MissingRoomKey) report.missingKeys += 1;
+          else if (code === DecryptionErrorCode.UnknownMessageIndex) report.earlierKeysNeeded += 1;
+          else report.otherErrors += 1;
+        }
+      }
+      // Examine export coverage only in memory. Return aggregate counts, never keys or exports.
+      const exported = JSON.parse(await this.state.exportRoomKeys(() => true)) as Array<{ room_id: string; sender_key: string; session_id: string }>;
+      const matching = new Set<string>();
+      for (const key of exported) {
+        if (key.room_id !== matrixRoomId(conversationId)) continue;
+        report.roomKeys += 1;
+        const identity = JSON.stringify([key.sender_key, key.session_id]);
+        if (required.has(identity)) matching.add(identity);
+      }
+      report.requiredSessions = required.size;
+      report.matchingSessions = matching.size;
+      return report;
+    });
+  }
+
+  async importRecovery(encryptedExport: string, passphrase: string, notify = true) {
     if (!passphrase) throw new Error("recovery_passphrase_required");
     return this.runCryptoOperation(async () => {
       const exported = OlmMachine.decryptExportedRoomKeys(encryptedExport, passphrase);
       const result = await this.state.importExportedRoomKeys(exported, () => undefined);
-      return { imported: result.importedCount, total: result.totalCount };
+      const counts = { imported: result.importedCount, total: result.totalCount };
+      result.free();
+      if (notify || counts.imported > 0) notifyHistoryKeysChanged(this.accountUserId, this.recoverySourceId);
+      return counts;
     });
   }
 
@@ -963,6 +1025,8 @@ export class CryptoClient {
 
   async close() {
     this.closing = true;
+    this.unsubscribeHistoryKeys?.();
+    this.unsubscribeHistoryKeys = undefined;
     window.removeEventListener("focus", this.reloadHistoryBackup);
     window.clearInterval(this.historyBackupTimer);
     this.historyBackupState = undefined;

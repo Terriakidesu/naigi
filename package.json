@@ -1,10 +1,10 @@
 {
   "name": "priv-chat",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "license": "MIT",
   "description": "Self-hosted, privacy-focused end-to-end encrypted chat app.",
   "scripts": {
-    "test": "bun test",
+    "test": "bun test ./src ./client",
     "test:e2ee": "bun run build:client && bun run scripts/test-e2ee.ts",
     "test:voice-audio": "bun run build:client && bun run scripts/test-voice-audio.ts",
     "test:space-settings": "bun run build:client && bun run scripts/test-space-settings.ts",

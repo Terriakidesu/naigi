@@ -1,6 +1,21 @@
-import { emojiAssetCodes } from "../client/emoji-data";
+import { cp, mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
 
-for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "server-settings", "instance-admin", "instance-users", "instance-spaces", "instance-operations", "instance-maintenance", "instance-operators", "instance-admin-login", "voice-audio-worklet"]) {
+const root = resolve(import.meta.dir, "..");
+const frontend = resolve(root, "shared-frontend");
+if (!await Bun.file(resolve(frontend, "package.json")).exists()) {
+  throw new Error("Initialize the frontend with git submodule update --init --recursive, then npm --prefix shared-frontend ci.");
+}
+const build = Bun.spawn([process.platform === "win32" ? "npm.cmd" : "npm", "run", "build:web"], {
+  cwd: frontend, stdout: "inherit", stderr: "inherit",
+});
+if (await build.exited !== 0) process.exit(1);
+await mkdir(resolve(root, "public"), { recursive: true });
+await cp(resolve(frontend, ".build/web"), resolve(root, "public"), { recursive: true });
+
+// The instance-admin console remains owned and built by the server repository.
+const adminEntries = ["instance-admin", "instance-users", "instance-spaces", "instance-operations", "instance-maintenance", "instance-operators", "instance-admin-login"];
+for (const entry of adminEntries) {
   const result = await Bun.build({
     entrypoints: [`client/${entry}.ts`],
     outdir: "public",
@@ -18,14 +33,11 @@ for (const entry of ["auth", "register", "unlock", "main", "new", "settings", "s
   }
 }
 
-for (const page of ["index", "register", "unlock", "chat", "new", "settings", "server-settings", "instance-admin", "instance-users", "instance-spaces", "instance-operations", "instance-maintenance", "instance-operators", "instance-admin-login"]) {
-  await Bun.write(`public/${page}.html`, Bun.file(`client/${page}.html`));
+for (const page of adminEntries) {
+  const html = await Bun.file(`client/${page}.html`).text();
+  await Bun.write(`public/${page}.html`, html.replaceAll('href="/app.css"', 'href="/instance-admin.css"'));
 }
 await Bun.write("public/instance-admin-theme-init.js", Bun.file("client/instance-admin-theme-init.js"));
-await Bun.write(
-  "public/livekit-e2ee-worker.mjs",
-  Bun.file("node_modules/livekit-client/dist/livekit-client.e2ee.worker.mjs"),
-);
 const styleSheets = [
   "base.css",
   "navigation.css",
@@ -38,16 +50,6 @@ const styleSheets = [
   "space-settings.css",
 ];
 const bundledStyles = (await Promise.all(styleSheets.map((sheet) => Bun.file(`client/styles/${sheet}`).text()))).join("");
-await Bun.write("public/app.css", bundledStyles);
-await Bun.write("public/favicon.svg", Bun.file("client/favicon.svg"));
-await Bun.write("public/push-sw.js", Bun.file("client/push-sw.js"));
-await Bun.write(
-  "public/assets/matrix_sdk_crypto_wasm_bg.wasm",
-  Bun.file("node_modules/@matrix-org/matrix-sdk-crypto-wasm/pkg/matrix_sdk_crypto_wasm_bg.wasm"),
-);
-for (const code of emojiAssetCodes) {
-  await Bun.write(`public/assets/twemoji/${code}.svg`, Bun.file(`client/assets/twemoji/${code}.svg`));
-}
-await Bun.write("public/assets/twemoji/NOTICE.txt", Bun.file("client/assets/twemoji/NOTICE.txt"));
+await Bun.write("public/instance-admin.css", bundledStyles);
 
-console.log("Built browser client in public/");
+console.log("Built shared browser frontend and server-owned admin console in public/");

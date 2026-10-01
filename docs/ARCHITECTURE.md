@@ -8,7 +8,8 @@ best-effort notification bus.
 
 | Component | Responsibility | Data it handles |
 | --- | --- | --- |
-| `client/` | Chat UI, local crypto, encryption/decryption, attachment encryption, browser preferences | Plaintext while the user is using the app; private crypto state in encrypted local storage |
+| `shared-frontend/` | Pinned shared user UI, local crypto, attachment encryption, browser preferences | Plaintext while the user is using the app; private crypto state in encrypted local storage |
+| `client/` | Server-owned instance-admin console and retained legacy user source | Host-operator UI; legacy user files are not built for chat |
 | `src/app.ts` | HTTP API, authentication, membership and role authorization, encrypted envelope storage | Account/profile records, IDs, public keys, ciphertext, opaque metadata |
 | `src/realtime.ts` | Authenticated WebSocket subscriptions and notification publishing | Presence/typing and event notifications; ciphertext payloads where needed |
 | `src/db/` | PostgreSQL queries and ordered migrations | Accounts, memberships, permissions, encrypted message envelopes, device public keys |
