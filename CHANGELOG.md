@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-02
+
+### Changed
+
+- Web user assets build from the pinned `naigi-frontend` 0.2.0 submodule with Node.js/npm. That release adds a `mobile` build target with a phone-native layout for the companion mobile app; the browser client is unchanged.
+
 ## [0.25.1] - 2026-10-01
 
 ### Fixed
@@ -295,6 +301,8 @@ Released versions are maintained as one Markdown file per version under
 [`docs/changelogs/`](docs/changelogs/).
 
 ## Releases
+
+- [0.26.0](docs/changelogs/0.26.0.md) — 2026-10-02
 
 - [0.25.1](docs/changelogs/0.25.1.md) — 2026-10-01
 - [0.25.0](docs/changelogs/0.25.0.md) — 2026-10-01
