@@ -1,4 +1,4 @@
-import { mkdir, rename, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { config } from "../config";
 
@@ -70,6 +70,34 @@ async function readRequestBody(request: Request, maxBytes: number) {
   return Buffer.concat(chunks, total);
 }
 
+/**
+ * Rejects a destination that already exists as something other than a regular file.
+ *
+ * Storage keys are server-generated UUIDs, so this is not reachable through the API; it guards
+ * the case where the storage directory has been tampered with locally, for example by planting a
+ * symlink that would redirect a write outside the directory. The admin maintenance and scan paths
+ * already refuse symlinks, so this closes the same gap on the write path.
+ */
+async function assertRegularFileTarget(path: string) {
+  const info = await lstat(path).catch(() => undefined);
+  if (info && !info.isFile()) throw new Error("attachment storage target is not a regular file");
+}
+
+/**
+ * Writes via an exclusively created temporary file, then renames into place.
+ *
+ * `O_EXCL` means the write cannot be redirected through a pre-planted symlink at the temporary
+ * path, which a plain `Bun.write` would follow.
+ */
+async function writeFileExclusive(path: string, bytes: Buffer) {
+  const handle = await open(path, "wx", 0o600);
+  try {
+    await handle.write(bytes);
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function storeEncryptedAttachment(request: Request, storageKey: string, expectedSize: number) {
   const bytes = await readRequestBody(request, config.maxAttachmentBytes);
   if (bytes.byteLength !== expectedSize) throw new AttachmentSizeMismatchError();
@@ -79,7 +107,8 @@ export async function storeEncryptedAttachment(request: Request, storageKey: str
   const temporaryPath = `${finalPath}.${crypto.randomUUID()}.upload`;
 
   await mkdir(config.attachmentsDirectory, { recursive: true });
-  await Bun.write(temporaryPath, bytes);
+  await assertRegularFileTarget(finalPath);
+  await writeFileExclusive(temporaryPath, bytes);
   await rename(temporaryPath, finalPath);
 
   return { size: bytes.byteLength, hash };
@@ -97,7 +126,8 @@ export async function storeProfileImage(
   const finalPath = profileImagePath(storageKey);
   const temporaryPath = `${finalPath}.${crypto.randomUUID()}.upload`;
   await mkdir(config.profileImagesDirectory, { recursive: true });
-  await Bun.write(temporaryPath, bytes);
+  await assertRegularFileTarget(finalPath);
+  await writeFileExclusive(temporaryPath, bytes);
   await rename(temporaryPath, finalPath);
   return { size: bytes.byteLength };
 }

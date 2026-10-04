@@ -264,6 +264,24 @@ try {
     "the realtime subscription ceiling is a positive integer",
   );
 
+  // 9. Login answers a short wrong password with the same refusal as any other wrong password.
+  //    Sharing the registration schema made a guess under 12 characters return 422 instead of 401,
+  //    which told an attacker the guess was too short rather than wrong.
+  const shortGuess = await fetch(`${origin}/v1/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json", host: new URL(origin).host },
+    body: JSON.stringify({ username: "sec_headers_user", password: "short" }),
+  });
+  assert.equal(shortGuess.status, 401, "a short wrong password is refused as invalid credentials, not as invalid input");
+
+  // 10. Registration still enforces the length floor.
+  const shortRegistration = await fetch(`${origin}/v1/auth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", host: new URL(origin).host },
+    body: JSON.stringify({ username: "sec_headers_short", password: "short" }),
+  });
+  assert.equal(shortRegistration.status, 422, "registration still rejects a password under the minimum length");
+
   console.log("PASS: security headers, cross-origin guard, cookie flags, and realtime origin checks hold");
 } catch (error) {
   // Recorded rather than thrown so the cleanup below always runs, then rethrown so a failed

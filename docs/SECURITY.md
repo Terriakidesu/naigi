@@ -41,6 +41,13 @@ Optional integrations add their own visibility:
 - LiveKit sees participant network addresses, call timing, traffic volume, and encrypted audio frames.
   A TURN server may relay packets but does not receive the media key.
 
+## Blocks and profile media
+
+A block is enforced on conversation content, direct-message creation, voice access, attachments, and
+now profile media. Reading your own avatar or banner is unaffected. Profile images remain readable by
+other members of a space you share, so a block is a boundary between two people rather than a way to
+hide an image from an entire server.
+
 ## Trust assumptions and limitations
 
 - Use HTTPS for every remote browser session. On plain HTTP, a network attacker could replace the
@@ -62,6 +69,10 @@ Optional integrations add their own visibility:
 ## Operator checklist
 
 - Terminate TLS at a trusted reverse proxy; keep PostgreSQL, Redis/Valkey, and the app port private.
+  Redis holds the authentication rate-limit counters and notification fan-out, so a remote Redis must
+  be reached over `rediss://`; the app refuses to start otherwise in production. Redis is also a hard
+  dependency for authentication, since limiting fails closed rather than admitting an unthrottled
+  attempt.
 - Store database passwords, LiveKit secrets, FCM service-account credentials, and report-key backups
   outside source control. Restrict file and backup access.
 - Keep the chat database and host-operator database separate. Provision the first Admin using

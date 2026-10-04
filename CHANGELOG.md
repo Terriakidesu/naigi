@@ -18,6 +18,9 @@ release and move these entries under a dated `## [0.27.0]` heading.
 ### Fixed
 
 - Stop Redis connection attempts from hanging indefinitely when the server is unreachable. Automatic reconnect left the shared connect promise unsettled, so every caller after the first blocked forever instead of failing. Affects authentication limits, voice token issuance, and the readiness probe; each now settles within a bounded time.
+- Scope `PUT /v1/attachments/:attachmentId` to the uploader as well as to conversation membership. Creation records and checks the sender, but the upload route only checked membership, so any member of a conversation could write the bytes of a pending attachment raised by someone else. A non-uploader now receives `404 attachment_not_found`.
+- Fail closed when revoking a server warning whose target is no longer a member. The role-hierarchy check previously ran only when the target still resolved to a member, so a warning against someone who had since left could be revoked by anyone holding `revoke_warnings`.
+- Honour a block on the profile avatar and banner reads. Both were readable by any authenticated account by id, so a blocked party could keep fetching the blocker's profile media. Reading your own media is unaffected.
 
 ### Added
 
@@ -28,14 +31,17 @@ release and move these entries under a dated `## [0.27.0]` heading.
 - Cap realtime subscriptions per socket at 200, answering a refused subscription with `too_many_subscriptions`, so one socket can no longer register channels without bound.
 - Share a pool of Redis subscriber connections across WebSockets instead of creating one per socket, so connection count tracks concurrent sockets rather than accumulating over the process lifetime.
 - Emit a report-only Content Security Policy. It is deliberately not enforced yet, because the crypto adapter is WebAssembly and LiveKit uses a worker, so the policy must permit `wasm-unsafe-eval` and blob workers before it can be turned on.
+- Validate `REDIS_URL` at startup, requiring `rediss://` for a remote Redis in production and rejecting an unsupported protocol, a malformed URL, or a fragment. Redis carries the authentication rate-limit counters and notification fan-out, which were previously reachable over a plaintext connection to a remote host with no warning. Loopback and non-production plaintext remain permitted.
+- Limit `POST /v1/previews/twitter` to 30 requests per address per hour. It is the one endpoint where an authenticated caller makes the server issue outbound requests, up to two per call. Fails open, so losing previews never refuses an authenticated user.
 - `test:security-headers` exercises the headers, the cross-origin guard, cookie flags, and the realtime origin check over real HTTP with a browser.
+- `test:access-control` exercises attachment ownership, warning revocation against a departed member, and block-scoped profile media over real HTTP.
 
 ### Changed
 
 - `Set-Cookie` now carries `Secure` based on whether the request arrived over HTTPS rather than on `NODE_ENV=production`, so an HTTPS instance outside production is protected. Plain HTTP is unchanged, since a browser discards a `Secure` cookie delivered over it.
-
-### Fixed
-
+- Login accepts a password of any length and answers a wrong one with `401 invalid_credentials`. It previously shared the registration schema, so a guess under 12 characters returned `422 validation_error`, which told an attacker the guess was too short rather than wrong. Registration still enforces the minimum length.
+- Write attachments and profile images through an exclusively created temporary file and refuse a destination that already exists as something other than a regular file. Storage keys are server-generated, so this only matters if the storage directory has been tampered with locally; the admin maintenance and scan paths already refused symlinks.
+- Throttle the `last_used_at` write on both chat and admin sessions to at most once every five minutes. It was written on every authenticated request, including reads, so ordinary browsing produced one database write per call. The column exists only to age idle sessions out, so a coarse interval keeps that accurate.
 - Re-check conversation membership when a realtime event is delivered, not only when subscribing. A member removed mid-session previously kept receiving events until they unsubscribed or disconnected. Membership is now re-checked on delivery, and the short-lived cache is invalidated immediately on ban, kick, leave, and role or channel-access changes.
 
 ### Known gaps

@@ -186,6 +186,42 @@ const firebaseMessaging = firebaseMessagingConfiguration();
 const liveKit = liveKitConfiguration();
 const databaseUrl = Bun.env.DATABASE_URL ?? "postgres://localhost:5432/priv_chat";
 
+/**
+ * Validates the Redis URL the way the LiveKit and Twitter URLs are already validated.
+ *
+ * Redis carries session-independent but security-relevant state: notification fan-out and the
+ * authentication rate-limit counters. A plaintext connection to a remote host would expose both,
+ * so `rediss://` is required outside local development, matching the existing `NODE_ENV` handling
+ * for other endpoints. Credentials in the URL are permitted, since that is how the client
+ * authenticates, but they must not be paired with a plaintext remote connection.
+ */
+function validatedRedisUrl(value: string) {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("REDIS_URL must be a valid URL");
+  }
+
+  const localDevelopmentHost = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+  const isLoopback = localDevelopmentHost.has(url.hostname);
+  const isTls = url.protocol === "rediss:";
+
+  if (url.protocol !== "redis:" && !isTls) {
+    throw new Error("REDIS_URL must use the redis or rediss protocol");
+  }
+  if (!isTls && !isLoopback && environment === "production") {
+    throw new Error("REDIS_URL must use rediss:// for a remote Redis in production");
+  }
+  if (url.hash) {
+    throw new Error("REDIS_URL must not contain a fragment");
+  }
+
+  return value;
+}
+
+const redisUrl = validatedRedisUrl(Bun.env.REDIS_URL ?? "redis://localhost:6379");
+
 if (!["development", "test", "production"].includes(environment)) {
   throw new Error("NODE_ENV must be development, test, or production");
 }
@@ -196,7 +232,7 @@ export const config = {
   port: integerEnvironment("PORT", 3000, 1, 65_535),
   databaseUrl,
   adminDatabaseUrl: adminDatabaseUrl(databaseUrl),
-  redisUrl: Bun.env.REDIS_URL ?? "redis://localhost:6379",
+  redisUrl,
   firebaseMessaging,
   liveKit,
   attachmentsDirectory: Bun.env.ATTACHMENTS_DIR ?? "./data/attachments",

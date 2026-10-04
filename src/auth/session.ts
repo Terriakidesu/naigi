@@ -25,6 +25,14 @@ export type AuthenticatedUser = {
   bannerUrl: string | null;
 };
 
+/**
+ * Minimum gap between `last_used_at` writes for one session.
+ *
+ * Well below any idle timeout an operator would configure, so session ageing stays accurate to
+ * within a few minutes while collapsing a burst of requests into a single write.
+ */
+export const lastUsedAtWriteIntervalSeconds = 300;
+
 export function normalizeUsername(username: string) {
   return username.normalize("NFKC").trim().toLowerCase();
 }
@@ -88,7 +96,14 @@ export async function authenticate(
 
   if (!user) return null;
 
-  await db`update sessions set last_used_at = now() where token_hash = ${tokenHash}`;
+  // Throttled rather than written on every request. `last_used_at` exists to age idle sessions
+  // out, and a session is used many times a minute while a chat is open, so recording each request
+  // turned ordinary browsing into one database write per call. The column is only ever read to
+  // decide whether a session looks abandoned, so a coarse interval is sufficient.
+  await db`
+    update sessions set last_used_at = now()
+    where token_hash = ${tokenHash} and last_used_at < now() - make_interval(secs => ${lastUsedAtWriteIntervalSeconds})
+  `;
   return {
     id: user.id,
     username: user.username,

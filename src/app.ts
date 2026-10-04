@@ -209,6 +209,17 @@ async function directConversationIsBlocked(conversationId: string, userId: strin
   return result?.blocked === true;
 }
 
+async function usersAreBlocked(oneUserId: string, otherUserId: string) {
+  const [result] = await db<{ blocked: boolean }[]>`
+    select exists (
+      select 1 from user_blocks
+      where (blocker_user_id = ${oneUserId} and blocked_user_id = ${otherUserId})
+        or (blocker_user_id = ${otherUserId} and blocked_user_id = ${oneUserId})
+    ) as blocked
+  `;
+  return result?.blocked === true;
+}
+
 async function directVoiceCallAccessError(conversationId: string, userId: string) {
   const [suspension] = await db<{ user_id: string }[]>`
     select user_id from instance_user_suspensions where user_id = ${userId}
@@ -1001,9 +1012,19 @@ async function hashInviteToken(token: string) {
   return Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)));
 }
 
-const userBody = t.Object({
+const registrationBody = t.Object({
   username: t.String({ minLength: 3, maxLength: 32, pattern: "^[A-Za-z0-9_.-]+$" }),
   password: t.String({ minLength: 12, maxLength: 128 }),
+  displayName: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
+});
+
+// Login deliberately accepts a short password. Sharing the registration schema meant a wrong
+// password shorter than 12 characters returned 422 validation_error instead of 401
+// invalid_credentials, which told an attacker their guess was too short rather than wrong and made
+// the two failure modes distinguishable. Verification is what decides validity here.
+const loginBody = t.Object({
+  username: t.String({ minLength: 3, maxLength: 32, pattern: "^[A-Za-z0-9_.-]+$" }),
+  password: t.String({ minLength: 1, maxLength: 128 }),
   displayName: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
 });
 
@@ -2626,9 +2647,25 @@ export function createApp() {
         throw error;
       }
     })
-    .post("/v1/previews/twitter", async ({ body, headers, set }) => {
+    .post("/v1/previews/twitter", async ({ body, headers, request, server, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+
+      // Limited because this is the one endpoint where an authenticated caller makes the server
+      // issue outbound requests, up to two per call. Without a budget it is a request amplifier
+      // pointed at a third party, and at the configured provider's expense as much as ours.
+      // Fails open: losing previews is preferable to refusing an authenticated user.
+      const clientIp = clientIpFor({ request, headers, server });
+      if (clientIp) {
+        const refused = enforceRateLimits(set, [await bumpRateLimit({
+          key: rateLimitKey("twitter-preview-ip", clientIp),
+          limit: 30,
+          windowSeconds: 60 * 60,
+          failClosed: false,
+        })]);
+        if (refused) return refused;
+      }
+
       const parsed = parseTwitterStatusUrl(body.url);
       if (!parsed) return respondError(set, 400, "unsupported_twitter_url");
       const preview = await fetchTwitterPreview(parsed.id);
@@ -2685,7 +2722,7 @@ export function createApp() {
         if (isUniqueViolation(error)) return respondError(set, 409, "username_taken");
         throw error;
       }
-    }, { body: userBody })
+    }, { body: registrationBody })
     .post("/v1/auth/login", async ({ body, headers, request, server, set }) => {
       const account = normalizeUsername(body.username);
       const clientIp = clientIpFor({ request, headers, server });
@@ -2736,7 +2773,7 @@ export function createApp() {
       const session = await createSession(user.id);
       setSessionCookie(set, session.token, request);
       return { user: toPublicUser(user), ...session };
-    }, { body: userBody })
+    }, { body: loginBody })
     .post("/v1/auth/logout", async ({ headers, request, set }) => {
       const token = extractBearerToken(headers.authorization) ?? extractCookieToken(headers.cookie);
       await deleteSession(token);
@@ -2861,6 +2898,11 @@ export function createApp() {
     .get("/v1/users/:userId/avatar", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      // A block is honoured here as it is for conversation content. Profile media is not
+      // end-to-end encrypted, so a blocked party must not be able to keep fetching it by id.
+      if (params.userId !== user.id && await usersAreBlocked(user.id, params.userId)) {
+        return respondError(set, 403, "blocked_user");
+      }
       const [profile] = await db<{ profile_image_storage_key: string | null; profile_image_mime_type: string | null }[]>`
         select profile_image_storage_key, profile_image_mime_type
         from users
@@ -2884,6 +2926,9 @@ export function createApp() {
     .get("/v1/users/:userId/banner", async ({ headers, params, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+      if (params.userId !== user.id && await usersAreBlocked(user.id, params.userId)) {
+        return respondError(set, 403, "blocked_user");
+      }
       const [profile] = await db<{ profile_banner_storage_key: string | null; profile_banner_mime_type: string | null }[]>`
         select profile_banner_storage_key, profile_banner_mime_type
         from users
@@ -4994,8 +5039,15 @@ export function createApp() {
         where id = ${params.warningId} and server_id = ${params.serverId} and revoked_at is null
       `;
       if (!warning) return respondError(set, 404, "warning_not_found");
+      // Fails closed. The previous guard only ran when the target still resolved to a member, so a
+      // warning against someone who had since left the server skipped the hierarchy check entirely
+      // and could be revoked by anyone holding `revoke_warnings`. An ex-member cannot outrank the
+      // actor, but the safe reading of an unresolvable target is to refuse rather than allow.
       const target = await serverAuthorization(params.serverId, warning.user_id);
-      if (target && (target.isOwner || !canModerateTarget(authorization, target))) return respondError(set, 403, "insufficient_server_permissions");
+      if (!target) return respondError(set, 403, "insufficient_server_permissions");
+      if (target.isOwner || !canModerateTarget(authorization, target)) {
+        return respondError(set, 403, "insufficient_server_permissions");
+      }
       const revoked = await db.begin(async (transaction) => {
         const [row] = await transaction<{ id: string }[]>`
           update server_member_warnings set revoked_at = coalesce(revoked_at, now())
@@ -6470,8 +6522,12 @@ export function createApp() {
         from attachments a
         join conversation_members m on m.conversation_id = a.conversation_id
         where a.id = ${params.attachmentId} and m.user_id = ${user.id} and m.left_at is null
+          and a.uploaded_by = ${user.id}
       `;
       if (!attachment) return respondError(set, 404, "attachment_not_found");
+      // Scoped to the uploader as well as to conversation membership. Creation records the sender
+      // and checks it, so without this any member of the conversation could write the bytes of a
+      // pending attachment raised by a different member.
       if (await isInstanceUserTimedOut(user.id)) return respondError(set, 403, "instance_user_timed_out");
       if (await directConversationIsBlocked(attachment.conversation_id, user.id)) return respondError(set, 403, "blocked_user");
       const channelContext = await conversationChannelAuthorization(attachment.conversation_id, user.id);

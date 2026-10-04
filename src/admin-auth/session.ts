@@ -1,6 +1,7 @@
 import { password } from "bun";
 import { config } from "../config";
 import { adminDb } from "../admin-db/client";
+import { lastUsedAtWriteIntervalSeconds } from "../auth/session";
 import type { AdminRole } from "./permissions";
 
 type AdminUserRow = {
@@ -65,7 +66,13 @@ export async function authenticateAdmin(cookieHeader?: string): Promise<Authenti
     where s.token_hash = ${tokenHash} and s.expires_at > now() and u.disabled_at is null
   `;
   if (!admin) return null;
-  await adminDb`update admin_sessions set last_used_at = now() where token_hash = ${tokenHash}`;
+  // Throttled for the same reason as the chat session: the column exists to age idle sessions
+  // out, and writing it on every request made ordinary console use one write per call.
+  await adminDb`
+    update admin_sessions set last_used_at = now()
+    where token_hash = ${tokenHash}
+      and last_used_at < now() - make_interval(secs => ${lastUsedAtWriteIntervalSeconds})
+  `;
   return { id: admin.id, username: admin.username, role: admin.role };
 }
 
