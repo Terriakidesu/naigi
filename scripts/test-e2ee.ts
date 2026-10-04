@@ -33,6 +33,22 @@ const testRedisUrl = new URL(Bun.env.REDIS_URL ?? "redis://localhost:6379");
 testRedisUrl.pathname = "/15";
 Bun.env.REDIS_URL = testRedisUrl.toString();
 
+// A previous run's counters live in this database and would otherwise make the suite
+// non-repeatable: the registration budget is per hour, so a rerun would be refused with 429 before
+// reaching any assertion.
+{
+  const { RedisClient } = await import("bun");
+  const flush = new RedisClient(testRedisUrl.toString(), { autoReconnect: false, maxRetries: 1 });
+  try {
+    await flush.connect();
+    await flush.send("FLUSHDB", []);
+  } catch {
+    // A Redis that cannot be reached surfaces as a limiter outage inside the assertions.
+  } finally {
+    if (flush.connected) flush.close();
+  }
+}
+
 const { closeDatabase } = await import("../src/db/client");
 const { adminDb, closeAdminDatabase } = await import("../src/admin-db/client");
 const { closeRedis } = await import("../src/redis/client");
