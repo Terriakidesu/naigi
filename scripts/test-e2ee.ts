@@ -23,6 +23,16 @@ Bun.env.ADMIN_DATABASE_URL = isolatedAdminDatabaseUrl.toString();
 Bun.env.NODE_ENV = "test";
 Bun.env.KLIPY_API_KEY = "e2ee-klipy-public-key";
 
+// The run shares one Redis with the developer's local instance, and every request in this file
+// arrives from 127.0.0.1. Authentication limits are charged per instance and per client address,
+// so without a dedicated Redis database the suite would spend the developer's own login and
+// registration budget, or be refused by limits an earlier run left behind. A dedicated database
+// also keeps the suite's Pub/Sub traffic off the developer's db0. Database 15 is used rather than
+// a random one because the default Redis configuration exposes only databases 0-15.
+const testRedisUrl = new URL(Bun.env.REDIS_URL ?? "redis://localhost:6379");
+testRedisUrl.pathname = "/15";
+Bun.env.REDIS_URL = testRedisUrl.toString();
+
 const { closeDatabase } = await import("../src/db/client");
 const { adminDb, closeAdminDatabase } = await import("../src/admin-db/client");
 const { closeRedis } = await import("../src/redis/client");

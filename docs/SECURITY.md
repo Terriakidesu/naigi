@@ -72,5 +72,41 @@ Optional integrations add their own visibility:
 - Keep Bun and dependencies patched, limit exposure of optional provider keys, and monitor the health
   endpoints without logging request bodies or decrypted browser content.
 
+## Throttling and rate limiting
+
+Login, registration, admin login, and password change are throttled to resist credential stuffing and
+brute force. Two independent budgets apply:
+
+- A per-account budget counts **failed** attempts only, so a legitimate user is never locked out by
+  their own successful logins. Unknown usernames are charged identically to real ones, so the
+  response cannot be used to test whether an account exists.
+- A per-IP budget counts **every** attempt, which bounds the password-hashing work an unauthenticated
+  caller can force the server to perform.
+
+Refused requests carry a `Retry-After` header. A limiter that cannot reach Redis fails **closed** on
+authentication routes: they return `503 auth_temporarily_unavailable` rather than admitting an
+unthrottled attempt. Redis is therefore a required dependency for authentication, which matches
+`/health/ready` already reporting `503` while Redis is down. Registering also rejects passwords that
+lead public credential-stuffing lists or that are derived from the username or display name.
+
+Counters are namespaced by instance, derived from the database host, port, and name, so deployments
+that share one Redis do not spend each other's budget. No credential is ever placed in a key.
+
+Budgets are fixed in code rather than configurable, so the values cannot be widened by an
+environment mistake. Registration allows 5 accounts per address per hour, user login allows 30
+attempts per address and 10 failures per account per 15 minutes, admin login is stricter at 10 per
+address and 5 failures per account, and password change allows 5 attempts per account.
+
+Two consequences worth planning for:
+
+- Per-IP limits resolve the client address from `X-Forwarded-For` **only** when
+  `TRUSTED_PROXY_HOPS` is set to the number of proxies that append to that header. Left at `0`, the
+  header is ignored and the transport address is used, so a client cannot spoof its address to evade a
+  budget. Getting this wrong is the difference between per-IP limits that work and limits that a
+  determined caller can bypass with one header.
+- Because a per-account budget refuses even a correct password once the failure count is reached, an
+  attacker who knows a victim's username can deny that victim *new* logins for the length of the
+  window. Existing sessions are unaffected and the lockout expires on its own.
+
 For the exact API and payload boundaries, see [API v1](api-v1.md). When reporting a suspected
 vulnerability, avoid including real user content, credentials, or private keys in public reports.

@@ -205,6 +205,10 @@ export const config = {
   twitterPreviewProviders: twitterPreviewProviders(),
   gifProviders: gifProviders(),
   sessionTtlSeconds: integerEnvironment("SESSION_TTL_SECONDS", 60 * 60 * 24 * 30, 300, 60 * 60 * 24 * 365),
+  // Number of trusted reverse-proxy hops in front of the app. `X-Forwarded-For` is only
+  // consulted when this is greater than zero, and only the hop that many positions from the
+  // right is used, so a client cannot spoof its own address to evade per-IP limits.
+  trustedProxyHops: integerEnvironment("TRUSTED_PROXY_HOPS", 0, 0, 10),
   maxProfileImageBytes: 5 * 1024 * 1024,
   maxEncryptedMessageBytes: integerEnvironment(
     "MAX_ENCRYPTED_MESSAGE_BYTES",

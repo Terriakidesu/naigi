@@ -5,7 +5,9 @@ import { serverVersionInfo } from "./server-version";
 test("public server version metadata is named and reports API v1", () => {
   expect(serverVersionInfo()).toMatchObject({
     name: "Naigi",
-    version: expect.stringMatching(/^\d+\.\d+\.\d+$/),
+    // SemVer with an optional pre-release suffix, so in-progress work can carry a `-dev` marker
+    // that distinguishes it from a released version.
+    version: expect.stringMatching(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/),
     apiVersion: 1,
   });
 });

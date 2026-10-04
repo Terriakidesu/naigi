@@ -33,6 +33,22 @@ Authorization: Bearer <session-token>
 All protected endpoints return `{ "error": "stable_error_code" }` on failure. Clients
 should branch on the HTTP status and error code rather than display server text.
 
+Authentication endpoints are throttled and may return `429 rate_limited` with a
+`Retry-After` header, or `503 auth_temporarily_unavailable` when the rate-limit backend is
+unreachable. Registration and password change additionally reject weak passwords with
+`422 password_too_common` or `422 password_too_similar`.
+
+These codes are new in 0.27.0 and the pinned browser client does not yet map them to prose, so a
+user on the current client sees the raw code (for example `password_too_common (422)`) rather
+than a sentence. Treat that as cosmetic: clients should branch on the code as documented here,
+and the message strings belong in the shared frontend repository.
+
+`GET /v1/users/:userId/devices/keys` is withdrawn and now returns `410 endpoint_removed`
+with `Deprecation: true` and a `Link` header pointing at the successor. It published the key
+bundles of any account in the instance and consumed one-time prekeys on read. Use
+`POST /v1/crypto/keys/claim`, which is scoped to the requesting account. The route is deleted
+in the next release.
+
 `PATCH /v1/me` changes the display name. `PUT /v1/me/avatar` replaces the authenticated
 user's profile image with a PNG, JPEG, GIF, WebP, or AVIF image up to 5 MiB; animated GIF,
 WebP, and AVIF images are supported. `DELETE /v1/me/avatar` removes it. `GET
@@ -388,3 +404,8 @@ Browser Matrix Olm/Megolm clients use:
 
 Private keys never leave the frontend. Crypto and metadata payloads are stored as opaque
 JSON or bytes and are not decrypted or inspected by the backend.
+
+`POST /v1/crypto/send-to-device/:eventType/:transactionId` accepts at most 100 recipient
+users, at most 100 devices per recipient, and at most 200 device events in total. A single
+event larger than 64 KiB is rejected with `413 to_device_event_too_large`; exceeding the
+recipient, device, or event counts returns `400 invalid_to_device_message`.

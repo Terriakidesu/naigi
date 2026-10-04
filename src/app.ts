@@ -48,6 +48,14 @@ import {
   StorageMaintenanceError,
 } from "./admin-maintenance";
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "./encoding";
+import { screenPassword } from "./password-policy";
+import {
+  bumpRateLimit,
+  peekRateLimit,
+  rateLimitKey,
+  resolveClientIp,
+  type RateLimitVerdict,
+} from "./rate-limit";
 import { db, pingDatabase } from "./db/client";
 import { adminDb, pingAdminDatabase } from "./admin-db/client";
 import {
@@ -270,6 +278,14 @@ async function recordServerAudit(
 }
 
 const maxCustomEmojiBytes = 10 * 1024 * 1024;
+
+// Bounds for `POST /v1/crypto/send-to-device`. Without them a single authenticated request could
+// fan out across an unbounded number of recipient devices and persist an unbounded `jsonb`
+// payload per event, which is a storage-exhaustion vector rather than a protocol limit.
+const maxToDeviceRecipients = 100;
+const maxToDeviceDevicesPerRecipient = 100;
+const maxToDeviceEventsPerRequest = 200;
+const maxToDeviceEventBytes = 64 * 1024;
 
 function toMessage(message: MessageRow) {
   return {
@@ -1017,6 +1033,46 @@ async function voiceTokenRateLimited(userId: string) {
   return count > 12;
 }
 
+// Authentication routes fail closed: if Redis is unreachable the request is refused rather than
+// allowed through unthrottled. `/health/ready` already reports 503 while Redis is down, so this
+// only refuses traffic the instance is not ready to authenticate anyway.
+const authRateLimitWindowSeconds = 15 * 60;
+const authRateLimitIpWindowSeconds = 15 * 60;
+
+type RateLimitContext = {
+  request: Request;
+  headers: Record<string, string | undefined>;
+  server: { requestIP(request: Request): { address: string } | null } | null;
+};
+
+function clientIpFor(context: RateLimitContext) {
+  return resolveClientIp({
+    forwardedFor: context.headers["x-forwarded-for"],
+    socketAddress: context.server?.requestIP(context.request)?.address,
+  });
+}
+
+/**
+ * Returns an error response when any limiter refuses the request, or `undefined` to continue.
+ * A limiter that could not be evaluated is reported as a dependency outage rather than as a
+ * rate limit, so the caller can distinguish "try again later" from "slow down".
+ */
+function enforceRateLimits(set: { status?: number | string; headers: Record<string, string | number | undefined> }, verdicts: RateLimitVerdict[]) {
+  const unavailable = verdicts.find((verdict) => verdict.unavailable);
+  if (unavailable) {
+    set.headers["retry-after"] = String(unavailable.retryAfterSeconds);
+    return respondError(set, 503, "auth_temporarily_unavailable");
+  }
+
+  const limited = verdicts.find((verdict) => verdict.limited);
+  if (limited) {
+    set.headers["retry-after"] = String(limited.retryAfterSeconds);
+    return respondError(set, 429, "rate_limited");
+  }
+
+  return undefined;
+}
+
 export function createApp() {
   const realtimeConnections = new Map<object, {
     userId: string;
@@ -1312,12 +1368,44 @@ export function createApp() {
         ? { configured: true, keyId: key.id, publicKey: encodeBase64(key.public_key) }
         : { configured: false as const };
     })
-    .post("/v1/instance-admin/auth/login", async ({ body, headers, set }) => {
+    .post("/v1/instance-admin/auth/login", async ({ body, headers, request, server, set }) => {
       set.headers["cache-control"] = "no-store";
       const existing = await authenticateAdmin(headers.cookie);
       if (existing) return { operator: existing };
+
+      const account = normalizeAdminUsername(body.username);
+      const clientIp = clientIpFor({ request, headers, server });
+
+      // Stricter budgets than user login: this endpoint guards the whole instance, so the
+      // per-IP window is short and the per-account failure budget is small.
+      const verdicts: RateLimitVerdict[] = [];
+      if (clientIp) {
+        verdicts.push(await bumpRateLimit({
+          key: rateLimitKey("admin-login-ip", clientIp),
+          limit: 10,
+          windowSeconds: authRateLimitIpWindowSeconds,
+          failClosed: true,
+        }));
+      }
+      verdicts.push(await peekRateLimit({
+        key: rateLimitKey("admin-login-failed", account),
+        limit: 5,
+        failClosed: true,
+      }));
+
+      const refused = enforceRateLimits(set, verdicts);
+      if (refused) return refused;
+
       const operator = await verifyAdminPassword(body.username, body.password);
-      if (!operator) return respondError(set, 401, "invalid_credentials");
+      if (!operator) {
+        await bumpRateLimit({
+          key: rateLimitKey("admin-login-failed", account),
+          limit: 5,
+          windowSeconds: authRateLimitWindowSeconds,
+          failClosed: true,
+        });
+        return respondError(set, 401, "invalid_credentials");
+      }
       const session = await createAdminSession(operator.id);
       if (!session) return respondError(set, 401, "invalid_credentials");
       setAdminSessionCookie(set, session.token);
@@ -2517,9 +2605,28 @@ export function createApp() {
         maxAttachmentBytes: config.maxAttachmentBytes,
       };
     })
-    .post("/v1/auth/register", async ({ body, set }) => {
+    .post("/v1/auth/register", async ({ body, headers, request, server, set }) => {
       const username = normalizeUsername(body.username);
       const displayName = body.displayName?.trim() || body.username;
+
+      const clientIp = clientIpFor({ request, headers, server });
+
+      // Screened before the budget is charged: this check is a cheap string comparison, while
+      // the budget exists to bound password hashing and mass account creation. Rejecting a
+      // mistyped or reused password should not consume the caller's hourly allowance.
+      const rejection = screenPassword(body.password, { username: body.username, displayName });
+      if (rejection) return respondError(set, 422, rejection);
+
+      if (clientIp) {
+        const refused = enforceRateLimits(set, [await bumpRateLimit({
+          key: rateLimitKey("register-ip", clientIp),
+          limit: 5,
+          windowSeconds: 60 * 60,
+          failClosed: true,
+        })]);
+        if (refused) return refused;
+      }
+
       const passwordHash = await password.hash(body.password);
 
       try {
@@ -2538,15 +2645,48 @@ export function createApp() {
         throw error;
       }
     }, { body: userBody })
-    .post("/v1/auth/login", async ({ body, set }) => {
+    .post("/v1/auth/login", async ({ body, headers, request, server, set }) => {
+      const account = normalizeUsername(body.username);
+      const clientIp = clientIpFor({ request, headers, server });
+
+      // The per-IP budget is charged on every attempt because it bounds password-hash CPU work
+      // even when the targeted account does not exist. The per-account budget is charged only on
+      // failure so a legitimate user is never locked out by their own successful logins, and it
+      // is charged for unknown accounts too so it cannot be used to test whether a user exists.
+      const verdicts: RateLimitVerdict[] = [];
+      if (clientIp) {
+        verdicts.push(await bumpRateLimit({
+          key: rateLimitKey("login-ip", clientIp),
+          limit: 30,
+          windowSeconds: authRateLimitIpWindowSeconds,
+          failClosed: true,
+        }));
+      }
+      verdicts.push(await peekRateLimit({
+        key: rateLimitKey("login-failed", account),
+        limit: 10,
+        failClosed: true,
+      }));
+
+      const refused = enforceRateLimits(set, verdicts);
+      if (refused) return refused;
+
       const [user] = await db<UserRow[]>`
          select id, username, display_name, password_hash, created_at,
            profile_image_storage_key, profile_banner_storage_key
         from users
-        where username_normalized = ${normalizeUsername(body.username)}
+        where username_normalized = ${account}
       `;
       const valid = await verifyPassword(user, body.password);
-      if (!valid || !user) return respondError(set, 401, "invalid_credentials");
+      if (!valid || !user) {
+        await bumpRateLimit({
+          key: rateLimitKey("login-failed", account),
+          limit: 10,
+          windowSeconds: authRateLimitWindowSeconds,
+          failClosed: true,
+        });
+        return respondError(set, 401, "invalid_credentials");
+      }
       const [suspension] = await db<{ user_id: string }[]>`
         select user_id from instance_user_suspensions where user_id = ${user.id}
       `;
@@ -2637,12 +2777,27 @@ export function createApp() {
     .post("/v1/auth/password", async ({ body, headers, set }) => {
       const user = await authenticate(headers.authorization, headers.cookie);
       if (!user) return respondError(set, 401, "unauthorized");
+
+      // Bounds attempts against a session that is already authenticated but possibly hijacked,
+      // and bounds the password hashing that each attempt costs.
+      const refused = enforceRateLimits(set, [await bumpRateLimit({
+        key: rateLimitKey("password-change", user.id),
+        limit: 5,
+        windowSeconds: authRateLimitWindowSeconds,
+        failClosed: true,
+      })]);
+      if (refused) return refused;
+
       const [record] = await db<UserRow[]>`
          select id, username, display_name, password_hash, created_at,
            profile_image_storage_key, profile_banner_storage_key
         from users where id = ${user.id}
       `;
       if (!await verifyPassword(record, body.currentPassword)) return respondError(set, 400, "current_password_incorrect");
+
+      const rejection = screenPassword(body.newPassword, { username: record?.username, displayName: record?.display_name });
+      if (rejection) return respondError(set, 422, rejection);
+
       const passwordHash = await password.hash(body.newPassword);
       await db`
         update users set password_hash = ${passwordHash}, updated_at = now()
@@ -5391,60 +5546,22 @@ export function createApp() {
         }), { minItems: 1, maxItems: 100 }),
       }),
     })
-    .get("/v1/users/:userId/devices/keys", async ({ headers, params, set }) => {
-      const user = await authenticate(headers.authorization, headers.cookie);
-      if (!user) return respondError(set, 401, "unauthorized");
-
-      const bundles = await db.begin(async (transaction) => {
-        const devices = await transaction<{
-          id: string;
-          identity_key: Buffer;
-          signed_prekey: Buffer;
-        }[]>`
-          select id, identity_key, signed_prekey
-          from devices
-          where user_id = ${params.userId} and revoked_at is null
-          order by created_at asc
-        `;
-
-        const result = [];
-        for (const device of devices) {
-          const [prekey] = await transaction<{
-            key_id: number;
-            public_key: Buffer;
-          }[]>`
-            select key_id, public_key
-            from one_time_prekeys
-            where device_id = ${device.id} and consumed_at is null
-            order by key_id asc
-            limit 1
-            for update skip locked
-          `;
-
-          if (prekey) {
-            await transaction`
-              update one_time_prekeys
-              set consumed_at = now()
-              where device_id = ${device.id} and key_id = ${prekey.key_id}
-            `;
-          }
-
-          result.push({ device, prekey });
-        }
-
-        return result;
-      });
-
-      return {
-        devices: bundles.map(({ device, prekey }) => ({
-          deviceId: device.id,
-          identityKey: encodeBase64(device.identity_key),
-          signedPrekey: encodeBase64(device.signed_prekey),
-          oneTimePrekey: prekey
-            ? { keyId: prekey.key_id, publicKey: encodeBase64(prekey.public_key) }
-            : null,
-        })),
-      };
+    .get("/v1/users/:userId/devices/keys", async ({ headers, set }) => {
+      // Withdrawn. This route published the identity key and signed prekey of any account in
+      // the instance and, worse, permanently consumed one unclaimed one-time prekey per device
+      // on every call. Any authenticated client could therefore drain a victim's prekey pool
+      // and stop inbound Olm sessions, and because the state change rode on a GET carrying a
+      // `SameSite=Lax` cookie, link prefetch could trigger it with no attacker script at all.
+      //
+      // Key claiming moved to `POST /v1/crypto/keys/claim`, which is scoped to the requesting
+      // account's own devices. The route is kept as an explicit 410 for one release so that a
+      // custom client sees a clear signal instead of a silent 404; it is deleted in the next
+      // release.
+      await authenticate(headers.authorization, headers.cookie);
+      set.headers["cache-control"] = "no-store";
+      set.headers["deprecation"] = "true";
+      set.headers["link"] = '</v1/crypto/keys/claim>; rel="successor-version"';
+      return respondError(set, 410, "endpoint_removed");
     }, {
       params: t.Object({ userId: t.String({ format: "uuid" }) }),
     })
@@ -5839,34 +5956,58 @@ export function createApp() {
 
       const request = objectValue(body);
       const messages = objectValue(request?.messages);
-      if (!messages || Object.keys(messages).length > 100) return respondError(set, 400, "invalid_to_device_message");
+      if (!messages || Object.keys(messages).length > maxToDeviceRecipients) {
+        return respondError(set, 400, "invalid_to_device_message");
+      }
+
+      // Validate shape and size before opening a transaction so an oversized fan-out costs no
+      // database work, and so the whole request is rejected rather than silently truncated.
+      // The value kept for insertion is the original object, not its serialized form: Bun binds
+      // a JS string to `::jsonb` as a JSON string scalar, which fails the
+      // `crypto_to_device_content_object` check constraint.
+      const pending: { matrixUserId: string; deviceId: string; content: Record<string, unknown> }[] = [];
+      for (const [requestedUserId, requestedDevicesValue] of Object.entries(messages)) {
+        const requestedDevices = objectValue(requestedDevicesValue);
+        if (!requestedDevices) continue;
+
+        const deviceEntries = Object.entries(requestedDevices);
+        if (deviceEntries.length > maxToDeviceDevicesPerRecipient) {
+          return respondError(set, 400, "invalid_to_device_message");
+        }
+
+        for (const [deviceId, content] of deviceEntries) {
+          const eventContent = objectValue(content);
+          if (!eventContent) continue;
+          if (Buffer.byteLength(JSON.stringify(eventContent), "utf8") > maxToDeviceEventBytes) {
+            return respondError(set, 413, "to_device_event_too_large");
+          }
+          if (pending.length >= maxToDeviceEventsPerRequest) {
+            return respondError(set, 400, "invalid_to_device_message");
+          }
+          pending.push({ matrixUserId: requestedUserId, deviceId, content: eventContent });
+        }
+      }
 
       await db.begin(async (transaction) => {
-        for (const [requestedUserId, requestedDevicesValue] of Object.entries(messages)) {
-          const requestedDevices = objectValue(requestedDevicesValue);
-          if (!requestedDevices) continue;
+        for (const event of pending) {
+          const [target] = await transaction<{ device_id: string }[]>`
+            select device_id from crypto_devices
+            where device_id = ${event.deviceId}
+              and matrix_user_id = ${event.matrixUserId}
+              and revoked_at is null
+          `;
+          if (!target) continue;
 
-          for (const [deviceId, content] of Object.entries(requestedDevices)) {
-            if (!objectValue(content)) continue;
-            const [target] = await transaction<{ device_id: string }[]>`
-              select device_id from crypto_devices
-              where device_id = ${deviceId}
-                and matrix_user_id = ${requestedUserId}
-                and revoked_at is null
-            `;
-            if (!target) continue;
-
-            await transaction`
-              insert into crypto_to_device_events (
-                event_type, transaction_id, sender_user_id, recipient_device_id, content
-              )
-              values (
-                ${params.eventType}, ${params.transactionId}, ${matrixUserId(user.id)},
-                ${deviceId}, ${content}::jsonb
-              )
-              on conflict (event_type, transaction_id, sender_user_id, recipient_device_id) do nothing
-            `;
-          }
+          await transaction`
+            insert into crypto_to_device_events (
+              event_type, transaction_id, sender_user_id, recipient_device_id, content
+            )
+            values (
+              ${params.eventType}, ${params.transactionId}, ${matrixUserId(user.id)},
+              ${event.deviceId}, ${event.content}::jsonb
+            )
+            on conflict (event_type, transaction_id, sender_user_id, recipient_device_id) do nothing
+          `;
         }
       });
 

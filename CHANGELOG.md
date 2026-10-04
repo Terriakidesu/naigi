@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.27.0-dev] - unreleased
+
+In development toward `0.27.0`. `package.json` carries the `-dev` pre-release suffix so an
+in-progress build is distinguishable from the released `0.27.0`; drop the suffix when cutting the
+release and move these entries under a dated `## [0.27.0]` heading.
+
+### Security
+
+- Throttle user login, registration, admin login, and password change. A per-account budget counts failed attempts only, so successful logins never lock an account out and unknown usernames are charged identically to real ones; a per-IP budget counts every attempt to bound password-hashing work. Refusals return `429 rate_limited` with `Retry-After`. Limiting fails closed on authentication routes, which now return `503 auth_temporarily_unavailable` while Redis is unreachable, matching the existing `/health/ready` behaviour.
+- Withdraw `GET /v1/users/:userId/devices/keys`. It exposed the identity key and signed prekey of any account in the instance and permanently consumed one unclaimed one-time prekey per device on every call, so any authenticated client could drain a victim's prekey pool and stop inbound Olm sessions. Because the state change rode on a `GET` carrying a `SameSite=Lax` cookie, link prefetch could trigger it without any attacker script. The route returns `410 endpoint_removed` with `Deprecation: true` and a `Link` header pointing at `POST /v1/crypto/keys/claim`, and is deleted in the next release.
+- Reject weak passwords at registration and password change with `422 password_too_common` or `422 password_too_similar`, covering passwords that lead public credential-stuffing lists and passwords derived from the username or display name.
+- Bound `POST /v1/crypto/send-to-device` to 100 recipients, 100 devices per recipient, 200 events per request, and 64 KiB per event. The per-event size limit answers `413 to_device_event_too_large`. Previously one authenticated request could fan out across an unbounded number of devices and store an unbounded JSON payload per event.
+
+### Fixed
+
+- Stop Redis connection attempts from hanging indefinitely when the server is unreachable. Automatic reconnect left the shared connect promise unsettled, so every caller after the first blocked forever instead of failing. Affects authentication limits, voice token issuance, and the readiness probe; each now settles within a bounded time.
+
+### Added
+
+- `TRUSTED_PROXY_HOPS` for resolving the client address used by per-IP limits. `X-Forwarded-For` is consulted only when set to the number of proxies that append to it, and only the entry that many positions from the right is used, so a client cannot spoof its address to evade a budget.
+- Rate-limit counters are namespaced per instance, derived from the database host, port, and name, so deployments that share one Redis no longer spend each other's authentication budget. No credential is placed in a key.
+
+### Known gaps
+
+- The pinned browser client does not yet map `password_too_common`, `password_too_similar`, `rate_limited`, or `auth_temporarily_unavailable` to prose, so those codes are displayed verbatim in the browser until the shared frontend is updated. The codes themselves are stable and documented; only the wording is missing.
+
 ## [0.26.0] - 2026-10-02
 
 ### Changed
@@ -302,6 +328,7 @@ Released versions are maintained as one Markdown file per version under
 
 ## Releases
 
+- [0.27.0](docs/changelogs/0.27.0.md) — unreleased (`0.27.0-dev`)
 - [0.26.0](docs/changelogs/0.26.0.md) — 2026-10-02
 
 - [0.25.1](docs/changelogs/0.25.1.md) — 2026-10-01
