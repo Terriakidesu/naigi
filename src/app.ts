@@ -50,6 +50,15 @@ import {
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "./encoding";
 import { screenPassword } from "./password-policy";
 import {
+  baselineSecurityHeaders,
+  contentSecurityPolicy,
+  crossOriginVerdict,
+  sessionCookieSecure,
+  strictTransportSecurity,
+  upgradeOriginVerdict,
+} from "./request-security";
+
+import {
   bumpRateLimit,
   peekRateLimit,
   rateLimitKey,
@@ -75,7 +84,7 @@ import {
   removeFcmPushToken,
   sendGenericFcmPush,
 } from "./push/fcm";
-import { createRealtimeConnection, type RealtimeConnection } from "./realtime";
+import { clearMembershipCacheFor, createRealtimeConnection, type RealtimeConnection } from "./realtime";
 import { fetchTwitterPreview, parseTwitterStatusUrl } from "./twitter-preview";
 import { historyRecoveryRoutes } from "./history-recovery";
 import { serverVersionInfo } from "./server-version";
@@ -113,25 +122,33 @@ function respondError(set: { status?: number | string }, status: number, error: 
   return { error };
 }
 
-function setSessionCookie(set: { headers: Record<string, string | number | undefined> }, token: string) {
-  const secure = config.environment === "production" ? "; Secure" : "";
+type CookieResponse = {
+  headers: Record<string, string | number | undefined>;
+};
+
+function secureCookieSuffix(request: Request) {
+  return sessionCookieSecure({ url: request.url, headers: request.headers }) ? "; Secure" : "";
+}
+
+function setSessionCookie(set: CookieResponse, token: string, request: Request) {
+  const secure = secureCookieSuffix(request);
   set.headers["set-cookie"] =
     `priv_chat_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.sessionTtlSeconds}${secure}`;
 }
 
-function clearSessionCookie(set: { headers: Record<string, string | number | undefined> }) {
-  const secure = config.environment === "production" ? "; Secure" : "";
+function clearSessionCookie(set: CookieResponse, request: Request) {
+  const secure = secureCookieSuffix(request);
   set.headers["set-cookie"] = `priv_chat_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
 
-function setAdminSessionCookie(set: { headers: Record<string, string | number | undefined> }, token: string) {
-  const secure = config.environment === "production" ? "; Secure" : "";
+function setAdminSessionCookie(set: CookieResponse, token: string, request: Request) {
+  const secure = secureCookieSuffix(request);
   set.headers["set-cookie"] =
     `priv_chat_admin_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${config.sessionTtlSeconds}${secure}`;
 }
 
-function clearAdminSessionCookie(set: { headers: Record<string, string | number | undefined> }) {
-  const secure = config.environment === "production" ? "; Secure" : "";
+function clearAdminSessionCookie(set: CookieResponse, request: Request) {
+  const secure = secureCookieSuffix(request);
   set.headers["set-cookie"] = `priv_chat_admin_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`;
 }
 
@@ -886,10 +903,15 @@ async function syncChannelConversationMembership(serverId: string, channelId: st
 }
 
 async function syncServerChannelMemberships(serverId: string) {
-  const channels = await db<{ id: string }[]>`
-    select id from channels where server_id = ${serverId} and archived_at is null
+  const channels = await db<{ id: string; conversation_id: string }[]>`
+    select id, conversation_id from channels where server_id = ${serverId} and archived_at is null
   `;
-  for (const channel of channels) await syncChannelConversationMembership(serverId, channel.id);
+  for (const channel of channels) {
+    await syncChannelConversationMembership(serverId, channel.id);
+    // A role or channel-access change can revoke membership here, so any memoised membership
+    // for the channel's conversation is stale and must not keep authorising delivery.
+    clearMembershipCacheFor(channel.conversation_id);
+  }
 }
 
 function validRoleColor(value: unknown): value is string {
@@ -1100,6 +1122,25 @@ export function createApp() {
 
   return new Elysia()
     .use(historyRecoveryRoutes)
+    // Second layer behind the `SameSite` cookies: refuse a state-changing request that the
+    // browser positively identifies as cross-origin. Requests that carry neither `Origin` nor
+    // `Sec-Fetch-Site` are allowed, since native clients send neither.
+    .onBeforeHandle({ as: "global" }, ({ request, set }) => {
+      if (crossOriginVerdict({ method: request.method, url: request.url, headers: request.headers }) === "reject") {
+        return respondError(set, 403, "cross_origin_request_rejected");
+      }
+    })
+    // Report-only in this release. The Olm/Megolm adapter is WebAssembly and LiveKit runs a
+    // worker, so an enforcing policy that omits `wasm-unsafe-eval` or blob workers would break
+    // decryption and calling outright. Switched to enforcing once collected reports are clean.
+    .onAfterHandle({ as: "global" }, ({ request, set }) => {
+      for (const [header, value] of Object.entries(baselineSecurityHeaders())) {
+        set.headers[header] ??= value;
+      }
+      const hsts = strictTransportSecurity({ url: request.url, headers: request.headers });
+      if (hsts) set.headers["strict-transport-security"] ??= hsts;
+      set.headers["content-security-policy-report-only"] ??= contentSecurityPolicy({ reportOnly: true });
+    })
     .onError(({ code, error, request, set }) => {
       if (code === "VALIDATION") return respondError(set, 422, "validation_error");
       const detail = error instanceof Error
@@ -1408,7 +1449,7 @@ export function createApp() {
       }
       const session = await createAdminSession(operator.id);
       if (!session) return respondError(set, 401, "invalid_credentials");
-      setAdminSessionCookie(set, session.token);
+      setAdminSessionCookie(set, session.token, request);
       return { operator };
     }, {
       body: t.Object({
@@ -1422,9 +1463,9 @@ export function createApp() {
       set.headers["cache-control"] = "no-store";
       return { operator };
     })
-    .post("/v1/instance-admin/auth/logout", async ({ headers, set }) => {
+    .post("/v1/instance-admin/auth/logout", async ({ headers, request, set }) => {
       await deleteAdminSession(extractAdminCookieToken(headers.cookie));
-      clearAdminSessionCookie(set);
+      clearAdminSessionCookie(set, request);
       set.headers["cache-control"] = "no-store";
       return { loggedOut: true };
     })
@@ -2637,7 +2678,7 @@ export function createApp() {
              profile_image_storage_key, profile_banner_storage_key
         `;
         const session = await createSession(user.id);
-        setSessionCookie(set, session.token);
+        setSessionCookie(set, session.token, request);
         set.status = 201;
         return { user: toPublicUser(user), ...session };
       } catch (error) {
@@ -2693,13 +2734,13 @@ export function createApp() {
       if (suspension) return respondError(set, 403, "account_suspended");
 
       const session = await createSession(user.id);
-      setSessionCookie(set, session.token);
+      setSessionCookie(set, session.token, request);
       return { user: toPublicUser(user), ...session };
     }, { body: userBody })
-    .post("/v1/auth/logout", async ({ headers, set }) => {
+    .post("/v1/auth/logout", async ({ headers, request, set }) => {
       const token = extractBearerToken(headers.authorization) ?? extractCookieToken(headers.cookie);
       await deleteSession(token);
-      clearSessionCookie(set);
+      clearSessionCookie(set, request);
       return { loggedOut: true };
     })
     .get("/v1/me", async ({ headers, set }) => {
@@ -3795,6 +3836,7 @@ export function createApp() {
           "cache-control": "private, max-age=3600",
           "content-type": "application/octet-stream",
           "content-disposition": `attachment; filename="${emoji.id}.bin"`,
+          "x-content-type-options": "nosniff",
         },
       });
     }, {
@@ -5005,6 +5047,9 @@ export function createApp() {
             and cm.user_id = ${params.userId} and cm.left_at is null
         `;
       });
+      // Drop memoised realtime membership for the banned user so their open sockets stop
+      // receiving events immediately rather than after the cache TTL.
+      clearMembershipCacheFor(params.serverId, params.userId);
       await recordServerAudit(params.serverId, user.id, "member.banned", params.userId, params.userId);
       return { banned: true };
     }, {
@@ -5302,6 +5347,7 @@ export function createApp() {
             and cm.left_at is null
         `;
       });
+      clearMembershipCacheFor(params.serverId, params.userId);
       await recordServerAudit(params.serverId, user.id, "member.kicked", params.userId, params.userId);
       return { removed: true };
     }, {
@@ -6339,6 +6385,9 @@ export function createApp() {
         set left_at = coalesce(left_at, now())
         where conversation_id = ${params.conversationId} and user_id = ${user.id} and left_at is null
       `;
+      // Leaving is a self-service revocation, so this user's own realtime subscriptions must stop
+      // delivering straight away rather than after the membership cache expires.
+      clearMembershipCacheFor(params.conversationId, user.id);
       return { deleted: true };
     }, {
       params: t.Object({ conversationId: t.String({ format: "uuid" }) }),
@@ -6516,7 +6565,11 @@ export function createApp() {
         headers: {
           "cache-control": "private, max-age=3600",
           "content-disposition": `attachment; filename="${attachment.id}.${attachment.file_extension}"`,
+          // The stored content type is chosen by the uploading client, so it is not trusted to
+          // keep the browser from sniffing a different type. `Content-Disposition: attachment`
+          // already forces a download; `nosniff` closes the gap if that ever changes.
           "content-type": attachment.mime_type,
+          "x-content-type-options": "nosniff",
         },
       });
     }, {
@@ -6764,6 +6817,15 @@ export function createApp() {
       body: realtimeCommand,
       open: async (ws) => {
         const data = ws.data as { headers?: Record<string, string | undefined> };
+
+        // `SameSite=Lax` already keeps the cookie off a cross-site handshake, so this is the
+        // second layer: a handshake a browser identifies as cross-origin is refused before the
+        // session is looked up.
+        if (upgradeOriginVerdict(new Headers(data.headers as Record<string, string>)) === "reject") {
+          ws.close(4003, "cross_origin_rejected");
+          return;
+        }
+
         const user = await authenticate(data.headers?.authorization, data.headers?.cookie);
         if (!user) {
           ws.close(4001, "unauthorized");

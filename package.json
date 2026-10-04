@@ -6,6 +6,7 @@
   "scripts": {
     "test": "bun test ./src ./client",
     "test:e2ee": "bun run build:client && bun run scripts/test-e2ee.ts",
+    "test:security-headers": "bun run scripts/test-security-headers.ts",
     "test:voice-audio": "bun run build:client && bun run scripts/test-voice-audio.ts",
     "test:space-settings": "bun run build:client && bun run scripts/test-space-settings.ts",
     "test:member-roles": "bun run build:client && bun run scripts/test-member-role-picker.ts",

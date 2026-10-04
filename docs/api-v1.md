@@ -43,6 +43,17 @@ user on the current client sees the raw code (for example `password_too_common (
 than a sentence. Treat that as cosmetic: clients should branch on the code as documented here,
 and the message strings belong in the shared frontend repository.
 
+A state-changing request that the browser identifies as cross-origin is refused with
+`403 cross_origin_request_rejected`, answered by `Sec-Fetch-Site` or by comparing `Origin` against
+the request's own origin. A request carrying neither header is allowed, so native clients are
+unaffected. A WebSocket handshake identified as cross-origin is closed with code `4003` and reason
+`cross_origin_rejected` before the session is looked up.
+
+Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy:
+no-referrer`, and a `Permissions-Policy` granting only `microphone=(self)`. `Strict-Transport-Security`
+is added when the request arrived over HTTPS. A report-only `Content-Security-Policy` is also sent;
+it permits the WebAssembly crypto adapter and blob workers and is not yet enforcing.
+
 `GET /v1/users/:userId/devices/keys` is withdrawn and now returns `410 endpoint_removed`
 with `Deprecation: true` and a `Link` header pointing at the successor. It published the key
 bundles of any account in the instance and consumed one-time prekeys on read. Use

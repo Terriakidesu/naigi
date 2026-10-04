@@ -23,10 +23,25 @@ release and move these entries under a dated `## [0.27.0]` heading.
 
 - `TRUSTED_PROXY_HOPS` for resolving the client address used by per-IP limits. `X-Forwarded-For` is consulted only when set to the number of proxies that append to it, and only the entry that many positions from the right is used, so a client cannot spoof its address to evade a budget.
 - Rate-limit counters are namespaced per instance, derived from the database host, port, and name, so deployments that share one Redis no longer spend each other's authentication budget. No credential is placed in a key.
+- Send `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and `Permissions-Policy` on every response, plus HSTS when the request arrived over HTTPS. The attachment and custom-emoji downloads previously served a stored content type with no `nosniff`.
+- Refuse state-changing requests the browser identifies as cross-origin with `403 cross_origin_request_rejected`, and apply the same check to the WebSocket upgrade with close code `4003`. This sits behind the existing `SameSite` cookies rather than replacing them, and requests carrying neither `Origin` nor `Sec-Fetch-Site` are unaffected so native clients keep working.
+- Cap realtime subscriptions per socket at 200, answering a refused subscription with `too_many_subscriptions`, so one socket can no longer register channels without bound.
+- Share a pool of Redis subscriber connections across WebSockets instead of creating one per socket, so connection count tracks concurrent sockets rather than accumulating over the process lifetime.
+- Emit a report-only Content Security Policy. It is deliberately not enforced yet, because the crypto adapter is WebAssembly and LiveKit uses a worker, so the policy must permit `wasm-unsafe-eval` and blob workers before it can be turned on.
+- `test:security-headers` exercises the headers, the cross-origin guard, cookie flags, and the realtime origin check over real HTTP with a browser.
+
+### Changed
+
+- `Set-Cookie` now carries `Secure` based on whether the request arrived over HTTPS rather than on `NODE_ENV=production`, so an HTTPS instance outside production is protected. Plain HTTP is unchanged, since a browser discards a `Secure` cookie delivered over it.
+
+### Fixed
+
+- Re-check conversation membership when a realtime event is delivered, not only when subscribing. A member removed mid-session previously kept receiving events until they unsubscribed or disconnected. Membership is now re-checked on delivery, and the short-lived cache is invalidated immediately on ban, kick, leave, and role or channel-access changes.
 
 ### Known gaps
 
-- The pinned browser client does not yet map `password_too_common`, `password_too_similar`, `rate_limited`, or `auth_temporarily_unavailable` to prose, so those codes are displayed verbatim in the browser until the shared frontend is updated. The codes themselves are stable and documented; only the wording is missing.
+- The pinned browser client does not yet map `password_too_common`, `password_too_similar`, `rate_limited`, `auth_temporarily_unavailable`, or `cross_origin_request_rejected` to prose, so those codes are displayed verbatim in the browser until the shared frontend is updated. The codes themselves are stable and documented; only the wording is missing.
+- Content Security Policy is report-only. Enforcement is deferred until the collected reports confirm the directives needed by the WebAssembly crypto adapter and the LiveKit worker.
 
 ## [0.26.0] - 2026-10-02
 
@@ -324,7 +339,9 @@ release and move these entries under a dated `## [0.27.0]` heading.
 - Conversation loading now overlaps opaque history and encrypted-cache reads with membership and room-key preparation, batches client-side decryption, and reuses bounded in-memory results only while unlocked.
 
 Released versions are maintained as one Markdown file per version under
-[`docs/changelogs/`](docs/changelogs/).
+[`docs/changelogs/`](docs/changelogs/). Browser-facing behaviour is additionally covered by
+`bun run test:security-headers` for response headers, cross-origin refusals, cookie flags, and
+realtime handshake checks, alongside `bun run test:e2ee` for the encrypted browser flows.
 
 ## Releases
 

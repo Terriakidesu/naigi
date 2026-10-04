@@ -72,6 +72,29 @@ Optional integrations add their own visibility:
 - Keep Bun and dependencies patched, limit exposure of optional provider keys, and monitor the health
   endpoints without logging request bodies or decrypted browser content.
 
+## Browser protections
+
+Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer`, and a `Permissions-Policy` that grants only the microphone, which
+encrypted voice rooms need. HSTS is added only when the request actually arrived over HTTPS, since
+sending it over plain HTTP is ignored by browsers and misleading in a log.
+
+State-changing requests are additionally refused with `403 cross_origin_request_rejected` when the
+browser identifies them as cross-origin, via `Sec-Fetch-Site` or an `Origin` comparison. This is
+the second layer behind the `SameSite` cookies, not a replacement: `SameSite=Lax` already blocks a
+cross-site form post. A request that carries neither header is allowed, because native clients send
+neither. The WebSocket upgrade applies the same comparison, which closes cross-site socket hijacking
+for clients that would otherwise attach a session to a foreign page.
+
+Content Security Policy is emitted **report-only** in this release. The Olm/Megolm adapter is
+WebAssembly and LiveKit runs a worker, so the policy must permit `wasm-unsafe-eval` and
+`worker-src blob:`; a mis-scoped directive would otherwise break message decryption or calling
+outright. Enforcement should follow once the collected reports are clean.
+
+`Set-Cookie` carries `Secure` whenever the request arrived over HTTPS rather than whenever
+`NODE_ENV=production`, so an HTTPS instance outside production is protected too. Plain HTTP yields
+no `Secure` attribute, because a browser discards such a cookie and local development would break.
+
 ## Throttling and rate limiting
 
 Login, registration, admin login, and password change are throttled to resist credential stuffing and
