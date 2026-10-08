@@ -15,6 +15,7 @@ import { recordServerAudit } from "../http/audit";
 import { respondError } from "../http/responses";
 import { decodeEncryptedMetadata } from "../http/validation";
 import { channelAuthorization, visibleServerChannels } from "./channel-access";
+import { channelFlagChange } from "./channel-flags";
 import {
   hasAnyServerPermission,
   hasServerPermission,
@@ -168,11 +169,16 @@ export const channelRoutes = new Elysia()
       // not part of the room-editing bundle: managing every room is required to set them.
       if ((body.nsfw !== undefined || body.spoiler !== undefined) && !hasServerPermission(membership, "manage_channels")) return respondError(set, 403, "insufficient_server_permissions");
 
-      const [existing] = await db<{ id: string; encrypted_metadata: Buffer }[]>`
-        select id, encrypted_metadata from channels
+      const [existing] = await db<{ id: string; encrypted_metadata: Buffer; nsfw: boolean }[]>`
+        select id, encrypted_metadata, nsfw from channels
         where id = ${params.channelId} and server_id = ${params.serverId} and archived_at is null
       `;
       if (!existing) return respondError(set, 404, "channel_not_found");
+
+      // The adult-content mark is one-way: once a room carries it, nothing clears it.
+      if (channelFlagChange(existing.nsfw, body.nsfw, true) === "refuse_permanent") {
+        return respondError(set, 409, "channel_nsfw_is_permanent");
+      }
 
       if (body.categoryId !== undefined && body.categoryId !== null) {
         const [category] = await db<{ id: string }[]>`
