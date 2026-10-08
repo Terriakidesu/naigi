@@ -10,13 +10,37 @@ best-effort notification bus.
 | --- | --- | --- |
 | `shared-frontend/` | Pinned shared user UI, local crypto, attachment encryption, browser preferences | Plaintext while the user is using the app; private crypto state in encrypted local storage |
 | `client/` | Server-owned instance-admin console and retained legacy user source | Host-operator UI; legacy user files are not built for chat |
-| `src/app.ts` | HTTP API, authentication, membership and role authorization, encrypted envelope storage | Account/profile records, IDs, public keys, ciphertext, opaque metadata |
-| `src/realtime.ts` | Authenticated WebSocket subscriptions and notification publishing | Presence/typing and event notifications; ciphertext payloads where needed |
+| `src/app.ts` | Application assembly: global middleware and route registration order | Nothing; it holds no domain logic |
+| `src/http/` | Request and response plumbing: error shape, cookies, static files, input validation, audit writers, rate-limit glue, row-to-API shapes | Opaque passthrough only |
+| `src/routes/` | Static client assets, health probes, push configuration, third-party integrations | No user data |
+| `src/admin/routes/` | Host-operator console, one module per capability | Instance-wide moderation and operator records |
+| `src/auth/`, `src/users/` | Account creation and sign-in; own account, profile media, blocks, reports | Account/profile records, opaque report evidence |
+| `src/servers/` | Spaces, channels, categories, roles and grants, invites, moderation | Memberships, permissions, opaque encrypted metadata |
+| `src/conversations/`, `src/attachments/` | Conversations, message history, encrypted attachment upload and download | Ciphertext, opaque metadata |
+| `src/devices/`, `src/crypto/` | Device registration and the Matrix key relay | Public keys and prekeys only |
+| `src/voice/`, `src/realtime/` | Call token issuance, and authenticated WebSocket subscriptions | Connection metadata; ciphertext signalling payloads |
 | `src/db/` | PostgreSQL queries and ordered migrations | Accounts, memberships, permissions, encrypted message envelopes, device public keys |
 | `src/admin-db/` | Separate host-operator database | Host operator accounts and sessions |
-| Redis/Valkey | Cross-instance pub/sub and realtime support | Short-lived notifications and connection state; not authoritative history |
+| Redis/Valkey | Cross-instance pub/sub, realtime support, and rate-limit counters | Short-lived notifications, connection state, and throttling counters; not authoritative history |
 | `ATTACHMENTS_DIR`, `PROFILE_IMAGES_DIR` | Persistent filesystem-backed media storage | Encrypted chat attachments and server-managed profile images respectively |
 | Optional LiveKit | Self-hosted WebRTC SFU/relay for direct calls and joinable voice rooms | Encrypted media frames and connection metadata; never the call/room media key |
+
+## Source layout
+
+`src/app.ts` registers the domain route modules in the order their paths first appeared and owns the
+global cross-origin guard, response-header hook, and error mapper. Each module under the directories
+above owns one concern end to end, so a change to, say, role permissions touches
+`src/servers/permissions.ts` and the route module that calls it rather than a single large file.
+
+Two rules keep the split honest:
+
+- A module must not import from a sibling that imports it back. Where that would happen, the shared
+  shape is expressed structurally instead — for example the role-hierarchy check takes
+  `{ position, is_system }` rather than the full role row, which is what stops `permissions.ts` and
+  `roles.ts` depending on each other.
+- Asset paths are resolved through `publicAssetFile()` in `src/http/static-files.ts` rather than
+  built from `import.meta.dir`, because a route module's own depth would otherwise silently change
+  where `public/` is found.
 
 ## Message flow
 

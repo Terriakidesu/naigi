@@ -9,19 +9,12 @@
 import { Elysia, t } from "elysia";
 import { authenticate } from "../auth/session";
 import { db } from "../db/client";
-import { decodeBase64, encodeBase64, InvalidEncodingError } from "../encoding";
+import { encodeBase64, InvalidEncodingError } from "../encoding";
 import { recordServerAudit } from "../http/audit";
 import { respondError } from "../http/responses";
 import { serverBrandingUrl } from "../http/shapes";
 import { decodeEncryptedMetadata } from "../http/validation";
-import { syncServerChannelMemberships } from "./membership";
-import {
-  defaultRolePermissions,
-  hasServerPermission,
-  permissionMap,
-  serverAuthorization,
-} from "./permissions";
-import { visibleServerChannels } from "./channel-access";
+import { defaultRolePermissions, hasServerPermission, permissionMap, serverAuthorization } from "./permissions";
 
 export const serverRoutes = new Elysia()
   .post("/v1/servers", async ({ body, headers, set }) => {

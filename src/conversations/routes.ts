@@ -12,14 +12,9 @@ import { db } from "../db/client";
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "../encoding";
 import { profileBannerUrl, profileImageUrl } from "../profile-images";
 import { respondError } from "../http/responses";
-import { toPublicUser } from "../http/shapes";
-import { decodeEncryptedMetadata, matrixUserId, stringArray } from "../http/validation";
+import { matrixUserId, stringArray } from "../http/validation";
 import { directConversationIsBlocked } from "../moderation/blocks";
-import {
-  conversationChannelAuthorization,
-  isMetadataChannel,
-} from "../servers/channel-access";
-import { syncChannelConversationMembership } from "../servers/membership";
+import { conversationChannelAuthorization, isMetadataChannel } from "../servers/channel-access";
 import { clearMembershipCacheFor } from "../realtime";
 
 export const conversationRoutes = new Elysia()

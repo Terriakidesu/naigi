@@ -16,7 +16,7 @@ import {
   maxToDeviceRecipients,
 } from "../attachments/metadata";
 import { respondError } from "../http/responses";
-import { encryptedBytes, matrixUserId, objectValue, parseCryptoUpload } from "../http/validation";
+import { matrixUserId, objectValue, parseCryptoUpload } from "../http/validation";
 
 export const cryptoRoutes = new Elysia()
   .post("/v1/crypto/keys/upload", async ({ body, headers, set }) => {

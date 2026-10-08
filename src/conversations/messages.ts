@@ -13,21 +13,10 @@ import { db } from "../db/client";
 import { decodeBase64, InvalidEncodingError } from "../encoding";
 import { respondError } from "../http/responses";
 import { toMessage, type MessageRow } from "../http/shapes";
-import {
-  decodeEncryptedMetadata,
-  decodePageCursor,
-  isCursorTimestamp,
-  objectValue,
-  prefixUpperBound,
-  stringArray,
-} from "../http/validation";
 import { directConversationIsBlocked } from "../moderation/blocks";
 import { isInstanceUserTimedOut, isUserTimedOut } from "../moderation/timeouts";
 import { conversationChannelAuthorization } from "../servers/channel-access";
-import {
-  hasAnyServerPermission,
-  hasServerPermission,
-} from "../servers/permissions";
+import { hasAnyServerPermission, hasServerPermission } from "../servers/permissions";
 import { publishMessageCreated } from "../redis/client";
 import { sendGenericFcmPush } from "../push/fcm";
 

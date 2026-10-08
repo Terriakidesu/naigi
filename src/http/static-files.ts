@@ -8,18 +8,28 @@
 
 const publicRoot = `${import.meta.dir}/../../public`;
 
+/**
+ * Resolves a path inside the built `public/` directory.
+ *
+ * Route modules live at different depths, so they must not build this path themselves with
+ * `import.meta.dir`; doing so silently resolves against the wrong directory once a route moves into
+ * a subdirectory. Callers validate the name first, and the traversal check here is the backstop.
+ */
+export function publicAssetFile(relativePath: string) {
+  if (
+    relativePath.includes("..")
+    || relativePath.startsWith("/")
+    || relativePath.includes("\\")
+    || relativePath.includes("\0")
+  ) {
+    return null;
+  }
+  return Bun.file(`${publicRoot}/${relativePath}`);
+}
+
 export async function publicFile(name: string, contentType: string) {
   if (!/^[A-Za-z0-9_.-]+$/.test(name)) return null;
   const file = Bun.file(`${publicRoot}/${name}`);
   if (!(await file.exists())) return null;
   return new Response(file, { headers: { "cache-control": "no-cache", "content-type": contentType } });
-}
-
-export async function publicFileAt(relativePath: string, contentType: string, cacheControl: string) {
-  // Chunk and asset names are validated by their callers, which constrain them to a segment with
-  // no separators; this check is the backstop that keeps a crafted name inside the directory.
-  if (relativePath.includes("..") || relativePath.startsWith("/") || relativePath.includes("\\")) return null;
-  const file = Bun.file(`${publicRoot}/${relativePath}`);
-  if (!(await file.exists())) return null;
-  return new Response(file, { headers: { "cache-control": cacheControl, "content-type": contentType } });
 }

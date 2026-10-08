@@ -10,7 +10,7 @@ import { Elysia, t } from "elysia";
 import { authenticate } from "../auth/session";
 import { config } from "../config";
 import { db } from "../db/client";
-import { decodeBase64, encodeBase64, InvalidEncodingError } from "../encoding";
+import { encodeBase64, InvalidEncodingError } from "../encoding";
 import { attachmentPath, encryptedAttachmentExists } from "../attachments/storage";
 import {
   AttachmentSizeMismatchError,

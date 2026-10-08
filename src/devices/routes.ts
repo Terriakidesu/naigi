@@ -12,12 +12,7 @@ import { authenticate } from "../auth/session";
 import { db } from "../db/client";
 import { decodeBase64, encodeBase64, InvalidEncodingError } from "../encoding";
 import { respondError } from "../http/responses";
-import {
-  encryptedBytes,
-  matrixUserId,
-  objectValue,
-  parseCryptoUpload,
-} from "../http/validation";
+import { encryptedBytes } from "../http/validation";
 
 /** Base64 prekey bodies are decoded against this ceiling before any database work. */
 const maxKeyBytes = 4096;

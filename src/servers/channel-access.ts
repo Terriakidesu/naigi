@@ -153,9 +153,11 @@ export async function visibleServerChannels(serverId: string, userId: string) {
     category_id: string | null;
     kind: string;
     position: number;
+    nsfw: boolean;
+    spoiler: boolean;
     created_at: Date;
   }[]>`
-    select id, server_id, conversation_id, encrypted_metadata, category_id, kind, position, created_at
+    select id, server_id, conversation_id, encrypted_metadata, category_id, kind, position, nsfw, spoiler, created_at
     from channels
     where server_id = ${serverId} and archived_at is null
     order by position asc, created_at asc

@@ -10,7 +10,7 @@
 import { Elysia, t } from "elysia";
 import { authenticate } from "../auth/session";
 import { db } from "../db/client";
-import { decodeBase64, InvalidEncodingError } from "../encoding";
+import { InvalidEncodingError } from "../encoding";
 import { profileBannerUrl, profileImageUrl } from "../profile-images";
 import { recordServerAudit } from "../http/audit";
 import { respondError } from "../http/responses";

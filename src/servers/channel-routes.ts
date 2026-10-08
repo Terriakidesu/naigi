@@ -3,18 +3,18 @@
  *
  * The oldest live channel is the space anchor: every member reaches it regardless of role grants,
  * it is what membership sync measures against, and it cannot be deleted. Names stay encrypted
- * throughout; nothing in this module decrypts metadata.
+ * throughout; nothing in this module decrypts metadata. The adult-content and spoiler markers are
+ * the exception: they are plaintext flags the client must be able to read before it renders anything.
  */
 
 import { Elysia, t } from "elysia";
 import { authenticate } from "../auth/session";
 import { db } from "../db/client";
-import { decodeBase64, encodeBase64, InvalidEncodingError } from "../encoding";
+import { encodeBase64, InvalidEncodingError } from "../encoding";
 import { recordServerAudit } from "../http/audit";
 import { respondError } from "../http/responses";
 import { decodeEncryptedMetadata } from "../http/validation";
 import { channelAuthorization, visibleServerChannels } from "./channel-access";
-import { syncChannelConversationMembership } from "./membership";
 import {
   hasAnyServerPermission,
   hasServerPermission,
@@ -38,6 +38,8 @@ export const channelRoutes = new Elysia()
           categoryId: channel.category_id,
           kind: channel.kind,
           position: channel.position,
+          nsfw: channel.nsfw,
+          spoiler: channel.spoiler,
           canView: true,
           canUpload,
           canSend,
@@ -136,6 +138,8 @@ export const channelRoutes = new Elysia()
           categoryId: body.categoryId ?? null,
           kind: created.channel.kind,
           position: created.channel.position,
+          nsfw: false,
+          spoiler: false,
           canView: true,
           canUpload: true,
           canSend: true,
@@ -160,6 +164,9 @@ export const channelRoutes = new Elysia()
       if (body.encryptedMetadata !== undefined && !hasAnyServerPermission(membership, "manage_channels", "edit_channels")) return respondError(set, 403, "insufficient_server_permissions");
       if (body.categoryId !== undefined && !hasAnyServerPermission(membership, "manage_channels", "edit_channels")) return respondError(set, 403, "insufficient_server_permissions");
       if (body.position !== undefined && !hasAnyServerPermission(membership, "manage_channels", "reorder_channels")) return respondError(set, 403, "insufficient_server_permissions");
+      // Content markers gate what a member is shown before they read anything, so they are
+      // not part of the room-editing bundle: managing every room is required to set them.
+      if ((body.nsfw !== undefined || body.spoiler !== undefined) && !hasServerPermission(membership, "manage_channels")) return respondError(set, 403, "insufficient_server_permissions");
 
       const [existing] = await db<{ id: string; encrypted_metadata: Buffer }[]>`
         select id, encrypted_metadata from channels
@@ -193,25 +200,22 @@ export const channelRoutes = new Elysia()
         category_id: string | null;
         kind: string;
         position: number;
+        nsfw: boolean;
+        spoiler: boolean;
         created_at: Date;
       };
-      const channelRows = body.categoryId === undefined
-        ? await db<ChannelUpdateRow[]>`
-            update channels
-            set encrypted_metadata = coalesce(${metadata ?? null}, encrypted_metadata),
-                position = coalesce(${body.position ?? null}, position)
-            where id = ${existing.id}
-            returning id, server_id, conversation_id, encrypted_metadata, category_id, kind, position, created_at
-          `
-        : await db<ChannelUpdateRow[]>`
-            update channels
-            set encrypted_metadata = coalesce(${metadata ?? null}, encrypted_metadata),
-                category_id = ${body.categoryId},
-                position = coalesce(${body.position ?? null}, position)
-            where id = ${existing.id}
-            returning id, server_id, conversation_id, encrypted_metadata, category_id, kind, position, created_at
-          `;
-      const channel = channelRows[0];
+      // One statement covers every combination of fields: coalesce keeps an omitted value as it is,
+      // and a marker is only ever set to true or false, never nulled.
+      const [channel] = await db<ChannelUpdateRow[]>`
+        update channels
+        set encrypted_metadata = coalesce(${metadata ?? null}, encrypted_metadata),
+            category_id = case when ${body.categoryId !== undefined} then ${body.categoryId ?? null} else category_id end,
+            position = coalesce(${body.position ?? null}, position),
+            nsfw = coalesce(${body.nsfw ?? null}, nsfw),
+            spoiler = coalesce(${body.spoiler ?? null}, spoiler)
+        where id = ${existing.id}
+        returning id, server_id, conversation_id, encrypted_metadata, category_id, kind, position, nsfw, spoiler, created_at
+      `;
       if (!channel) return respondError(set, 404, "channel_not_found");
       const access = await channelAuthorization(params.serverId, user.id, channel.id);
       await recordServerAudit(params.serverId, user.id, "channel.updated", channel.id);
@@ -224,6 +228,8 @@ export const channelRoutes = new Elysia()
           categoryId: channel.category_id,
           kind: channel.kind,
           position: channel.position,
+          nsfw: channel.nsfw,
+          spoiler: channel.spoiler,
           canView: Boolean(access?.canView),
           canUpload: Boolean(access?.canUpload),
           canSend: Boolean(access && hasServerPermission(access.authorization, "send_messages")),
@@ -236,6 +242,8 @@ export const channelRoutes = new Elysia()
         encryptedMetadata: t.Optional(t.String({ maxLength: 90_000 })),
         categoryId: t.Optional(t.Union([t.String({ format: "uuid" }), t.Null()])),
         position: t.Optional(t.Integer({ minimum: 0, maximum: 1_000_000 })),
+        nsfw: t.Optional(t.Boolean()),
+        spoiler: t.Optional(t.Boolean()),
       }),
     })
     .delete("/v1/servers/:serverId/channels/:channelId", async ({ headers, params, set }) => {

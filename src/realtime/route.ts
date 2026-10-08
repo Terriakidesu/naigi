@@ -45,6 +45,7 @@ const realtimeCommand = t.Union([
   }),
 ]);
 
+
 /** Sends a control frame. Membership and block checks run inside the connection. */
 function sendControl(socket: { send(data: string): number }, payload: object) {
   socket.send(JSON.stringify(payload));
