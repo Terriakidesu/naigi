@@ -23,6 +23,16 @@ import { directVoiceCallAccessError, voiceRoomAccessError } from "./access";
  */
 let roomService: RoomServiceClient | undefined;
 
+/**
+ * What a participant may publish into a voice room.
+ *
+ * Camera and screen share are ordinary live media on the same encrypted connection as the
+ * microphone, so they are granted here rather than treated as a separate capability: subscribing was
+ * already allowed, and a client that never publishes video simply never uses the grant. Data tracks
+ * stay closed, so nothing can smuggle content over the media connection.
+ */
+const publishableSources = [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE];
+
 function liveKitRoomService() {
   if (!config.liveKit) return undefined;
   roomService ??= new RoomServiceClient(
@@ -85,7 +95,7 @@ export const voiceRoutes = new Elysia()
       accessToken.addGrant({
         roomJoin: true,
         room: roomName,
-        canPublishSources: [TrackSource.MICROPHONE],
+        canPublishSources: publishableSources,
         canSubscribe: true,
         canPublishData: false,
       });
@@ -179,7 +189,7 @@ export const voiceRoutes = new Elysia()
         accessToken.addGrant({
           roomJoin: true,
           room: roomName,
-          canPublishSources: [TrackSource.MICROPHONE],
+          canPublishSources: publishableSources,
           canSubscribe: true,
           canPublishData: false,
         });
