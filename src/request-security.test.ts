@@ -331,13 +331,14 @@ describe("session cookie security", () => {
 });
 
 describe("response headers", () => {
-  test("denies framing, referrers, and unused sensors while allowing the microphone", () => {
+  test("denies framing, referrers, and unused sensors while allowing same-origin voice/video capture", () => {
     const headers = baselineSecurityHeaders();
     expect(headers["x-content-type-options"]).toBe("nosniff");
     expect(headers["x-frame-options"]).toBe("DENY");
     expect(headers["referrer-policy"]).toBe("no-referrer");
     expect(headers["permissions-policy"]).toContain("microphone=(self)");
-    expect(headers["permissions-policy"]).toContain("camera=()");
+    expect(headers["permissions-policy"]).toContain("camera=(self)");
+    expect(headers["permissions-policy"]).toContain("display-capture=(self)");
     expect(headers["permissions-policy"]).toContain("geolocation=()");
   });
 

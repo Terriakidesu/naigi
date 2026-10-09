@@ -17,6 +17,10 @@ release and move these entries under a dated `## [0.27.0]` heading.
 
 ### Fixed
 
+- Permit same-origin camera and screen capture in Permissions-Policy. The previous `camera=()` blocked browser cameras even after user consent. Browser permission prompts remain required.
+- Grant LiveKit `SCREEN_SHARE_AUDIO` alongside screen video so encrypted shares can publish captured tab/system audio; data publishing remains disabled.
+- Update the shared frontend to 0.5.0 with independent camera/screen controls, focused viewing, and capture lifecycle fixes. Live two-client validation remains pending; the backend was not restarted.
+
 - Stop Redis connection attempts from hanging indefinitely when the server is unreachable. Automatic reconnect left the shared connect promise unsettled, so every caller after the first blocked forever instead of failing. Affects authentication limits, voice token issuance, and the readiness probe; each now settles within a bounded time.
 - Scope `PUT /v1/attachments/:attachmentId` to the uploader as well as to conversation membership. Creation records and checks the sender, but the upload route only checked membership, so any member of a conversation could write the bytes of a pending attachment raised by someone else. A non-uploader now receives `404 attachment_not_found`.
 - Fail closed when revoking a server warning whose target is no longer a member. The role-hierarchy check previously ran only when the target still resolved to a member, so a warning against someone who had since left could be revoked by anyone holding `revoke_warnings`.

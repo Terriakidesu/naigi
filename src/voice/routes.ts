@@ -31,7 +31,7 @@ let roomService: RoomServiceClient | undefined;
  * already allowed, and a client that never publishes video simply never uses the grant. Data tracks
  * stay closed, so nothing can smuggle content over the media connection.
  */
-const publishableSources = [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE];
+const publishableSources = [TrackSource.MICROPHONE, TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO];
 
 function liveKitRoomService() {
   if (!config.liveKit) return undefined;

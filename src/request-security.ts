@@ -169,15 +169,15 @@ export function contentSecurityPolicy(options: { reportOnly: boolean }) {
  * Baseline response headers applied to every response.
  *
  * `nosniff` matters most on the endpoints that echo a stored content type. `Permissions-Policy`
- * grants only the microphone, which encrypted voice rooms need, and denies camera, geolocation,
- * and the other sensors this app never uses.
+ * grants same-origin microphone, camera and display capture for opt-in encrypted voice/video,
+ * while denying geolocation and the other sensors this app never uses. Browser consent still applies.
  */
 export function baselineSecurityHeaders() {
   return {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
-    "permissions-policy": "camera=(), geolocation=(), microphone=(self), payment=(), usb=(), interest-cohort=()",
+    "permissions-policy": "camera=(self), display-capture=(self), geolocation=(), microphone=(self), payment=(), usb=(), interest-cohort=()",
   };
 }
 
